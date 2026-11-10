@@ -13,7 +13,7 @@ Build from the `pod-placement-bench` repository root:
   --args='/path/to/snapshot.pb /path/to/operations.pb'
 ```
 
-The repository builds with JDK 17 or newer and public dependencies only. Its root
+The repository builds with JDK 25 toolchain and public dependencies only. Its root
 wrapper downloads Gradle 9.3 from the public distribution service and verifies its
 SHA-256. The subproject and generated artifact are named
 `one-cloud-schedulers-benchmark`; Java packages and the protobuf wire format remain
