@@ -19,3 +19,13 @@ Read a dataset:
 
 The only runtime dependency is public `protobuf-java`; no internal cloud checkout
 is needed. See the module README for API usage and the current baseline scope.
+
+Replay a dataset with the fit-count baseline:
+
+```sh
+./gradlew --quiet :one-cloud-schedulers-benchmark:run \
+  --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
+```
+
+Omit the limits to replay the complete normalized workload with the full catalogue.
+See the module README for JSON output, lifecycle normalization and measurement scope.

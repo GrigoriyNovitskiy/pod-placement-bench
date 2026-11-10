@@ -1,6 +1,11 @@
 plugins {
     `java-library`
+    application
     id("com.google.protobuf") version "0.9.5"
+}
+
+application {
+    mainClass.set("one.cloud.benchmark.cli.RunnerCli")
 }
 
 repositories {

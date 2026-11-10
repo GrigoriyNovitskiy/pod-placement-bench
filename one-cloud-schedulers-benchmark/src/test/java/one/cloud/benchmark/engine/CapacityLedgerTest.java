@@ -294,6 +294,178 @@ class CapacityLedgerTest {
         }
     }
 
+    @Test
+    void geometricScoreAveragesActualScalarFamiliesIncludingNumaAndDedicatedCpu() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2, 3, 4, 11, 12, 13, 14, 15, 16, 17},
+                        24, 16, 10, 5, 4, 24, 20, 10, 8, 4, 2),
+                alloc(2, new int[]{1, 2, 12, 15, 16}, 12, 8, 12, 4, 2),
+                alloc(3, new int[]{1, 2, 3, 4, 11, 12, 13, 14, 15, 16, 17},
+                        1, 3, 2, 1, 1, 3, 10, 2, 2, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST).setCpuPower(3)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3), resource(4, 3, 4));
+        final var state = new Engine(model);
+        final var scorer = new GreedyPlanner(state).normalizedResidualL2Scorer();
+        assertEquals(.4921875 + .525390625 + .445 + .64 + .40625 + .5625 + .25,
+                scorer.applyAsDouble(new Assignment[]{plain(4, 2)}), 1e-12);
+        assertEquals(0, state.revision());
+        assertEquals(24, state.available(1, 1));
+        assertEquals(12, state.available(2, 1));
+    }
+
+    @Test
+    void geometricScoreAggregatesPhysicalCellsAndKeepsGenuineScalarStorage() throws Exception {
+        final var shared = model(
+                alloc(1, new int[]{9}, 100), alloc(2, new int[]{18}, 10), alloc(3, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.SHARD)
+                        .addDisks(disk(Media.HDD).setExtents(2)).addDisks(disk(Media.HDD).setExtents(3))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3));
+        assertEquals(.25, score(shared, new Assignment(3, 1, 0, new int[]{0, 1, 2}, new int[]{2, 2})), 1e-12);
+        final var scalar = model(
+                alloc(1, new int[]{9}, 100), alloc(2, new int[]{18}, 20), alloc(3, new int[]{9}, 4 / 1024.0),
+                alloc(4, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD).addDisks(disk(Media.HDD).setExtents(5))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 4, 4));
+        assertEquals(.60125, score(scalar, plain(3, 0),
+                new Assignment(4, 1, 0, new int[]{0, 1}, new int[]{2})), 1e-12);
+        final var memdisk = model(
+                alloc(1, new int[]{2}, 8), alloc(2, new int[]{2}, 4), alloc(3, new int[]{18}, 4),
+                alloc(4, new int[]{2}, 99),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.DISK).setParent(1).setMedia(Media.MEMDISK).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.SHARD).addDisks(disk(Media.MEMDISK).setExtents(3))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3), resource(4, 3, 4), resource(5, 4, 5));
+        assertEquals(.171875, score(memdisk, new Assignment(5, 1, 2, new int[]{0, 1}, new int[]{4})), 1e-12);
+    }
+
+    @Test
+    void geometricScoreUsesPrimarySpaceAndSelectedMediaSpindlesWithoutExclusionLoss() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{9, 10}, 40 / 1024.0, 5),
+                alloc(2, new int[]{18, 19}, 20, 1), alloc(3, new int[]{18, 19}, 20, 4), alloc(4, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)
+                        .setAlternativeMedia(Media.SSD).setAlternativeSpindles(8)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD).addDisks(disk(Media.SSD).setSpindles(2))),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.SHARD).addDisks(disk(Media.HDD).setExtents(10))),
+                rules(Constraints.newBuilder().setId(6).setKind(Kind.SHARD).addDisks(disk(Media.HDD).setExtents(10).setSpindles(1))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
+                resource(4, 4, 4), resource(5, 4, 5), resource(6, 4, 6));
+        final var alternative = new Assignment(4, 1, 0, new int[]{0, 1}, new int[]{2});
+        assertEquals(1.465, score(model, alternative), 1e-12);
+        assertEquals(1.13875, score(model, alternative,
+                new Assignment(5, 1, 0, new int[]{0, 1}, new int[]{3})), 1e-12);
+        assertEquals(1.70125, score(model, alternative,
+                new Assignment(6, 1, 0, new int[]{0, 1}, new int[]{3})), 1e-12);
+    }
+
+    @Test
+    void geometricScoreUsesRaidAndWholeGeometryAndOmitsUnboundedIopsCells() throws Exception {
+        final var raid = disks(2, disk(Media.HDD).setLayout(Layout.RAID1).setExtents(9).setMetadataExtents(1)
+                .setMinDevices(2).setMaxDevices(2));
+        assertEquals(.25, score(raid, new Assignment(4, 1, 0, new int[]{0, 2}, new int[]{2, 3})), 1e-12);
+        assertEquals(0, score(disks(1, disk(Media.HDD).setFlags(1)),
+                new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2})));
+        final var striped = model(
+                alloc(1, new int[]{9}, 100), alloc(2, new int[]{18, 20}, 10, Double.MAX_VALUE),
+                alloc(3, new int[]{18, 20}, 10, 100), alloc(4, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.SHARD)
+                        .addDisks(disk(Media.HDD).setLayout(Layout.STRIPED).setExtents(2).setIops(40)
+                                .setMinDevices(2).setMaxDevices(2).setMaxStripes(2))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2), resource(4, 4, 3));
+        assertEquals(1.45, score(striped, new Assignment(4, 1, 0, new int[]{0, 2}, new int[]{2, 3})), 1e-12);
+        assertEquals(.9025, score(disks(1, disk(Media.HDD)),
+                new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2})), 1e-12);
+    }
+
+    @Test
+    void geometricScoreRetainsInitialCapacityReloadsSupplyAndDoesNotMutateState() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 6), alloc(3, new int[]{1}, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2));
+        final var state = new Engine(model);
+        final var prefill = new Request(2);
+        final var request = new Request(3);
+        final var planner = new GreedyPlanner(state);
+        try (final var algorithm = new SchedulingAlgorithm(state, 42) {
+            @Override
+            public void schedule(Request pending) {
+                if (pending == prefill) {
+                    context.place(pending, plain(2, 0));
+                    return;
+                }
+                final var scorer = planner.normalizedResidualL2Scorer();
+                final var plans = planner.plan(pending, 1, 0);
+                assertNotNull(plans);
+                assertEquals(.04, scorer.applyAsDouble(plans), 1e-12);
+                assertEquals(.04, scorer.applyAsDouble(plans), 1e-12);
+                assertEquals(4, context.available(1, 1));
+                assertEquals(1, context.revision());
+                context.place(pending, plans);
+            }
+        }) {
+            state.schedule(algorithm, prefill, request);
+            final var scorer = planner.normalizedResidualL2Scorer();
+            state.remove(request);
+            state.remove(prefill);
+            assertEquals(.64, scorer.applyAsDouble(new Assignment[]{plain(3, 0)}), 1e-12);
+            assertEquals(10, state.available(1, 1));
+            assertEquals(4, state.revision());
+        }
+    }
+
+    @Test
+    void geometricScoreHandlesZeroAndSubnormalBudgetsAndRejectsMalformedPlans() throws Exception {
+        for (final double full : new double[]{0, Double.MIN_VALUE, 2 * Double.MIN_VALUE}) {
+            final var model = model(
+                    alloc(1, new int[]{1}, full), alloc(2, new int[]{1}, Double.MIN_VALUE), alloc(3, new int[0]),
+                    rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                    rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                    resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2));
+            final var scorer = new GreedyPlanner(new Engine(model)).normalizedResidualL2Scorer();
+            assertEquals(0, scorer.applyAsDouble(new Assignment[]{plain(3, 0)}));
+            if (full == 0) {
+                assertThrows(IllegalArgumentException.class, () -> scorer.applyAsDouble(new Assignment[]{plain(2, 0)}));
+            } else {
+                assertEquals(full == Double.MIN_VALUE ? 0 : .25,
+                        scorer.applyAsDouble(new Assignment[]{plain(2, 0)}));
+            }
+        }
+        final var model = model(
+                alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 2));
+        final var scorer = new GreedyPlanner(new Engine(model)).normalizedResidualL2Scorer();
+        final var first = new Assignment(3, 1, 0, new int[]{0}, new int[0]);
+        assertThrows(IllegalArgumentException.class, () -> scorer.applyAsDouble(new Assignment[0]));
+        assertThrows(IllegalArgumentException.class, () -> scorer.applyAsDouble(new Assignment[]{first, first}));
+        assertThrows(IllegalArgumentException.class, () -> scorer.applyAsDouble(new Assignment[]{first,
+                new Assignment(4, 2, 0, new int[]{0}, new int[0])}));
+        assertThrows(IllegalArgumentException.class, () -> scorer.applyAsDouble(new Assignment[]{
+                new Assignment(3, 1, 0, new int[]{0, 0}, new int[0])}));
+        assertEquals(.64, scorer.applyAsDouble(new Assignment[]{first}), 1e-12);
+    }
+
+    private static double score(ClusterSpec model, Assignment... plans) {
+        return new GreedyPlanner(new Engine(model)).normalizedResidualL2Scorer().applyAsDouble(plans);
+    }
+
     private static int slowCount(ClusterSpec model, int resource, boolean numa, int cap, Assignment tentative) {
         final var capacity = new CapacityLedger(model);
         if (tentative != null) {

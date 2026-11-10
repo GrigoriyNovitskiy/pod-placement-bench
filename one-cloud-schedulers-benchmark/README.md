@@ -5,7 +5,7 @@ decoder and algorithm API. Its only runtime dependency is `protobuf-java`; it do
 not depend on any other one-cloud module. Private control-state extraction stays in
 `one-cloud-master`.
 
-The `one.cloud.benchmark` namespace is organized into four packages.
+The `one.cloud.benchmark` namespace separates the model, engine and run tooling.
 
 - [model](src/main/java/one/cloud/benchmark/model) contains the static cluster specification,
   requests and assignments.
@@ -14,6 +14,8 @@ The `one.cloud.benchmark` namespace is organized into four packages.
 - [algorithms](src/main/java/one/cloud/benchmark/algorithms) gives each algorithm its own package,
   starting with [FitCount](src/main/java/one/cloud/benchmark/algorithms/fitcount).
 - [dataset](src/main/java/one/cloud/benchmark/dataset) contains the protobuf decoder and reader CLI.
+- [runner](src/main/java/one/cloud/benchmark/runner) compiles and replays shared scenarios.
+- [cli](src/main/java/one/cloud/benchmark/cli) selects a dataset and algorithm and emits JSON results.
 
 Build from the `pod-placement-bench` repository root:
 
@@ -27,6 +29,59 @@ The repository builds with JDK 25 toolchain and public dependencies only. Its ro
 wrapper downloads Gradle 9.3 from the public distribution service and verifies its
 SHA-256. The subproject and generated artifact are named
 `one-cloud-schedulers-benchmark`.
+
+## Run a dataset
+
+A dataset directory contains `snapshot.pb` and `operations.pb`. Run the CLI from
+the repository root:
+
+```sh
+./gradlew --quiet :one-cloud-schedulers-benchmark:run \
+  --args='--dataset /path/to/sc --algorithm fitcount --seed 42'
+```
+
+For an explicit short smoke run:
+
+```sh
+./gradlew --quiet :one-cloud-schedulers-benchmark:run \
+  --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
+```
+
+Built-in algorithms are `fitcount` and `geometric-best-fit`.
+`--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
+all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
+reported sample. `--max-operations` truncates normalized atomic events, without
+changing the catalogue or the static cluster. `--help` lists the options.
+
+For a standalone command, build the standard application distribution. Its script
+uses `JAVA_HOME` or `PATH`, so select a Java 25 runtime before launching it; Gradle
+`run` selects the configured toolchain automatically.
+
+```sh
+./gradlew :one-cloud-schedulers-benchmark:installDist
+one-cloud-schedulers-benchmark/build/install/one-cloud-schedulers-benchmark/bin/one-cloud-schedulers-benchmark \
+  --dataset /path/to/sc --algorithm fitcount
+```
+
+Geometric best-fit uses normalized residual L2 squared with fixed family weights.
+It shares planner geometry and hard constraints with fitcount and streams candidates
+while retaining only the winner. The copy cap still controls common quality probes;
+the cache-row option only affects fitcount.
+
+The CLI writes one JSON result on stdout; errors go to stderr with a nonzero exit.
+It reports source/scenario identity, limits, admissions and declines, schedule and
+removal percentiles, sampled heap use, planner calls and a history checksum.
+Heap samples are taken before initialization, at occupied checkpoints and at replay
+end; this is not a per-operation heap peak.
+Initialization and occupied-checkpoint physical-fit diagnostics are separate from
+operation timing. Quality probes are outside the clock but can still influence
+later JIT/GC behavior; this is a diagnostic replay, not an isolated JMH latency test.
+
+`Scenario` cold-compiles the synthetic log into joint pod/shard lifetimes. Churn
+expands to complete atomic units and their dependency closure. The same units,
+order, catalogue and delete IDs are used for every algorithm; a declined unit's
+delete is a no-op. Snapshot occupancy is not imported. See the
+[runner design](docs/runner/README.md) for normalization and measurement contracts.
 
 `src/main/proto/placement_dataset.proto` defines the version-2 wire format.
 Existing datasets remain compatible: the protobuf package and field numbers are

@@ -101,8 +101,9 @@ volume/device order remains deterministic greedy planning.
 
 Consolidated tests check combined budgets, atomic failure, removal/counter
 restoration, hard versus soft limits, dependency readiness, geometry, alternative
-media and cache equality with recomputation after placement/removal. The scenario
-builder and benchmark runner remain separate future work.
+media and cache equality with recomputation after placement/removal. `Scenario`
+now prepares joint synthetic lifetimes and `DatasetRunner` executes them through
+the CLI. Dedicated JMH fixtures remain separate future work.
 
 The existing traces start empty and are synthetic. Joint scheduling requires a
 scenario transformation with explicit grouped create/delete lifetimes; the raw

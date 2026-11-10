@@ -23,6 +23,11 @@ public abstract class SchedulingAlgorithm implements AutoCloseable {
 
     public abstract void schedule(Request request) throws Exception;
 
+    /** Candidate planner calls, or -1 when this algorithm does not report them. */
+    public long plannerCalls() {
+        return -1;
+    }
+
     public void placed(Assignment placement) {
     }
 

@@ -2,6 +2,7 @@ package one.cloud.benchmark.testsupport;
 
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -12,6 +13,8 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Candidates;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Header;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Operation;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Stream;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Resource;
 import one.cloud.benchmark.model.ClusterSpec;
@@ -21,6 +24,66 @@ public final class TestModel {
     }
 
     public static ClusterSpec model(Record... records) throws IOException {
+        final var path = Files.createTempFile("placement-model-", ".pb");
+        try {
+            writeModel(path, records);
+            return ClusterSpec.from(Dataset.load(path));
+        } finally {
+            Files.deleteIfExists(path);
+        }
+    }
+
+    public static Dataset trace(Record[] records, int... events) throws IOException {
+        return trace(records, true, false, events);
+    }
+
+    public static Dataset trace(Record[] records, boolean synthetic, boolean fromSnapshot, int... events) throws IOException {
+        final var directory = Files.createTempDirectory("placement-trace-");
+        try {
+            writeTrace(directory, records, synthetic, fromSnapshot, events);
+            return Dataset.load(directory.resolve("snapshot.pb"), directory.resolve("operations.pb"));
+        } finally {
+            Files.deleteIfExists(directory.resolve("operations.pb"));
+            Files.deleteIfExists(directory.resolve("snapshot.pb"));
+            Files.deleteIfExists(directory);
+        }
+    }
+
+    public static void writeTrace(Path directory, Record[] records, int... events) throws IOException {
+        writeTrace(directory, records, true, false, events);
+    }
+
+    private static void writeTrace(Path directory, Record[] records, boolean synthetic, boolean fromSnapshot, int... events) throws IOException {
+        Files.createDirectories(directory);
+        writeModel(directory.resolve("snapshot.pb"), records);
+        int resourceCount = 0;
+        for (final var record : records) {
+            if (record.hasResource()) {
+                resourceCount++;
+            }
+        }
+        final var generations = new int[resourceCount + 1];
+        try (final var output = Files.newOutputStream(directory.resolve("operations.pb"))) {
+            Record.newBuilder().setHeader(Header.newBuilder().setVersion(2).setDatasetId(42)
+                    .setResourceCount(resourceCount).setStream(Stream.OPERATIONS).setOperationCount(events.length)
+                    .setSyntheticOperations(synthetic).setReplayFromSnapshot(fromSnapshot))
+                    .build().writeDelimitedTo(output);
+            for (int index = 0; index < events.length; index++) {
+                final int resource = Math.abs(events[index]);
+                if (resource <= 0 || resource > resourceCount) {
+                    throw new IllegalArgumentException("Invalid fixture resource");
+                }
+                if (events[index] > 0) {
+                    generations[resource]++;
+                }
+                Record.newBuilder().setOperation(Operation.newBuilder().setTime(index + 1L).setResource(resource)
+                        .setGeneration(Math.max(1, generations[resource])).setCreate(events[index] > 0))
+                        .build().writeDelimitedTo(output);
+            }
+        }
+    }
+
+    private static void writeModel(Path path, Record[] records) throws IOException {
         final var header = Header.newBuilder().setVersion(2).setDatasetId(42)
                 .setExtentBytes(1024 * 1024).setDimensionCount(20).setCandidateCount(1);
         final var kinds = new HashMap<Integer, Kind>();
@@ -61,17 +124,11 @@ public final class TestModel {
                     case RESOURCE -> r.getResource().getId();
                     default -> throw new IllegalArgumentException("Unexpected fixture record");
                 }));
-        final var path = Files.createTempFile("placement-model-", ".pb");
-        try {
-            try (final var output = Files.newOutputStream(path)) {
-                Record.newBuilder().setHeader(header).build().writeDelimitedTo(output);
-                for (final var record : ordered) {
-                    record.writeDelimitedTo(output);
-                }
+        try (final var output = Files.newOutputStream(path)) {
+            Record.newBuilder().setHeader(header).build().writeDelimitedTo(output);
+            for (final var record : ordered) {
+                record.writeDelimitedTo(output);
             }
-            return ClusterSpec.from(Dataset.load(path));
-        } finally {
-            Files.deleteIfExists(path);
         }
     }
 

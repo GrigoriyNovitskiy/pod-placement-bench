@@ -81,6 +81,11 @@ public final class FitCount extends SchedulingAlgorithm {
     }
 
     @Override
+    public long plannerCalls() {
+        return planner.planCalls();
+    }
+
+    @Override
     public void placed(Assignment placement) {
         cache.changed(placement.host());
     }

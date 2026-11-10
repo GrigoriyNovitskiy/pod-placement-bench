@@ -1,6 +1,7 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
+import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
@@ -19,6 +20,7 @@ public final class GreedyPlanner {
     private Assignment[] local = EMPTY;
     private int memberCount, anchor, host, candidateCount;
     private boolean ambiguous;
+    private long planCalls;
 
     public GreedyPlanner(SchedulingContext context) {
         this.context = context;
@@ -69,7 +71,17 @@ public final class GreedyPlanner {
         return nodes[host];
     }
 
+    /** Scores complete, same-host plans returned by this planner; use only on its owner thread. */
+    public ToDoubleFunction<Assignment[]> normalizedResidualL2Scorer() {
+        return capacity.normalizedResidualL2Scorer(context, inventory);
+    }
+
+    public long planCalls() {
+        return planCalls;
+    }
+
     public Assignment[] plan(Request request, int host, int numa) {
+        planCalls++;
         checkHost(host);
         if (numa < 0 || numa != 0 && (numa >= model.constraints.length
                 || model.rules.kind[model.constraints[numa]] != 2 || model.rules.parent[model.constraints[numa]] != host)) {

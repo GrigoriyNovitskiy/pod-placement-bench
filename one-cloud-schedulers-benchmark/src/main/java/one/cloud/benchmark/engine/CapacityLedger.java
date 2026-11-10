@@ -1,6 +1,7 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
+import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
@@ -20,6 +21,12 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.NO
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
 
 final class CapacityLedger {
+    private static final int CPU_FAMILY = 0, RAM_FAMILY = 1, NETWORK_OUT_FAMILY = 2, NETWORK_IN_FAMILY = 3;
+    private static final int QUEUES_FAMILY = 4, NVIDIA_FAMILY = 5, INTEL_FAMILY = 6, SPACE_FAMILY = 7;
+    private static final int MEDIA_COUNT = 6;
+    private static final int SPINDLES_FAMILY = SPACE_FAMILY + MEDIA_COUNT;
+    private static final int IOPS_FAMILY = SPINDLES_FAMILY + MEDIA_COUNT;
+
     private final ClusterSpec model;
     private final int stride;
     private final int[] slot;
@@ -105,6 +112,104 @@ final class CapacityLedger {
             capacity[index * stride + model.dimensionCount + 1] = alternative;
             pristine[index] = empty && alternative == model.rules.alternativeSpindles[profile];
         }
+    }
+
+    ToDoubleFunction<Assignment[]> normalizedResidualL2Scorer(SchedulingContext context, int[][] hostInventory) {
+        final var initial = new CapacityLedger(model);
+        final var initialSlots = initial.slot;
+        final var factors = initial.capacity;
+        for (int offset = 0; offset < factors.length; offset++) {
+            final double full = factors[offset];
+            if (offset % stride == 20 && full == Double.MAX_VALUE) {
+                factors[offset] = Double.NaN;
+            } else if (full > 0) {
+                final double inverse = 1 / full;
+                // Negative factors retain tiny capacities whose reciprocal overflows.
+                factors[offset] = Double.isFinite(inverse) ? inverse : -full;
+            }
+        }
+        final var debit = new Debit();
+        final double[] sums = new double[IOPS_FAMILY + MEDIA_COUNT];
+        final int[] counts = new int[sums.length];
+        return plans -> {
+            if (plans.length == 0 || plans[0] == null) {
+                throw new IllegalArgumentException("A scored plan must be nonempty");
+            }
+            final int host = plans[0].host();
+            if (host <= 0 || host > model.hostCount) {
+                throw new IllegalArgumentException("Invalid scored host");
+            }
+            for (int index = 0; index < plans.length; index++) {
+                final var plan = plans[index];
+                if (plan == null || plan.host() != host) {
+                    throw new IllegalArgumentException("Scored assignments must share one host");
+                }
+                for (int previous = 0; previous < index; previous++) {
+                    if (plans[previous].resource() == plan.resource()) {
+                        throw new IllegalArgumentException("Scored resources must be distinct");
+                    }
+                }
+            }
+            load(context, hostInventory[host]);
+            if (prepare(plans, debit) == null) {
+                throw new IllegalArgumentException("Scored assignments exceed physical capacity");
+            }
+            Arrays.fill(sums, 0);
+            Arrays.fill(counts, 0);
+            for (int index = 0; index < debit.size; index++) {
+                if (debit.amount[index] <= 0) {
+                    continue;
+                }
+                final int offset = debit.index[index];
+                final int resource = inventory[offset / stride];
+                final int dimension = offset % stride;
+                final double factor = factors[initialSlots[resource] * stride + dimension];
+                if (Double.isNaN(factor)) {
+                    continue;
+                }
+                if (factor == 0) {
+                    throw new IllegalArgumentException("Positive debit against zero initial capacity");
+                }
+                final double remaining = Math.max(0, capacity[offset] - used[offset] - debit.amount[index]);
+                final double residual = factor > 0 ? remaining * factor : remaining / -factor;
+                final int family = family(resource, dimension);
+                sums[family] += residual * residual;
+                counts[family]++;
+            }
+            double score = 0;
+            for (int family = 0; family < sums.length; family++) {
+                if (counts[family] != 0) {
+                    score += sums[family] / counts[family];
+                }
+            }
+            return score;
+        };
+    }
+
+    private int family(int resource, int dimension) {
+        final int profile = model.constraints[resource];
+        if (dimension == model.dimensionCount + 1) {
+            return SPINDLES_FAMILY + model.rules.alternativeMedia[profile];
+        }
+        return switch (dimension) {
+            case 1, 12, 15 -> CPU_FAMILY;
+            case 2 -> RAM_FAMILY;
+            case 3, 13 -> NETWORK_OUT_FAMILY;
+            case 4, 14 -> NETWORK_IN_FAMILY;
+            case 16 -> QUEUES_FAMILY;
+            case 11 -> NVIDIA_FAMILY;
+            case 17 -> INTEL_FAMILY;
+            case 5 -> SPACE_FAMILY + 3;
+            case 6 -> SPINDLES_FAMILY + 3;
+            case 7 -> SPACE_FAMILY + 2;
+            case 8 -> SPINDLES_FAMILY + 2;
+            case 9 -> SPACE_FAMILY + 1;
+            case 10 -> SPINDLES_FAMILY + 1;
+            case 18 -> model.rules.media[profile] == 4 ? RAM_FAMILY : SPACE_FAMILY + model.rules.media[profile];
+            case 19 -> SPINDLES_FAMILY + model.rules.media[profile];
+            case 20 -> IOPS_FAMILY + model.rules.media[profile];
+            default -> throw new IllegalArgumentException("Unsupported scored resource dimension");
+        };
     }
 
     double available(int resource, int dimension) {
