@@ -41,7 +41,7 @@ public final class ClusterSpec {
     }
 
     public static ClusterSpec from(Dataset dataset) {
-        return from(dataset, GpuMode.AGGREGATE);
+        return from(dataset, GpuMode.DEVICES_20);
     }
 
     public static ClusterSpec from(Dataset dataset, GpuMode gpuMode) {

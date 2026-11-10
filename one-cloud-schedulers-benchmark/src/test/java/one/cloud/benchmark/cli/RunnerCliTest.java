@@ -37,7 +37,7 @@ class RunnerCliTest {
         assertTrue(json.startsWith("{\n"));
         assertTrue(json.endsWith("}" + System.lineSeparator()));
         assertTrue(json.contains("\"algorithm\":\"fitcount\""));
-        assertTrue(json.contains("\"gpu_model\":\"aggregate\""));
+        assertTrue(json.contains("\"gpu_model\":\"devices20\""));
         assertTrue(json.contains("\"dataset_id\":\"42\""));
         assertTrue(json.contains("\"snapshot_sha256\":\""));
         assertTrue(json.contains("\"operations_sha256\":\""));
@@ -85,6 +85,12 @@ class RunnerCliTest {
         for (final var algorithm : new String[]{"fitcount", "geometric-best-fit"}) {
             final var output = new ByteArrayOutputStream();
             final var errors = new ByteArrayOutputStream();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm));
+            final var defaults = output.toString(StandardCharsets.UTF_8);
+            assertTrue(defaults.contains("\"gpu_model\":\"devices20\""));
+            assertTrue(defaults.contains("\"admitted_units\":3"));
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+            output.reset();
             assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
                     "--gpu-model", "devices20"));
             final var devices = output.toString(StandardCharsets.UTF_8);
@@ -94,6 +100,10 @@ class RunnerCliTest {
             assertTrue(devices.contains("\"committed_units\":3"));
             assertTrue(devices.contains("\"complete\":true"));
             assertEquals("", errors.toString(StandardCharsets.UTF_8));
+            assertEquals(defaults.lines().filter(line -> line.contains("\"scenario_digest\":")
+                    || line.contains("\"result_checksum\":")).toList(),
+                    devices.lines().filter(line -> line.contains("\"scenario_digest\":")
+                            || line.contains("\"result_checksum\":")).toList());
             output.reset();
             assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
                     "--gpu-model", "aggregate"));
@@ -110,8 +120,7 @@ class RunnerCliTest {
                 resource(1, 1, 1), resource(2, 2, 2)}, 2, -2);
         final var output = new ByteArrayOutputStream();
         final var errors = new ByteArrayOutputStream();
-        assertEquals(1, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "fitcount",
-                "--gpu-model", "devices20"));
+        assertEquals(1, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "fitcount"));
         assertEquals("", output.toString(StandardCharsets.UTF_8));
         assertTrue(errors.toString(StandardCharsets.UTF_8).startsWith("Run failed:"));
     }

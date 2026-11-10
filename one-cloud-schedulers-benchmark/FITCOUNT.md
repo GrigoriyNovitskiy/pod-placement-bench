@@ -18,14 +18,14 @@ device extents, spindles and IOPS. To calculate fit-count, repeatedly allocate a
 shape into scratch capacity until it fails or reaches the cap. Scalar-only shapes
 can use a bounded division fast path. Zero-demand shapes still need the cap.
 
-The optional `DEVICES_20` GPU model adds separate 20-share devices derived from
+The default `DEVICES_20` GPU model adds separate 20-share devices derived from
 integer host GPU capacities. Fractional GPU demand consumes shares on one device;
 integer demand consumes whole free devices. NVIDIA and Intel capacity are separate
 types. GPU-bearing shapes in this mode use repeated scratch allocation instead of
 pooled scalar division. Scratch state copies current device balances, and tentative
 candidate assignments consume their selected devices before copies are counted.
 The common ledger validates aggregate and per-device budgets together, commits them
-atomically and releases the same device shares on deletion. The default aggregate
+atomically and releases the same device shares on deletion. The explicit aggregate
 model retains the existing scalar calculation.
 
 Device-mode demand accepts exact float32 representations of the 0.05 grid as
@@ -132,7 +132,7 @@ facts. Normalize/infer them with checked rules or extend the schema before claim
 exact snapshot replay. Empty-start replay does not require reconstructing them.
 
 The dataset already approximates unsupported filters, some inherited topology
-policy, shared-storage owner templates and GPU sharing/model details. The optional
+policy, shared-storage owner templates and GPU sharing/model details. The default
 device model supplies synthetic equal-sized cards and explicit placement boundaries;
 it does not reconstruct the omitted physical GPU models or host sharing modes. See each
 dataset's `summary.json`. These limitations come from extraction/modeling choices,

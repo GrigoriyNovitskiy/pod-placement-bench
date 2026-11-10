@@ -27,7 +27,7 @@ public final class RunnerCli {
               --cache-rows N        Resident fitcount rows (default: 256)
               --max-operations N    Positive normalized-event prefix; omitted runs the full scenario
               --catalogue-limit N   Positive evenly sampled initial-unit limit; omitted uses all units
-              --gpu-model MODEL     aggregate (default) or devices20 (synthetic GPU devices)
+              --gpu-model MODEL     devices20 (default, synthetic GPU devices) or aggregate
               --help                Show this help
             """;
 
@@ -95,7 +95,7 @@ public final class RunnerCli {
         int cacheRows = 256;
         int maxOperations = 0;
         int catalogueLimit = 0;
-        var gpuMode = ClusterSpec.GpuMode.AGGREGATE;
+        var gpuMode = ClusterSpec.GpuMode.DEVICES_20;
         final var seen = new HashSet<String>();
         for (int index = 0; index < arguments.length; index += 2) {
             final var flag = arguments[index];

@@ -25,10 +25,11 @@ class ScenarioTest {
     @Test
     void gpuModelChangesScenarioIdentityWithoutChangingItsEvents() throws Exception {
         final var source = trace(records(pod(1)), 2, -2);
-        final var aggregate = Scenario.from(source);
-        final var explicitAggregate = Scenario.from(source, ClusterSpec.GpuMode.AGGREGATE);
+        final var defaults = Scenario.from(source);
+        final var aggregate = Scenario.from(source, ClusterSpec.GpuMode.AGGREGATE);
         final var devices = Scenario.from(source, ClusterSpec.GpuMode.DEVICES_20);
-        assertEquals(aggregate.digest, explicitAggregate.digest);
+        assertEquals(ClusterSpec.GpuMode.DEVICES_20, defaults.model.gpuMode);
+        assertEquals(defaults.digest, devices.digest);
         assertNotEquals(aggregate.digest, devices.digest);
         assertEquals(aggregate.sourceOpsDigest, devices.sourceOpsDigest);
         assertArrayEquals(aggregate.events, devices.events);

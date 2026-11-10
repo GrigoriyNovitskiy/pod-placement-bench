@@ -68,7 +68,7 @@ public final class Scenario {
     }
 
     public static Scenario from(Dataset dataset) {
-        return from(dataset, ClusterSpec.GpuMode.AGGREGATE);
+        return from(dataset, ClusterSpec.GpuMode.DEVICES_20);
     }
 
     public static Scenario from(Dataset dataset, ClusterSpec.GpuMode gpuMode) {

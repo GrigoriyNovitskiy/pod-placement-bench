@@ -53,12 +53,12 @@ all initial atomic units; a positive `--catalogue-limit` selects a deterministic
 reported sample. `--max-operations` truncates normalized atomic events, without
 changing the catalogue or the static cluster. `--help` lists the options.
 
-`--gpu-model aggregate` is the default and accounts for each GPU resource type as
-a pooled host budget. Use `--gpu-model devices20` for a synthetic device model:
+`devices20` is the default GPU model. Use `--gpu-model aggregate` to reproduce
+legacy pooled host accounting. A normal run uses synthetic individual devices:
 
 ```sh
 ./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm fitcount --gpu-model devices20'
+  --args='--dataset /path/to/sc --algorithm fitcount'
 ```
 
 In `devices20`, each host's integer NVIDIA/Intel GPU capacity becomes that many
@@ -259,8 +259,11 @@ at least one valid NUMA/device assignment exists. The API supports either metric
 it does not impose a shared scoring function or physical assignment planner.
 The production port and cache boundaries are described in [FITCOUNT.md](FITCOUNT.md).
 
-For device accounting, use `ClusterSpec.from(data, ClusterSpec.GpuMode.DEVICES_20)`
-or `Scenario.from(data, ClusterSpec.GpuMode.DEVICES_20)`. `model.gpus` supplies
+`ClusterSpec.from(data)` and `Scenario.from(data)` use device accounting by default.
+Custom algorithms must submit explicit GPU IDs for GPU-bearing requests, or use
+`ClusterSpec.from(data, ClusterSpec.GpuMode.AGGREGATE)` for legacy pooled accounting.
+The corresponding explicit mode is also available in `Scenario.from`.
+`model.gpus` supplies
 the immutable topology: `first(host, dimension)` and `end(host, dimension)` bound
 the IDs of one host/type, `host(device)` and `type(device)` describe a card, and
 `demand(resource, dimension)` returns requested shares. NVIDIA and Intel dimensions
