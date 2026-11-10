@@ -5,6 +5,14 @@ decoder and algorithm API. Its only runtime dependency is `protobuf-java`; it do
 not depend on any other one-cloud module. Private control-state extraction stays in
 `one-cloud-master`.
 
+The Java source directories are grouped by responsibility. The scheduler classes
+in the first three directories share the `one.cloud.schedulers` package.
+
+- [Model](src/main/model) contains the placement model, requests and assignments.
+- [Engine](src/main/engine) contains placement state, capacity accounting, validation and planning.
+- [Algorithms](src/main/algorithms) contains the algorithm API and the fit-count implementation.
+- [Dataset](src/main/java/one/cloud/schedulers/dataset) contains the protobuf decoder and reader CLI.
+
 Build from the `pod-placement-bench` repository root:
 
 ```sh
