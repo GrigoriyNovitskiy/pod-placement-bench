@@ -1,28 +1,28 @@
-package one.cloud.benchmark.algorithms;
+package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
 
-import one.cloud.benchmark.engine.PlacementAlgorithm;
-import one.cloud.benchmark.engine.PlacementContext;
-import one.cloud.benchmark.engine.PlacementPlanner;
-import one.cloud.benchmark.model.Placement;
-import one.cloud.benchmark.model.PlacementRequest;
+import one.cloud.benchmark.engine.SchedulingAlgorithm;
+import one.cloud.benchmark.engine.SchedulingContext;
+import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.Request;
 
-public final class FitCountScheduler extends PlacementAlgorithm {
-    private final PlacementPlanner planner;
+public final class FitCount extends SchedulingAlgorithm {
+    private final GreedyPlanner planner;
     private final FitCountCache cache;
     private final int cap;
     private final int[] hosts;
-    private final Placement[][] plans;
+    private final Assignment[][] plans;
 
-    public FitCountScheduler(PlacementContext context, long seed, PlacementRequest[] catalogue) {
+    public FitCount(SchedulingContext context, long seed, Request[] catalogue) {
         this(context, seed, catalogue, 10, 256);
     }
 
-    public FitCountScheduler(PlacementContext context, long seed, PlacementRequest[] catalogue,
+    public FitCount(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes) {
         super(context, seed);
-        planner = new PlacementPlanner(context);
+        planner = new GreedyPlanner(context);
         cache = new FitCountCache(context, planner, catalogue, maxFitCount, maxCachedShapes);
         cap = maxFitCount;
         int candidates = 0;
@@ -30,11 +30,11 @@ public final class FitCountScheduler extends PlacementAlgorithm {
             candidates = Math.addExact(candidates, planner.numaNodes(host).length);
         }
         hosts = new int[candidates];
-        plans = new Placement[hosts.length][];
+        plans = new Assignment[hosts.length][];
     }
 
     @Override
-    public void schedule(PlacementRequest request) {
+    public void schedule(Request request) {
         int allocated = 0;
         try {
             for (int host = 1; host <= context.model().hostCount; host++) {
@@ -81,12 +81,12 @@ public final class FitCountScheduler extends PlacementAlgorithm {
     }
 
     @Override
-    public void placed(Placement placement) {
+    public void placed(Assignment placement) {
         cache.changed(placement.host());
     }
 
     @Override
-    public void removed(Placement placement) {
+    public void removed(Assignment placement) {
         cache.changed(placement.host());
     }
 }

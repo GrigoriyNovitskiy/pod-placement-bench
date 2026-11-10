@@ -2,32 +2,28 @@ package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
 
-import one.cloud.benchmark.model.Placement;
-import one.cloud.benchmark.model.PlacementModel;
-import one.cloud.benchmark.model.PlacementRequest;
+import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
 
-/**
- * Owner-thread greedy geometry helper. Plan validation requires an announced scheduling window.
- * A failed plan is not a proof of infeasibility; algorithms may propose their own geometry.
- */
-public final class PlacementPlanner {
-    private static final Placement[] EMPTY = new Placement[0];
-    private final PlacementContext context;
-    private final PlacementModel model;
-    private final PlacementCapacity capacity;
+public final class GreedyPlanner {
+    private static final Assignment[] EMPTY = new Assignment[0];
+    private final SchedulingContext context;
+    private final ClusterSpec model;
+    private final CapacityLedger capacity;
     private final int[][] inventory, nodes, devices;
     private final double[] demand;
-    private final PlacementCapacity.Debit tentativeDebit = new PlacementCapacity.Debit();
+    private final CapacityLedger.Debit tentativeDebit = new CapacityLedger.Debit();
     private Member[] members = new Member[0];
     private int[] component = new int[0], candidates = new int[0], chosen = new int[0];
-    private Placement[] local = EMPTY;
+    private Assignment[] local = EMPTY;
     private int memberCount, anchor, host, candidateCount;
     private boolean ambiguous;
 
-    public PlacementPlanner(PlacementContext context) {
+    public GreedyPlanner(SchedulingContext context) {
         this.context = context;
         model = context.model();
-        capacity = new PlacementCapacity(model, false);
+        capacity = new CapacityLedger(model, false);
         demand = new double[model.dimensionCount + 1];
         inventory = new int[model.hostCount + 1][];
         nodes = new int[inventory.length][];
@@ -68,14 +64,12 @@ public final class PlacementPlanner {
         }
     }
 
-    /** Borrowed, read-only NUMA resource IDs, including zero for an unbound placement. */
     public int[] numaNodes(int host) {
         checkHost(host);
         return nodes[host];
     }
 
-    /** Returns independently owned plans satisfying the context, or null. */
-    public Placement[] plan(PlacementRequest request, int host, int numa) {
+    public Assignment[] plan(Request request, int host, int numa) {
         checkHost(host);
         if (numa < 0 || numa != 0 && (numa >= model.constraints.length
                 || model.rules.kind[model.constraints[numa]] != 2 || model.rules.parent[model.constraints[numa]] != host)) {
@@ -93,36 +87,27 @@ public final class PlacementPlanner {
         if (!build(numa)) {
             return null;
         }
-        final var plans = new Placement[memberCount];
+        final var plans = new Assignment[memberCount];
         for (int index = 0; index < memberCount; index++) {
             final var member = members[index];
-            plans[index] = new Placement(member.resource, host, member.numa,
+            plans[index] = new Assignment(member.resource, host, member.numa,
                     Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount));
         }
         return context.canPlace(request, plans) ? plans : null;
     }
 
-    /**
-     * Estimates how many additional physical copies of a model request fit on the given host,
-     * up to a nonnegative cap. The greedy estimate ignores eligibility constraints such as pins
-     * and replica limits.
-     */
-    public int fitCount(PlacementRequest request, int host, int cap) {
+    public int fitCount(Request request, int host, int cap) {
         return fitCount(request, host, EMPTY, cap);
     }
 
-    /**
-     * Estimates the fit-count after applying feasible tentative assignments for the given host.
-     * Only assignments on that host are charged, and the context is unchanged.
-     */
-    public int fitCount(PlacementRequest request, int host, Placement[] tentative, int cap) {
+    public int fitCount(Request request, int host, Assignment[] tentative, int cap) {
         if (cap < 0) {
             throw new IllegalArgumentException("Fit-count cap must be nonnegative");
         }
         configure(request, host);
         capacity.load(context, inventory[host]);
         if (local.length < tentative.length) {
-            local = new Placement[tentative.length];
+            local = new Assignment[tentative.length];
         }
         int count = 0;
         for (final var plan : tentative) {
@@ -152,7 +137,7 @@ public final class PlacementPlanner {
         return fit;
     }
 
-    private void configure(PlacementRequest request, int host) {
+    private void configure(Request request, int host) {
         this.host = host;
         memberCount = request.size();
         if (members.length < memberCount) {
@@ -257,14 +242,14 @@ public final class PlacementPlanner {
             boolean placed = false;
             for (int count = Math.max(1, model.rules.minDevices[disk]);
                     count <= Math.min(candidateCount, model.rules.maxDevices[disk]); count++) {
-                final int stripes = PlacementCapacity.stripes(model.rules.diskLayout[disk], count);
+                final int stripes = CapacityLedger.stripes(model.rules.diskLayout[disk], count);
                 if (stripes >= model.rules.minStripes[disk] && stripes <= model.rules.maxStripes[disk]
                         && choose(disk, count, stripes) && volume(member, index, count)) {
                     placed = true;
                     break;
                 }
             }
-            if (!placed && model.rules.diskMedia[disk] == 2 && !PlacementCapacity.reserved(model.rules.diskLayout[disk])
+            if (!placed && model.rules.diskMedia[disk] == 2 && !CapacityLedger.reserved(model.rules.diskLayout[disk])
                     && (model.rules.diskFlags[disk] & 1) == 0) {
                 eligible(disk, numa, true);
                 for (int next = 0; next < candidateCount; next++) {
@@ -376,7 +361,7 @@ public final class PlacementPlanner {
         for (int dimension = 1; dimension < demand.length; dimension++) {
             if (demand[dimension] > 0) {
                 global = Math.min(global, divide(capacity.available(host, dimension), demand[dimension], cap));
-                numa |= PlacementCapacity.numaAware(dimension);
+                numa |= CapacityLedger.numaAware(dimension);
             }
         }
         if (!numa || nodes[host].length == 1) {
@@ -386,7 +371,7 @@ public final class PlacementPlanner {
         for (int index = 1; index < nodes[host].length && total < global; index++) {
             int fit = cap;
             for (int dimension = 1; dimension < demand.length; dimension++) {
-                if (demand[dimension] > 0 && PlacementCapacity.numaAware(dimension)) {
+                if (demand[dimension] > 0 && CapacityLedger.numaAware(dimension)) {
                     fit = Math.min(fit, divide(capacity.available(nodes[host][index], dimension), demand[dimension], cap));
                 }
             }
@@ -408,7 +393,7 @@ public final class PlacementPlanner {
     private boolean numaAware(int resource) {
         final int allocation = model.alloc[resource];
         for (int index = model.allocations.offset[allocation]; index < model.allocations.offset[allocation + 1]; index++) {
-            if (model.allocations.amount[index] > 0 && PlacementCapacity.numaAware(model.allocations.type[index])) {
+            if (model.allocations.amount[index] > 0 && CapacityLedger.numaAware(model.allocations.type[index])) {
                 return true;
             }
         }
@@ -438,6 +423,6 @@ public final class PlacementPlanner {
         private int resource, numa, diskCount, deviceCount;
         private int[] offsets = new int[1], devices = new int[0];
         private boolean allocated;
-        private PlacementCapacity.Debit debit = new PlacementCapacity.Debit(), trial = new PlacementCapacity.Debit();
+        private CapacityLedger.Debit debit = new CapacityLedger.Debit(), trial = new CapacityLedger.Debit();
     }
 }

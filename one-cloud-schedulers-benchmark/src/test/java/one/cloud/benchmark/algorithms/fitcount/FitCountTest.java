@@ -1,4 +1,4 @@
-package one.cloud.benchmark.algorithms;
+package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.ArrayList;
 
@@ -11,10 +11,10 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Limit;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
-import one.cloud.benchmark.engine.PlacementPlanner;
-import one.cloud.benchmark.engine.PlacementState;
-import one.cloud.benchmark.model.PlacementModel;
-import one.cloud.benchmark.model.PlacementRequest;
+import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.engine.Engine;
+import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.model;
@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class FitCountSchedulerTest {
+class FitCountTest {
     @Test
     void equivalentInternalNumaLinksShareOnePhysicalShape() throws Exception {
         final var model = model(
@@ -43,14 +43,14 @@ class FitCountSchedulerTest {
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
                 resource(4, 4, 4), resource(5, 2, 5), resource(6, 4, 5),
                 resource(7, 4, 5), resource(8, 2, 5), resource(9, 4, 6));
-        final var state = new PlacementState(model);
-        final var planner = new PlacementPlanner(state);
-        final var first = new PlacementRequest(4, 5, 6);
-        final var second = new PlacementRequest(7, 8, 9);
+        final var state = new Engine(model);
+        final var planner = new GreedyPlanner(state);
+        final var first = new Request(4, 5, 6);
+        final var second = new Request(7, 8, 9);
         assertEquals(0, planner.fitCount(first, 1, 10));
         assertEquals(0, planner.fitCount(second, 1, 10));
         final var cache = new FitCountCache(state, planner,
-                new PlacementRequest[]{first, second, new PlacementRequest(7, 8, 6)}, 10, 1);
+                new Request[]{first, second, new Request(7, 8, 6)}, 10, 1);
         cache.beginOrder();
         final var sample = cache.next();
         assertEquals(2, sample.frequency);
@@ -73,14 +73,14 @@ class FitCountSchedulerTest {
                 rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
                 resource(4, 4, 4), resource(5, 5, 4), resource(6, 6, 4));
-        final var first = new PlacementRequest(4);
-        final var second = new PlacementRequest(5);
-        final var demand = new PlacementRequest(6);
+        final var first = new Request(4);
+        final var second = new Request(5);
+        final var demand = new Request(6);
         for (final boolean repeated : new boolean[]{false, true}) {
-            final var state = new PlacementState(model);
-            final var samples = repeated ? new PlacementRequest[]{first, second, second}
-                    : new PlacementRequest[]{first, second};
-            try (final var scheduler = new FitCountScheduler(state, 42, samples)) {
+            final var state = new Engine(model);
+            final var samples = repeated ? new Request[]{first, second, second}
+                    : new Request[]{first, second};
+            try (final var scheduler = new FitCount(state, 42, samples)) {
                 state.schedule(scheduler, demand);
                 assertEquals(repeated ? 2 : 3, state.placement(6).numa());
             }
@@ -96,15 +96,15 @@ class FitCountSchedulerTest {
                 rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 2), resource(5, 5, 2));
-        final var first = new PlacementRequest(3);
-        final var second = new PlacementRequest(4);
-        final var demand = new PlacementRequest(5);
+        final var first = new Request(3);
+        final var second = new Request(4);
+        final var demand = new Request(5);
         for (final int cached : new int[]{1, 16}) {
             for (final boolean repeated : new boolean[]{false, true}) {
-                final var state = new PlacementState(model);
-                final var samples = repeated ? new PlacementRequest[]{first, second, second}
-                        : new PlacementRequest[]{first, second};
-                try (final var scheduler = new FitCountScheduler(state, 42, samples, 10, cached)) {
+                final var state = new Engine(model);
+                final var samples = repeated ? new Request[]{first, second, second}
+                        : new Request[]{first, second};
+                try (final var scheduler = new FitCount(state, 42, samples, 10, cached)) {
                     state.schedule(scheduler, demand);
                     assertEquals(repeated ? 1 : 2, state.placement(5).host());
                     state.remove(demand);
@@ -124,18 +124,18 @@ class FitCountSchedulerTest {
                         .addLimits(Limit.newBuilder().setDomain(1).setMax(1).setHard(true))),
                 rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2).setPinnedHost(1)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3));
-        final var state = new PlacementState(model);
-        final var first = new PlacementRequest(2);
-        final var second = new PlacementRequest(3);
-        final var planner = new PlacementPlanner(state);
-        final var cache = new FitCountCache(state, planner, new PlacementRequest[]{first, second}, 10, 1);
+        final var state = new Engine(model);
+        final var first = new Request(2);
+        final var second = new Request(3);
+        final var planner = new GreedyPlanner(state);
+        final var cache = new FitCountCache(state, planner, new Request[]{first, second}, 10, 1);
         cache.beginOrder();
         final var sample = cache.next();
         assertEquals(2, sample.frequency);
         assertNull(cache.next());
         assertEquals(5, cache.count(sample, 1));
         assertEquals(5, cache.total(sample));
-        try (final var scheduler = new FitCountScheduler(state, 42, new PlacementRequest[]{first, second})) {
+        try (final var scheduler = new FitCount(state, 42, new Request[]{first, second})) {
             state.schedule(scheduler, first);
             cache.changed(1);
             assertEquals(4, cache.count(sample, 1));
@@ -155,11 +155,11 @@ class FitCountSchedulerTest {
     @Test
     void boundedRowsMatchRecomputationAcrossHostChanges() throws Exception {
         final var model = scalarModel(8, 6);
-        final var state = new PlacementState(model);
-        final var units = new PlacementRequest[]{new PlacementRequest(3), new PlacementRequest(4), new PlacementRequest(5)};
-        final var planner = new PlacementPlanner(state);
+        final var state = new Engine(model);
+        final var units = new Request[]{new Request(3), new Request(4), new Request(5)};
+        final var planner = new GreedyPlanner(state);
         final var cache = new FitCountCache(state, planner, units, 7, 1);
-        try (final var scheduler = new FitCountScheduler(state, 3, units, 7, 1)) {
+        try (final var scheduler = new FitCount(state, 3, units, 7, 1)) {
             for (int step = 0; step < units.length * 2 + 1; step++) {
                 if (step != 0) {
                     final var unit = units[(step - 1) % units.length];
@@ -203,12 +203,12 @@ class FitCountSchedulerTest {
                 rules(Constraints.newBuilder().setId(3).setKind(Kind.SHARD).addDisks(disk)),
                 rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD).addDisks(disk.clone().setExtents(2))),
                 resource(1, 1, 1), resource(2, 0, 2), resource(3, 0, 3), resource(4, 0, 4));
-        final var state = new PlacementState(model);
-        final var planner = new PlacementPlanner(state);
-        final var zero = new PlacementRequest(2);
+        final var state = new Engine(model);
+        final var planner = new GreedyPlanner(state);
+        final var zero = new Request(2);
         assertEquals(9, planner.fitCount(zero, 1, 9));
         final var cache = new FitCountCache(state, planner,
-                new PlacementRequest[]{zero, new PlacementRequest(3), new PlacementRequest(4)}, 9, 1);
+                new Request[]{zero, new Request(3), new Request(4)}, 9, 1);
         cache.beginOrder();
         int samples = 0;
         for (var sample = cache.next(); sample != null; sample = cache.next()) {
@@ -216,9 +216,9 @@ class FitCountSchedulerTest {
             samples++;
         }
         assertEquals(3, samples);
-        assertThrows(IllegalArgumentException.class, () -> new FitCountScheduler(state, 0, new PlacementRequest[]{zero}, 0, 1));
-        assertThrows(IllegalArgumentException.class, () -> new FitCountScheduler(state, 0, new PlacementRequest[]{zero}, 9, 0));
-        try (final var scheduler = new FitCountScheduler(state, 42, new PlacementRequest[]{zero})) {
+        assertThrows(IllegalArgumentException.class, () -> new FitCount(state, 0, new Request[]{zero}, 0, 1));
+        assertThrows(IllegalArgumentException.class, () -> new FitCount(state, 0, new Request[]{zero}, 9, 0));
+        try (final var scheduler = new FitCount(state, 42, new Request[]{zero})) {
             state.schedule(scheduler, zero);
             assertEquals(1, state.placement(2).host());
         }
@@ -227,11 +227,11 @@ class FitCountSchedulerTest {
     @Test
     void seededTieBreakingAndTheDefaultBatchLoopAreRepeatable() throws Exception {
         final var model = scalarModel(8, 8);
-        final var units = new PlacementRequest[]{new PlacementRequest(3), new PlacementRequest(4), new PlacementRequest(5)};
+        final var units = new Request[]{new Request(3), new Request(4), new Request(5)};
         final int[][] placements = new int[2][];
         for (int trial = 0; trial < placements.length; trial++) {
-            final var state = new PlacementState(model);
-            try (final var scheduler = new FitCountScheduler(state, 42, new PlacementRequest[0])) {
+            final var state = new Engine(model);
+            try (final var scheduler = new FitCount(state, 42, new Request[0])) {
                 state.schedule(scheduler, units);
                 placements[trial] = new int[units.length];
                 for (int index = 0; index < units.length; index++) {
@@ -242,7 +242,7 @@ class FitCountSchedulerTest {
         assertArrayEquals(placements[0], placements[1]);
     }
 
-    private static PlacementModel scalarModel(double first, double second) throws Exception {
+    private static ClusterSpec scalarModel(double first, double second) throws Exception {
         final var records = new ArrayList<Record>();
         records.add(alloc(1, new int[]{1}, first));
         records.add(alloc(2, new int[]{1}, second));

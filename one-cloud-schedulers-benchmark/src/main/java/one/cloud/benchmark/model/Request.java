@@ -2,11 +2,10 @@ package one.cloud.benchmark.model;
 
 import java.util.Arrays;
 
-/** An immutable atomic unit; member order also defines notification order. */
-public final class PlacementRequest {
+public final class Request {
     private final int[] resources;
 
-    public PlacementRequest(int... resources) {
+    public Request(int... resources) {
         if (resources.length == 0) {
             throw new IllegalArgumentException("A placement request must have members");
         }

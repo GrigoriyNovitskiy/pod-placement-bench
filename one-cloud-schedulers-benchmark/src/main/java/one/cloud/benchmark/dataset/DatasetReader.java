@@ -11,10 +11,10 @@ import com.google.protobuf.CodedInputStream;
 
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 
-public final class PlacementDatasetRead {
+public final class DatasetReader {
     private static final int MAX_RECORD_BYTES = 32 * 1024 * 1024;
 
-    private PlacementDatasetRead() {
+    private DatasetReader() {
     }
 
     public static void main(String[] arguments) throws IOException {
@@ -22,8 +22,8 @@ public final class PlacementDatasetRead {
             throw new IllegalArgumentException("Usage: runPlacementDatasetRead --args='SNAPSHOT.pb [OPERATIONS.pb]'");
         }
         final long start = System.nanoTime();
-        final var dataset = arguments.length == 1 ? PlacementDataset.load(Path.of(arguments[0]))
-                : PlacementDataset.load(Path.of(arguments[0]), Path.of(arguments[1]));
+        final var dataset = arguments.length == 1 ? Dataset.load(Path.of(arguments[0]))
+                : Dataset.load(Path.of(arguments[0]), Path.of(arguments[1]));
         System.out.printf(Locale.ROOT, "{\"resources\":%d,\"hosts\":%d,\"placements\":%d,\"operations\":%d,\"load_ms\":%.3f}%n",
                 dataset.alloc.length - 1, dataset.hostCount, dataset.snapshot.resource.length,
                 dataset.operations.resource.length, (System.nanoTime() - start) / 1_000_000.0);

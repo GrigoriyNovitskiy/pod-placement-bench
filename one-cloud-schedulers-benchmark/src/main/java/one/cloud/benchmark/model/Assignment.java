@@ -2,13 +2,9 @@ package one.cloud.benchmark.model;
 
 import java.util.Objects;
 
-/**
- * A complete assignment for one resource. NUMA is an inventory resource ID, or zero when absent.
- * Disk offsets partition device IDs by disk plan. Arrays are borrowed and must remain unchanged
- * during a context call; the producer may reuse them after that call returns.
- */
-public record Placement(int resource, int host, int numa, int[] diskOffsets, int[] devices) {
-    public Placement {
+/** Arrays are borrowed. Disk offsets partition device IDs by disk plan. */
+public record Assignment(int resource, int host, int numa, int[] diskOffsets, int[] devices) {
+    public Assignment {
         Objects.requireNonNull(diskOffsets);
         Objects.requireNonNull(devices);
         if (resource <= 0 || host <= 0 || numa < 0 || diskOffsets.length == 0
@@ -27,7 +23,7 @@ public record Placement(int resource, int host, int numa, int[] diskOffsets, int
         }
     }
 
-    public Placement copy() {
-        return new Placement(resource, host, numa, diskOffsets.clone(), devices.clone());
+    public Assignment copy() {
+        return new Assignment(resource, host, numa, diskOffsets.clone(), devices.clone());
     }
 }

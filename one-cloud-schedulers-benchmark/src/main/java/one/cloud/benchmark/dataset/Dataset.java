@@ -7,7 +7,7 @@ import java.util.Arrays;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Header;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 
-public final class PlacementDataset {
+public final class Dataset {
     public final long id;
     public final int hostCount;
     public final int dimensionCount;
@@ -21,7 +21,7 @@ public final class PlacementDataset {
     public final Placements snapshot;
     public final Operations operations;
 
-    private PlacementDataset(Decoder decoder, Operations operations) {
+    private Dataset(Decoder decoder, Operations operations) {
         id = decoder.header.getDatasetId();
         hostCount = decoder.header.getHostCount();
         dimensionCount = decoder.header.getDimensionCount();
@@ -36,17 +36,17 @@ public final class PlacementDataset {
         this.operations = operations;
     }
 
-    public static PlacementDataset load(Path model) throws IOException {
+    public static Dataset load(Path model) throws IOException {
         return load(model, null);
     }
 
-    public static PlacementDataset load(Path model, Path operations) throws IOException {
+    public static Dataset load(Path model, Path operations) throws IOException {
         try {
             final var decoder = new Decoder();
-            PlacementDatasetRead.read(model, decoder::accept);
+            DatasetReader.read(model, decoder::accept);
             decoder.finish();
             final var trace = operations == null ? Operations.EMPTY : readOperations(operations, decoder.header);
-            return new PlacementDataset(decoder, trace);
+            return new Dataset(decoder, trace);
         } catch (IllegalArgumentException failure) {
             throw new IOException("Invalid placement dataset: " + failure.getMessage(), failure);
         }
@@ -56,7 +56,7 @@ public final class PlacementDataset {
         final Header[] header = {null};
         final Operations[] result = {null};
         final int[] next = {0};
-        PlacementDatasetRead.read(path, record -> {
+        DatasetReader.read(path, record -> {
             if (header[0] == null) {
                 if (!record.hasHeader()) {
                     throw new IllegalArgumentException("Operation stream must start with a header");

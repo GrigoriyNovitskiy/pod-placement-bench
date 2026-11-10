@@ -9,7 +9,7 @@ import java.util.SplittableRandom;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import one.cloud.benchmark.dataset.PlacementDataset;
+import one.cloud.benchmark.dataset.Dataset;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Alloc;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
@@ -19,9 +19,9 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Operation;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Resource;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Stream;
-import one.cloud.benchmark.model.Placement;
-import one.cloud.benchmark.model.PlacementModel;
-import one.cloud.benchmark.model.PlacementRequest;
+import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,21 +30,21 @@ import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-class PlacementAlgorithmTest {
+class SchedulingContractTest {
     @TempDir
     Path temporary;
 
     @Test
     void requestsKeepTheirOrderAndOwnTheirStorage() {
         final int[] resources = {3, 1, 2};
-        final var request = new PlacementRequest(resources);
+        final var request = new Request(resources);
         resources[0] = 99;
         assertEquals(3, request.size());
         assertEquals(3, request.resource(0));
         assertEquals(1, request.resource(1));
         assertEquals(2, request.resource(2));
         for (final var invalid : List.of(new int[0], new int[]{0}, new int[]{-1}, new int[]{1, 2, 1})) {
-            assertThrows(IllegalArgumentException.class, () -> new PlacementRequest(invalid));
+            assertThrows(IllegalArgumentException.class, () -> new Request(invalid));
         }
     }
 
@@ -52,7 +52,7 @@ class PlacementAlgorithmTest {
     void plansBorrowBuffersAndCanSnapshotThem() {
         final int[] offsets = {0, 2};
         final int[] devices = {4, 5};
-        final var plan = new Placement(3, 1, 2, offsets, devices);
+        final var plan = new Assignment(3, 1, 2, offsets, devices);
         final var copy = plan.copy();
         assertSame(offsets, plan.diskOffsets());
         assertSame(devices, plan.devices());
@@ -65,26 +65,26 @@ class PlacementAlgorithmTest {
         assertEquals(3, copy.resource());
         assertEquals(1, copy.host());
         assertEquals(2, copy.numa());
-        new Placement(3, 1, 0, new int[]{0}, new int[0]);
+        new Assignment(3, 1, 0, new int[]{0}, new int[0]);
     }
 
     @Test
     void plansRejectInvalidStructure() {
         for (final var invalid : List.of(new int[0], new int[]{1}, new int[]{0, 2}, new int[]{0, 1, 0, 1})) {
-            assertThrows(IllegalArgumentException.class, () -> new Placement(3, 1, 0, invalid, new int[]{4}));
+            assertThrows(IllegalArgumentException.class, () -> new Assignment(3, 1, 0, invalid, new int[]{4}));
         }
         for (final var ids : List.of(new int[]{0, 1, 0}, new int[]{3, 0, 0}, new int[]{3, 1, -1})) {
-            assertThrows(IllegalArgumentException.class, () -> new Placement(ids[0], ids[1], ids[2], new int[]{0}, new int[0]));
+            assertThrows(IllegalArgumentException.class, () -> new Assignment(ids[0], ids[1], ids[2], new int[]{0}, new int[0]));
         }
-        assertThrows(IllegalArgumentException.class, () -> new Placement(3, 1, 0, new int[]{0, 1}, new int[]{0}));
-        assertThrows(NullPointerException.class, () -> new Placement(3, 1, 0, null, new int[0]));
-        assertThrows(NullPointerException.class, () -> new Placement(3, 1, 0, new int[]{0}, null));
+        assertThrows(IllegalArgumentException.class, () -> new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{0}));
+        assertThrows(NullPointerException.class, () -> new Assignment(3, 1, 0, null, new int[0]));
+        assertThrows(NullPointerException.class, () -> new Assignment(3, 1, 0, new int[]{0}, null));
     }
 
     @Test
     void modelSharesStaticTablesWithoutRetainingReplayState() throws Exception {
         final var dataset = dataset();
-        final var model = PlacementModel.from(dataset);
+        final var model = ClusterSpec.from(dataset);
         assertEquals(dataset.id, model.id);
         assertEquals(dataset.hostCount, model.hostCount);
         assertEquals(dataset.dimensionCount, model.dimensionCount);
@@ -94,27 +94,27 @@ class PlacementAlgorithmTest {
         assertSame(dataset.allocations, model.allocations);
         assertSame(dataset.rules, model.rules);
         assertSame(dataset.candidates, model.candidates);
-        for (final var field : PlacementModel.class.getDeclaredFields()) {
-            assertFalse(field.getType() == PlacementDataset.class || field.getType() == PlacementDataset.Placements.class
-                    || field.getType() == PlacementDataset.Operations.class);
+        for (final var field : ClusterSpec.class.getDeclaredFields()) {
+            assertFalse(field.getType() == Dataset.class || field.getType() == Dataset.Placements.class
+                    || field.getType() == Dataset.Operations.class);
         }
     }
 
     @Test
     void baseClassUsesARepeatableRandomSource() throws Exception {
-        final var context = (PlacementContext) Proxy.newProxyInstance(PlacementContext.class.getClassLoader(),
-                new Class<?>[]{PlacementContext.class}, (proxy, method, arguments) -> {
+        final var context = (SchedulingContext) Proxy.newProxyInstance(SchedulingContext.class.getClassLoader(),
+                new Class<?>[]{SchedulingContext.class}, (proxy, method, arguments) -> {
                     throw new AssertionError(method.getName());
                 });
         assertArrayEquals(new SplittableRandom(42).ints(16).toArray(), draw(context, 42));
         assertThrows(NullPointerException.class, () -> draw(null, 42));
     }
 
-    private static int[] draw(PlacementContext expectedContext, long seed) throws Exception {
+    private static int[] draw(SchedulingContext expectedContext, long seed) throws Exception {
         final int[] values = new int[16];
-        try (final var algorithm = new PlacementAlgorithm(expectedContext, seed) {
+        try (final var algorithm = new SchedulingAlgorithm(expectedContext, seed) {
             @Override
-            public void schedule(PlacementRequest request) {
+            public void schedule(Request request) {
                 assertSame(expectedContext, context);
                 final int start = (request.resource(0) - 1) * 8;
                 for (int index = start; index < start + 8; index++) {
@@ -122,15 +122,15 @@ class PlacementAlgorithmTest {
                 }
             }
         }) {
-            algorithm.schedule(new PlacementRequest[]{new PlacementRequest(1), new PlacementRequest(2)});
-            final var plan = new Placement(2, 1, 0, new int[]{0}, new int[0]);
+            algorithm.schedule(new Request[]{new Request(1), new Request(2)});
+            final var plan = new Assignment(2, 1, 0, new int[]{0}, new int[0]);
             algorithm.placed(plan);
             algorithm.removed(plan);
         }
         return values;
     }
 
-    private PlacementDataset dataset() throws Exception {
+    private Dataset dataset() throws Exception {
         final var snapshot = temporary.resolve("snapshot.pb");
         try (final var output = Files.newOutputStream(snapshot)) {
             for (final var record : List.of(
@@ -153,6 +153,6 @@ class PlacementAlgorithmTest {
             Record.newBuilder().setOperation(Operation.newBuilder().setTime(1).setResource(2).setGeneration(1).setCreate(true))
                     .build().writeDelimitedTo(output);
         }
-        return PlacementDataset.load(snapshot, trace);
+        return Dataset.load(snapshot, trace);
     }
 }

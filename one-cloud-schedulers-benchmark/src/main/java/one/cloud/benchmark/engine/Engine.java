@@ -7,35 +7,35 @@ import java.util.TreeSet;
 
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
-import one.cloud.benchmark.model.Placement;
-import one.cloud.benchmark.model.PlacementModel;
-import one.cloud.benchmark.model.PlacementRequest;
+import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
 
-public final class PlacementState implements PlacementContext {
+public final class Engine implements SchedulingContext {
     private static final long[] NO_LINKS = new long[0];
-    private final PlacementModel model;
-    private final PlacementCapacity capacity;
+    private final ClusterSpec model;
+    private final CapacityLedger capacity;
     private final Thread owner = Thread.currentThread();
-    private final Placement[] placements;
+    private final Assignment[] placements;
     private final Unit[] units;
-    private final Placement[] tentative;
+    private final Assignment[] tentative;
     private final int[] windowOwner, seen, groupSizes, groupCounts, tentativeGroups;
     private final long[] hostRevisions, domains;
     private final Counts counts = new Counts(), tentativeCounts = new Counts(), incoming = new Counts();
-    private final PlacementCapacity.Debit trial = new PlacementCapacity.Debit();
-    private PlacementAlgorithm algorithm;
-    private IdentityHashMap<PlacementRequest, Integer> pending;
+    private final CapacityLedger.Debit trial = new CapacityLedger.Debit();
+    private SchedulingAlgorithm algorithm;
+    private IdentityHashMap<Request, Integer> pending;
     private long revision;
     private int nextRequest, sequence, tentativeSize;
     private boolean notifying;
     private Throwable failure;
 
-    public PlacementState(PlacementModel model) {
+    public Engine(ClusterSpec model) {
         this.model = Objects.requireNonNull(model);
-        capacity = new PlacementCapacity(model);
-        placements = new Placement[model.alloc.length];
+        capacity = new CapacityLedger(model);
+        placements = new Assignment[model.alloc.length];
         units = new Unit[placements.length];
-        tentative = new Placement[placements.length];
+        tentative = new Assignment[placements.length];
         windowOwner = new int[placements.length];
         seen = new int[placements.length];
         hostRevisions = new long[model.hostCount + 1];
@@ -70,14 +70,14 @@ public final class PlacementState implements PlacementContext {
         domains = keys.stream().mapToLong(Long::longValue).toArray();
     }
 
-    public void schedule(PlacementAlgorithm algorithm, PlacementRequest... requests) throws Exception {
+    public void schedule(SchedulingAlgorithm algorithm, Request... requests) throws Exception {
         checkMutable();
         Objects.requireNonNull(algorithm);
         if (pending != null || algorithm.context != this || this.algorithm != null && this.algorithm != algorithm) {
             throw new IllegalStateException("A state belongs to one algorithm and one scheduling window");
         }
         final var announced = requests.clone();
-        final var window = new IdentityHashMap<PlacementRequest, Integer>();
+        final var window = new IdentityHashMap<Request, Integer>();
         try {
             for (int index = 0; index < announced.length; index++) {
                 final var request = Objects.requireNonNull(announced[index]);
@@ -120,7 +120,7 @@ public final class PlacementState implements PlacementContext {
         }
     }
 
-    public void remove(PlacementRequest request) {
+    public void remove(Request request) {
         checkMutable();
         if (pending != null) {
             throw new IllegalStateException("Removal is outside the scheduling window");
@@ -159,7 +159,7 @@ public final class PlacementState implements PlacementContext {
     }
 
     @Override
-    public PlacementModel model() {
+    public ClusterSpec model() {
         checkThread();
         return model;
     }
@@ -192,7 +192,7 @@ public final class PlacementState implements PlacementContext {
     }
 
     @Override
-    public Placement placement(int resource) {
+    public Assignment placement(int resource) {
         checkThread();
         checkResource(resource);
         return placements[resource];
@@ -213,7 +213,7 @@ public final class PlacementState implements PlacementContext {
     }
 
     @Override
-    public boolean canPlace(PlacementRequest request, Placement... plans) {
+    public boolean canPlace(Request request, Assignment... plans) {
         checkThread();
         if (failure != null) {
             throw new IllegalStateException("Failed placement state", failure);
@@ -226,15 +226,15 @@ public final class PlacementState implements PlacementContext {
     }
 
     @Override
-    public void place(PlacementRequest request, Placement... plans) {
+    public void place(Request request, Assignment... plans) {
         checkMutable();
         final Unit unit;
         try {
-            final var debit = prepare(request, plans, new PlacementCapacity.Debit());
+            final var debit = prepare(request, plans, new CapacityLedger.Debit());
             if (debit == null) {
                 throw new IllegalArgumentException("Infeasible placement");
             }
-            final var copies = new Placement[request.size()];
+            final var copies = new Assignment[request.size()];
             for (int member = 0; member < copies.length; member++) {
                 copies[member] = tentative[request.resource(member)].copy();
             }
@@ -256,7 +256,7 @@ public final class PlacementState implements PlacementContext {
         notify(unit.plans, true);
     }
 
-    private PlacementCapacity.Debit prepare(PlacementRequest request, Placement[] plans, PlacementCapacity.Debit trial) {
+    private CapacityLedger.Debit prepare(Request request, Assignment[] plans, CapacityLedger.Debit trial) {
         final var index = pending == null ? null : pending.get(request);
         if (index == null || index < nextRequest || plans.length != request.size()) {
             throw new IllegalArgumentException("Request is not pending or has incomplete assignments");
@@ -298,7 +298,7 @@ public final class PlacementState implements PlacementContext {
         return debit;
     }
 
-    private boolean linksFit(Placement plan) {
+    private boolean linksFit(Assignment plan) {
         final int profile = model.constraints[plan.resource()];
         for (int link = model.rules.linkOffset[profile]; link < model.rules.linkOffset[profile + 1]; link++) {
             final int target = model.rules.linkTarget[link];
@@ -325,7 +325,7 @@ public final class PlacementState implements PlacementContext {
         return true;
     }
 
-    private boolean removable(Unit unit, Placement plan) {
+    private boolean removable(Unit unit, Assignment plan) {
         if (external(unit, (long) plan.resource() << 32)) {
             return false;
         }
@@ -388,7 +388,7 @@ public final class PlacementState implements PlacementContext {
         return count > low - first;
     }
 
-    private long[] outgoing(Placement[] plans) {
+    private long[] outgoing(Assignment[] plans) {
         int size = 0;
         for (final var plan : plans) {
             final int profile = model.constraints[plan.resource()];
@@ -415,7 +415,7 @@ public final class PlacementState implements PlacementContext {
         return keys;
     }
 
-    private void clearTentative(Placement[] plans) {
+    private void clearTentative(Assignment[] plans) {
         for (int index = 0; index < tentativeSize; index++) {
             final var plan = plans[index];
             tentative[plan.resource()] = null;
@@ -424,7 +424,7 @@ public final class PlacementState implements PlacementContext {
         tentativeSize = 0;
     }
 
-    private void update(Placement plan, int delta, int[] groups, Counts counters) {
+    private void update(Assignment plan, int delta, int[] groups, Counts counters) {
         final int group = group(plan);
         if (group == 0) {
             return;
@@ -456,7 +456,7 @@ public final class PlacementState implements PlacementContext {
         return id < 0 ? 0 : counters.get((long) group << 32 | id + 1L);
     }
 
-    private int domain(Placement plan, int level) {
+    private int domain(Assignment plan, int level) {
         if (level == 1) {
             return plan.host();
         }
@@ -472,7 +472,7 @@ public final class PlacementState implements PlacementContext {
         return 0;
     }
 
-    private int group(Placement plan) {
+    private int group(Assignment plan) {
         return model.rules.group[model.constraints[plan.resource()]];
     }
 
@@ -483,7 +483,7 @@ public final class PlacementState implements PlacementContext {
         }
     }
 
-    private void notify(Placement[] plans, boolean placed) {
+    private void notify(Assignment[] plans, boolean placed) {
         notifying = true;
         try {
             for (final var plan : plans) {
@@ -540,7 +540,7 @@ public final class PlacementState implements PlacementContext {
         return (long) level << 32 | Integer.toUnsignedLong(value);
     }
 
-    private record Unit(PlacementRequest request, Placement[] plans, PlacementCapacity.Debit debit, int[] hosts, long[] outgoing) {
+    private record Unit(Request request, Assignment[] plans, CapacityLedger.Debit debit, int[] hosts, long[] outgoing) {
     }
 
     private static final class Counts {

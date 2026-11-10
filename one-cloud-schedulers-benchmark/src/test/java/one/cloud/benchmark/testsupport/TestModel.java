@@ -6,7 +6,7 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 
-import one.cloud.benchmark.dataset.PlacementDataset;
+import one.cloud.benchmark.dataset.Dataset;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Alloc;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Candidates;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
@@ -14,13 +14,13 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Header;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Resource;
-import one.cloud.benchmark.model.PlacementModel;
+import one.cloud.benchmark.model.ClusterSpec;
 
 public final class TestModel {
     private TestModel() {
     }
 
-    public static PlacementModel model(Record... records) throws IOException {
+    public static ClusterSpec model(Record... records) throws IOException {
         final var header = Header.newBuilder().setVersion(2).setDatasetId(42)
                 .setExtentBytes(1024 * 1024).setDimensionCount(20).setCandidateCount(1);
         final var kinds = new HashMap<Integer, Kind>();
@@ -69,7 +69,7 @@ public final class TestModel {
                     record.writeDelimitedTo(output);
                 }
             }
-            return PlacementModel.from(PlacementDataset.load(path));
+            return ClusterSpec.from(Dataset.load(path));
         } finally {
             Files.deleteIfExists(path);
         }
