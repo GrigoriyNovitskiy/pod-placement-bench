@@ -12,10 +12,6 @@ java {
     withSourcesJar()
 }
 
-sourceSets.main {
-    java.srcDirs("src/main/model", "src/main/engine", "src/main/algorithms")
-}
-
 dependencies {
     api("com.google.protobuf:protobuf-java:3.25.9")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.14.3")

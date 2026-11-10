@@ -1,4 +1,4 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -14,12 +14,14 @@ import one.cloud.schedulers.dataset.PlacementDatasetProtos.Limit;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Link;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Relation;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementRequest;
 
-import static one.cloud.schedulers.TestModel.alloc;
-import static one.cloud.schedulers.TestModel.candidates;
-import static one.cloud.schedulers.TestModel.model;
-import static one.cloud.schedulers.TestModel.resource;
-import static one.cloud.schedulers.TestModel.rules;
+import static one.cloud.schedulers.testsupport.TestModel.alloc;
+import static one.cloud.schedulers.testsupport.TestModel.candidates;
+import static one.cloud.schedulers.testsupport.TestModel.model;
+import static one.cloud.schedulers.testsupport.TestModel.resource;
+import static one.cloud.schedulers.testsupport.TestModel.rules;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;

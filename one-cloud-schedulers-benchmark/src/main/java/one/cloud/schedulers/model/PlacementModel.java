@@ -1,4 +1,4 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.model;
 
 import one.cloud.schedulers.dataset.PlacementDataset;
 import one.cloud.schedulers.dataset.PlacementDataset.Allocs;

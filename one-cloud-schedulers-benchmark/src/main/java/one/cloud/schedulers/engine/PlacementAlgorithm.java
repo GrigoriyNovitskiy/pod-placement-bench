@@ -1,7 +1,10 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
 
 import java.util.Objects;
 import java.util.SplittableRandom;
+
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementRequest;
 
 public abstract class PlacementAlgorithm implements AutoCloseable {
     protected final PlacementContext context;

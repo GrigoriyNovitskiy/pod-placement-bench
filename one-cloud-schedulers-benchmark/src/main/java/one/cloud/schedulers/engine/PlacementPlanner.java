@@ -1,9 +1,13 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
 
 import java.util.Arrays;
 
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.schedulers.model.PlacementRequest;
+
 /**
- * Owner-thread greedy geometry helper for an announced scheduling window.
+ * Owner-thread greedy geometry helper. Plan validation requires an announced scheduling window.
  * A failed plan is not a proof of infeasibility; algorithms may propose their own geometry.
  */
 public final class PlacementPlanner {
@@ -98,11 +102,20 @@ public final class PlacementPlanner {
         return context.canPlace(request, plans) ? plans : null;
     }
 
-    int fitCount(PlacementRequest request, int host, int cap) {
+    /**
+     * Estimates how many additional physical copies of a model request fit on the given host,
+     * up to a nonnegative cap. The greedy estimate ignores eligibility constraints such as pins
+     * and replica limits.
+     */
+    public int fitCount(PlacementRequest request, int host, int cap) {
         return fitCount(request, host, EMPTY, cap);
     }
 
-    int fitCount(PlacementRequest request, int host, Placement[] tentative, int cap) {
+    /**
+     * Estimates the fit-count after applying feasible tentative assignments for the given host.
+     * Only assignments on that host are charged, and the context is unchanged.
+     */
+    public int fitCount(PlacementRequest request, int host, Placement[] tentative, int cap) {
         if (cap < 0) {
             throw new IllegalArgumentException("Fit-count cap must be nonnegative");
         }

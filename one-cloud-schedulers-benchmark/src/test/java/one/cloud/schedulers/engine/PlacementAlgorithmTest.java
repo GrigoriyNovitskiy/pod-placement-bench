@@ -1,4 +1,4 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
 
 import java.lang.reflect.Proxy;
 import java.nio.file.Files;
@@ -19,6 +19,9 @@ import one.cloud.schedulers.dataset.PlacementDatasetProtos.Operation;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Resource;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Stream;
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.schedulers.model.PlacementRequest;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;

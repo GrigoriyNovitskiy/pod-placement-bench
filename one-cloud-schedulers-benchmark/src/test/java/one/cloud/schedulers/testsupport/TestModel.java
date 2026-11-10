@@ -1,4 +1,4 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.testsupport;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -14,12 +14,13 @@ import one.cloud.schedulers.dataset.PlacementDatasetProtos.Header;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Resource;
+import one.cloud.schedulers.model.PlacementModel;
 
-final class TestModel {
+public final class TestModel {
     private TestModel() {
     }
 
-    static PlacementModel model(Record... records) throws IOException {
+    public static PlacementModel model(Record... records) throws IOException {
         final var header = Header.newBuilder().setVersion(2).setDatasetId(42)
                 .setExtentBytes(1024 * 1024).setDimensionCount(20).setCandidateCount(1);
         final var kinds = new HashMap<Integer, Kind>();
@@ -74,7 +75,7 @@ final class TestModel {
         }
     }
 
-    static Record alloc(int id, int[] types, double... amounts) {
+    public static Record alloc(int id, int[] types, double... amounts) {
         final var value = Alloc.newBuilder().setId(id);
         for (final int type : types) {
             value.addType(type);
@@ -85,15 +86,15 @@ final class TestModel {
         return Record.newBuilder().setAlloc(value).build();
     }
 
-    static Record rules(Constraints.Builder value) {
+    public static Record rules(Constraints.Builder value) {
         return Record.newBuilder().setConstraints(value).build();
     }
 
-    static Record resource(int id, int alloc, int constraints) {
+    public static Record resource(int id, int alloc, int constraints) {
         return Record.newBuilder().setResource(Resource.newBuilder().setId(id).setAlloc(alloc).setConstraints(constraints)).build();
     }
 
-    static Record candidates(int id, int... hosts) {
+    public static Record candidates(int id, int... hosts) {
         final var value = Candidates.newBuilder().setId(id);
         for (final int host : hosts) {
             value.addHost(host);

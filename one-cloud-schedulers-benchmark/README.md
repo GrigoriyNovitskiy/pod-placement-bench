@@ -5,13 +5,13 @@ decoder and algorithm API. Its only runtime dependency is `protobuf-java`; it do
 not depend on any other one-cloud module. Private control-state extraction stays in
 `one-cloud-master`.
 
-The Java source directories are grouped by responsibility. The scheduler classes
-in the first three directories share the `one.cloud.schedulers` package.
+The `one.cloud.schedulers` namespace is organized into four packages.
 
-- [Model](src/main/model) contains the placement model, requests and assignments.
-- [Engine](src/main/engine) contains placement state, capacity accounting, validation and planning.
-- [Algorithms](src/main/algorithms) contains the algorithm API and the fit-count implementation.
-- [Dataset](src/main/java/one/cloud/schedulers/dataset) contains the protobuf decoder and reader CLI.
+- [model](src/main/java/one/cloud/schedulers/model) contains the placement model, requests and assignments.
+- [engine](src/main/java/one/cloud/schedulers/engine) defines the algorithm contract and implements
+  placement state, validation, capacity accounting and planning.
+- [algorithms](src/main/java/one/cloud/schedulers/algorithms) contains the fit-count implementation.
+- [dataset](src/main/java/one/cloud/schedulers/dataset) contains the protobuf decoder and reader CLI.
 
 Build from the `pod-placement-bench` repository root:
 
@@ -24,14 +24,17 @@ Build from the `pod-placement-bench` repository root:
 The repository builds with JDK 25 toolchain and public dependencies only. Its root
 wrapper downloads Gradle 9.3 from the public distribution service and verifies its
 SHA-256. The subproject and generated artifact are named
-`one-cloud-schedulers-benchmark`; Java packages and the protobuf wire format remain
-unchanged.
+`one-cloud-schedulers-benchmark`.
 
 `src/main/proto/placement_dataset.proto` defines the version-2 wire format.
 Existing datasets remain compatible: the protobuf package and field numbers are
-unchanged. Generated Java types and the model use `one.cloud.schedulers.dataset`.
+unchanged. Generated Java types use `one.cloud.schedulers.dataset`.
 
 ```java
+import java.nio.file.Path;
+
+import one.cloud.schedulers.dataset.PlacementDataset;
+
 final var data = PlacementDataset.load(Path.of("snapshot.pb"), Path.of("operations.pb"));
 final int profile = data.constraints[resource];
 final boolean allowed = data.candidates.allows(data.rules.candidates[profile], host);
@@ -44,6 +47,10 @@ IDs. Protobuf records, strings, label maps and filter ASTs are not retained.
 An algorithm extends `PlacementAlgorithm` and implements one method:
 
 ```java
+import one.cloud.schedulers.engine.PlacementAlgorithm;
+import one.cloud.schedulers.engine.PlacementContext;
+import one.cloud.schedulers.model.PlacementRequest;
+
 public final class MyAlgorithm extends PlacementAlgorithm {
     public MyAlgorithm(PlacementContext context, long seed) {
         super(context, seed);
@@ -115,6 +122,10 @@ belongs to one algorithm and one owner thread; an uncaught scheduling or callbac
 failure makes it unusable for further mutation.
 
 ```java
+import one.cloud.schedulers.algorithms.FitCountScheduler;
+import one.cloud.schedulers.engine.PlacementState;
+import one.cloud.schedulers.model.PlacementModel;
+
 final var state = new PlacementState(PlacementModel.from(data));
 try (final var algorithm = new FitCountScheduler(state, 42, catalogue, 100, 64)) {
     state.schedule(algorithm, request);

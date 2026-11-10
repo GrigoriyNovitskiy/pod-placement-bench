@@ -1,4 +1,8 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
+
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.schedulers.model.PlacementRequest;
 
 import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.DEVICE_SPINDLES_VALUE;
 

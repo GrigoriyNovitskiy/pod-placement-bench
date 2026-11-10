@@ -1,6 +1,9 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
 
 import java.util.Arrays;
+
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementModel;
 
 import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
 import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;

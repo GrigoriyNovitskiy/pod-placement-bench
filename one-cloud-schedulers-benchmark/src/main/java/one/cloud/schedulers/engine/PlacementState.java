@@ -1,4 +1,4 @@
-package one.cloud.schedulers;
+package one.cloud.schedulers.engine;
 
 import java.util.Arrays;
 import java.util.IdentityHashMap;
@@ -7,6 +7,9 @@ import java.util.TreeSet;
 
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.schedulers.dataset.PlacementDatasetProtos.Relation;
+import one.cloud.schedulers.model.Placement;
+import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.schedulers.model.PlacementRequest;
 
 public final class PlacementState implements PlacementContext {
     private static final long[] NO_LINKS = new long[0];
