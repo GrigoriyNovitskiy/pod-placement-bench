@@ -1,10 +1,10 @@
-package one.cloud.schedulers.engine;
+package one.cloud.benchmark.engine;
 
-import one.cloud.schedulers.model.Placement;
-import one.cloud.schedulers.model.PlacementModel;
-import one.cloud.schedulers.model.PlacementRequest;
+import one.cloud.benchmark.model.Placement;
+import one.cloud.benchmark.model.PlacementModel;
+import one.cloud.benchmark.model.PlacementRequest;
 
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.DEVICE_SPINDLES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.DEVICE_SPINDLES_VALUE;
 
 /**
  * The common engine owns validation, occupancy, release and counters. Algorithms own their indexes

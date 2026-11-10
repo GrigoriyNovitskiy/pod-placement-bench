@@ -1,25 +1,25 @@
-package one.cloud.schedulers.algorithms;
+package one.cloud.benchmark.algorithms;
 
 import java.util.ArrayList;
 
 import org.junit.jupiter.api.Test;
 
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Constraints;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.DiskPlan;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Kind;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Limit;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Link;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Media;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
-import one.cloud.schedulers.engine.PlacementPlanner;
-import one.cloud.schedulers.engine.PlacementState;
-import one.cloud.schedulers.model.PlacementModel;
-import one.cloud.schedulers.model.PlacementRequest;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Limit;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.engine.PlacementPlanner;
+import one.cloud.benchmark.engine.PlacementState;
+import one.cloud.benchmark.model.PlacementModel;
+import one.cloud.benchmark.model.PlacementRequest;
 
-import static one.cloud.schedulers.testsupport.TestModel.alloc;
-import static one.cloud.schedulers.testsupport.TestModel.model;
-import static one.cloud.schedulers.testsupport.TestModel.resource;
-import static one.cloud.schedulers.testsupport.TestModel.rules;
+import static one.cloud.benchmark.testsupport.TestModel.alloc;
+import static one.cloud.benchmark.testsupport.TestModel.model;
+import static one.cloud.benchmark.testsupport.TestModel.resource;
+import static one.cloud.benchmark.testsupport.TestModel.rules;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;

@@ -1,10 +1,10 @@
-package one.cloud.schedulers.engine;
+package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
 
-import one.cloud.schedulers.model.Placement;
-import one.cloud.schedulers.model.PlacementModel;
-import one.cloud.schedulers.model.PlacementRequest;
+import one.cloud.benchmark.model.Placement;
+import one.cloud.benchmark.model.PlacementModel;
+import one.cloud.benchmark.model.PlacementRequest;
 
 /**
  * Owner-thread greedy geometry helper. Plan validation requires an announced scheduling window.

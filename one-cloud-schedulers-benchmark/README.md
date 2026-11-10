@@ -5,13 +5,13 @@ decoder and algorithm API. Its only runtime dependency is `protobuf-java`; it do
 not depend on any other one-cloud module. Private control-state extraction stays in
 `one-cloud-master`.
 
-The `one.cloud.schedulers` namespace is organized into four packages.
+The `one.cloud.benchmark` namespace is organized into four packages.
 
-- [model](src/main/java/one/cloud/schedulers/model) contains the placement model, requests and assignments.
-- [engine](src/main/java/one/cloud/schedulers/engine) defines the algorithm contract and implements
+- [model](src/main/java/one/cloud/benchmark/model) contains the placement model, requests and assignments.
+- [engine](src/main/java/one/cloud/benchmark/engine) defines the algorithm contract and implements
   placement state, validation, capacity accounting and planning.
-- [algorithms](src/main/java/one/cloud/schedulers/algorithms) contains the fit-count implementation.
-- [dataset](src/main/java/one/cloud/schedulers/dataset) contains the protobuf decoder and reader CLI.
+- [algorithms](src/main/java/one/cloud/benchmark/algorithms) contains the fit-count implementation.
+- [dataset](src/main/java/one/cloud/benchmark/dataset) contains the protobuf decoder and reader CLI.
 
 Build from the `pod-placement-bench` repository root:
 
@@ -28,12 +28,12 @@ SHA-256. The subproject and generated artifact are named
 
 `src/main/proto/placement_dataset.proto` defines the version-2 wire format.
 Existing datasets remain compatible: the protobuf package and field numbers are
-unchanged. Generated Java types use `one.cloud.schedulers.dataset`.
+unchanged. Generated Java types use `one.cloud.benchmark.dataset`.
 
 ```java
 import java.nio.file.Path;
 
-import one.cloud.schedulers.dataset.PlacementDataset;
+import one.cloud.benchmark.dataset.PlacementDataset;
 
 final var data = PlacementDataset.load(Path.of("snapshot.pb"), Path.of("operations.pb"));
 final int profile = data.constraints[resource];
@@ -47,9 +47,9 @@ IDs. Protobuf records, strings, label maps and filter ASTs are not retained.
 An algorithm extends `PlacementAlgorithm` and implements one method:
 
 ```java
-import one.cloud.schedulers.engine.PlacementAlgorithm;
-import one.cloud.schedulers.engine.PlacementContext;
-import one.cloud.schedulers.model.PlacementRequest;
+import one.cloud.benchmark.engine.PlacementAlgorithm;
+import one.cloud.benchmark.engine.PlacementContext;
+import one.cloud.benchmark.model.PlacementRequest;
 
 public final class MyAlgorithm extends PlacementAlgorithm {
     public MyAlgorithm(PlacementContext context, long seed) {
@@ -122,9 +122,9 @@ belongs to one algorithm and one owner thread; an uncaught scheduling or callbac
 failure makes it unusable for further mutation.
 
 ```java
-import one.cloud.schedulers.algorithms.FitCountScheduler;
-import one.cloud.schedulers.engine.PlacementState;
-import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.benchmark.algorithms.FitCountScheduler;
+import one.cloud.benchmark.engine.PlacementState;
+import one.cloud.benchmark.model.PlacementModel;
 
 final var state = new PlacementState(PlacementModel.from(data));
 try (final var algorithm = new FitCountScheduler(state, 42, catalogue, 100, 64)) {

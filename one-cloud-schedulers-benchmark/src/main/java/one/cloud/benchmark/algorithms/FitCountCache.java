@@ -1,4 +1,4 @@
-package one.cloud.schedulers.algorithms;
+package one.cloud.benchmark.algorithms;
 
 import java.util.Arrays;
 import java.util.Comparator;
@@ -6,10 +6,10 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.PriorityQueue;
 
-import one.cloud.schedulers.engine.PlacementContext;
-import one.cloud.schedulers.engine.PlacementPlanner;
-import one.cloud.schedulers.model.PlacementModel;
-import one.cloud.schedulers.model.PlacementRequest;
+import one.cloud.benchmark.engine.PlacementContext;
+import one.cloud.benchmark.engine.PlacementPlanner;
+import one.cloud.benchmark.model.PlacementModel;
+import one.cloud.benchmark.model.PlacementRequest;
 
 final class FitCountCache {
     private final PlacementContext context;

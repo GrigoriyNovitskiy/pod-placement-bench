@@ -1,4 +1,4 @@
-package one.cloud.schedulers.testsupport;
+package one.cloud.benchmark.testsupport;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -6,15 +6,15 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 
-import one.cloud.schedulers.dataset.PlacementDataset;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Alloc;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Candidates;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Constraints;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Header;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Kind;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Resource;
-import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.benchmark.dataset.PlacementDataset;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Alloc;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Candidates;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Header;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Resource;
+import one.cloud.benchmark.model.PlacementModel;
 
 public final class TestModel {
     private TestModel() {

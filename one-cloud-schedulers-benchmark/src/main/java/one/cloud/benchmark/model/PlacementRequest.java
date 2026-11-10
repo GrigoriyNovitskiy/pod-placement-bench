@@ -1,4 +1,4 @@
-package one.cloud.schedulers.model;
+package one.cloud.benchmark.model;
 
 import java.util.Arrays;
 

@@ -1,23 +1,23 @@
-package one.cloud.schedulers.engine;
+package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
 
-import one.cloud.schedulers.model.Placement;
-import one.cloud.schedulers.model.PlacementModel;
+import one.cloud.benchmark.model.Placement;
+import one.cloud.benchmark.model.PlacementModel;
 
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID1_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID4_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID5_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID6_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID10_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.STRIPED_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.HW_CORES_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.HW_LAN_QUEUES_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.MEM_MIB_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.NONPROD_VCORES_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID1_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID4_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID5_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID6_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID10_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.STRIPED_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.HW_CORES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.HW_LAN_QUEUES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.MEM_MIB_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.NONPROD_VCORES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
 
 final class PlacementCapacity {
     private final PlacementModel model;

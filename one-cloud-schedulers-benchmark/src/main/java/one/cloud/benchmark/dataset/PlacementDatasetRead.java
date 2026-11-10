@@ -1,4 +1,4 @@
-package one.cloud.schedulers.dataset;
+package one.cloud.benchmark.dataset;
 
 import java.io.BufferedInputStream;
 import java.io.IOException;
@@ -9,7 +9,7 @@ import java.util.function.Consumer;
 
 import com.google.protobuf.CodedInputStream;
 
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 
 public final class PlacementDatasetRead {
     private static final int MAX_RECORD_BYTES = 32 * 1024 * 1024;

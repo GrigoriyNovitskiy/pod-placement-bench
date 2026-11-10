@@ -44,7 +44,7 @@ protobuf {
 tasks.register<JavaExec>("runPlacementDatasetRead") {
     group = "application"
     dependsOn(tasks.classes)
-    mainClass.set("one.cloud.schedulers.dataset.PlacementDatasetRead")
+    mainClass.set("one.cloud.benchmark.dataset.PlacementDatasetRead")
     classpath = sourceSets.main.get().runtimeClasspath
     workingDir = rootProject.projectDir
 }

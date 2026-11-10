@@ -1,12 +1,12 @@
-package one.cloud.schedulers.algorithms;
+package one.cloud.benchmark.algorithms;
 
 import java.util.Arrays;
 
-import one.cloud.schedulers.engine.PlacementAlgorithm;
-import one.cloud.schedulers.engine.PlacementContext;
-import one.cloud.schedulers.engine.PlacementPlanner;
-import one.cloud.schedulers.model.Placement;
-import one.cloud.schedulers.model.PlacementRequest;
+import one.cloud.benchmark.engine.PlacementAlgorithm;
+import one.cloud.benchmark.engine.PlacementContext;
+import one.cloud.benchmark.engine.PlacementPlanner;
+import one.cloud.benchmark.model.Placement;
+import one.cloud.benchmark.model.PlacementRequest;
 
 public final class FitCountScheduler extends PlacementAlgorithm {
     private final PlacementPlanner planner;

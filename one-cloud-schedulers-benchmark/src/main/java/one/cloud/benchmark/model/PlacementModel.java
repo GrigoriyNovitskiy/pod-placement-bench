@@ -1,9 +1,9 @@
-package one.cloud.schedulers.model;
+package one.cloud.benchmark.model;
 
-import one.cloud.schedulers.dataset.PlacementDataset;
-import one.cloud.schedulers.dataset.PlacementDataset.Allocs;
-import one.cloud.schedulers.dataset.PlacementDataset.CandidateSets;
-import one.cloud.schedulers.dataset.PlacementDataset.Rules;
+import one.cloud.benchmark.dataset.PlacementDataset;
+import one.cloud.benchmark.dataset.PlacementDataset.Allocs;
+import one.cloud.benchmark.dataset.PlacementDataset.CandidateSets;
+import one.cloud.benchmark.dataset.PlacementDataset.Rules;
 
 /** Static tables shared with the decoder. All arrays are read-only; replay state is excluded. */
 public final class PlacementModel {

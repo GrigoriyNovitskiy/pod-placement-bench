@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package one.cloud.benchmark.dataset;
 
-option java_package = "one.cloud.schedulers.dataset";
+option java_package = "one.cloud.benchmark.dataset";
 option java_outer_classname = "PlacementDatasetProtos";
 
 // Files contain varint-length-delimited records. IDs are dense and start at 1;

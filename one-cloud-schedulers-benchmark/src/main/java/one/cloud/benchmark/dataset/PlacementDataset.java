@@ -1,11 +1,11 @@
-package one.cloud.schedulers.dataset;
+package one.cloud.benchmark.dataset;
 
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.Arrays;
 
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Header;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Header;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 
 public final class PlacementDataset {
     public final long id;
