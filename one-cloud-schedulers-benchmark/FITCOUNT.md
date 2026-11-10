@@ -41,7 +41,7 @@ extent/IOPS consumption and the appropriate spindle exclusion.
 The engine normalizes host storage capacity from the full usable device inventory,
 including alternative views. Exported host hardware totals can describe only the
 primary media and an old mix of allocations. Read remaining budgets through
-`PlacementContext.available`, rather than treating those raw host totals as an
+`SchedulingContext.available`, rather than treating those raw host totals as an
 independent storage bound. ROOTFS is not an allocatable storage class.
 
 ## Choosing a candidate
@@ -72,16 +72,16 @@ default. Bound cached values and refresh work explicitly.
 Physical cache entries depend on host capacity revisions. A committed request or
 removal updates each affected host revision. Feasibility caches also depend on
 global state revision, because a group/domain/dependency change can affect another
-host without changing its physical capacity. Candidate scoring uses scratch
-overlays and never changes canonical revisions or invokes commit hooks. Cache
-updates caused by successful placements and removals belong to measured replay.
+host without changing its physical capacity. Candidate scoring uses a scratch
+overlay for tentative assignments on the scored host. Real commits and removals
+update revisions and invoke hooks. Their cache updates count toward replay time.
 
 ## Scope and validation
 
-`PlacementCapacity` validates and accounts for concrete physical assignments;
-`PlacementPlanner` provides deterministic greedy geometry and repeated-copy
-calculation. `PlacementState` supplies atomic commits, removals and dependency
-counters. `FitCountScheduler` compares candidate losses using `FitCountCache`.
+`CapacityLedger` validates and accounts for physical assignments.
+`GreedyPlanner` provides deterministic greedy geometry and repeated-copy
+calculation. `Engine` supplies atomic commits, removals and dependency
+counters. `FitCount` compares candidate losses using `FitCountCache`.
 Preallocation, preemption, preservation, evacuation, quotas, fairness, RPC and
 control-loop orchestration are excluded.
 

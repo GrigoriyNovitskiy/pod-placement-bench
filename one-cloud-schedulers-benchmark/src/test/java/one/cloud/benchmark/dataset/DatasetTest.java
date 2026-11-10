@@ -1,4 +1,4 @@
-package one.cloud.schedulers.dataset;
+package one.cloud.benchmark.dataset;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -9,21 +9,21 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Alloc;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Candidates;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Constraints;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.DeviceUse;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.DiskPlan;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Domain;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Header;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Kind;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Limit;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Link;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Media;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Operation;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Placement;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Resource;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Alloc;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Candidates;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.DeviceUse;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Domain;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Header;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Limit;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Operation;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Placement;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Resource;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -31,7 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-class PlacementDatasetTest {
+class DatasetTest {
     @TempDir
     Path temporary;
 
@@ -44,7 +44,7 @@ class PlacementDatasetTest {
                 .setStream(PlacementDatasetProtos.Stream.OPERATIONS).setOperationCount(2).setSyntheticOperations(true).build(), List.of(
                 Record.newBuilder().setOperation(Operation.newBuilder().setTime(1).setResource(203).setGeneration(1).setCreate(true)).build(),
                 Record.newBuilder().setOperation(Operation.newBuilder().setTime(2).setResource(203).setGeneration(1)).build()));
-        final var dataset = PlacementDataset.load(model, trace);
+        final var dataset = Dataset.load(model, trace);
         assertEquals(206, dataset.alloc.length);
         assertEquals(4, dataset.alloc[203]);
         assertEquals(4, dataset.constraints[203]);
@@ -80,16 +80,16 @@ class PlacementDatasetTest {
     void rejectsInvalidCountsReferencesAndFraming() throws Exception {
         final var model = temporary.resolve("broken.pb");
         write(model, header().toBuilder().setAllocValueCount(11).build(), records());
-        assertThrows(IOException.class, () -> PlacementDataset.load(model));
+        assertThrows(IOException.class, () -> Dataset.load(model));
         final var rows = records();
         rows.set(rows.size() - 1, Record.newBuilder().setPlacement(Placement.newBuilder()
                 .setResource(205).setHost(2).setNuma(201)).build());
         write(model, header().toBuilder().setDeviceUseCount(1).build(), rows);
-        assertThrows(IOException.class, () -> PlacementDataset.load(model));
+        assertThrows(IOException.class, () -> Dataset.load(model));
         for (final var malformed : List.of(new byte[]{0}, new byte[]{1}, new byte[]{(byte) 128},
                 new byte[]{(byte) 128, (byte) 128, (byte) 128, 32}, new byte[]{2, 0x78, 1})) {
             Files.write(model, malformed);
-            assertThrows(IOException.class, () -> PlacementDataset.load(model));
+            assertThrows(IOException.class, () -> Dataset.load(model));
         }
     }
 
@@ -107,7 +107,7 @@ class PlacementDatasetTest {
                 record.writeDelimitedTo(output);
             }
         }
-        assertEquals(count, PlacementDatasetRead.read(path, ignored -> {}));
+        assertEquals(count, DatasetReader.read(path, ignored -> {}));
     }
 
     @Test
@@ -117,7 +117,7 @@ class PlacementDatasetTest {
         write(model, header(), records());
         write(trace, Header.newBuilder().setVersion(2).setDatasetId(43).setResourceCount(205)
                 .setStream(PlacementDatasetProtos.Stream.OPERATIONS).build(), List.of());
-        assertThrows(IOException.class, () -> PlacementDataset.load(model, trace));
+        assertThrows(IOException.class, () -> Dataset.load(model, trace));
     }
 
     private static Header header() {

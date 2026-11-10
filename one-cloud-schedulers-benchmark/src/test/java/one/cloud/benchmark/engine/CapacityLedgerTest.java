@@ -1,29 +1,32 @@
-package one.cloud.schedulers;
+package one.cloud.benchmark.engine;
 
 import java.util.ArrayList;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Constraints;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.DiskPlan;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Kind;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Link;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Media;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Record;
-import one.cloud.schedulers.dataset.PlacementDatasetProtos.Relation;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
+import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
 
-import static one.cloud.schedulers.TestModel.alloc;
-import static one.cloud.schedulers.TestModel.model;
-import static one.cloud.schedulers.TestModel.resource;
-import static one.cloud.schedulers.TestModel.rules;
+import static one.cloud.benchmark.testsupport.TestModel.alloc;
+import static one.cloud.benchmark.testsupport.TestModel.model;
+import static one.cloud.benchmark.testsupport.TestModel.resource;
+import static one.cloud.benchmark.testsupport.TestModel.rules;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
-class PlacementCapacityTest {
+class CapacityLedgerTest {
     @Test
     void numaFragmentationAndDedicatedCpuUseBothLedgers() throws Exception {
         final var model = model(
@@ -35,7 +38,7 @@ class PlacementCapacityTest {
                 rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
                 rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3), resource(4, 3, 4), resource(5, 4, 4));
-        final var capacity = new PlacementCapacity(model);
+        final var capacity = new CapacityLedger(model);
         assertNull(capacity.prepare(plain(4, 0)));
         assertNull(capacity.prepare(plain(4, 2)));
         assertNull(capacity.prepare(plain(4, 3)));
@@ -48,9 +51,9 @@ class PlacementCapacityTest {
         capacity.release(debit);
         assertEquals(24, capacity.available(1, 1));
         assertEquals(12, capacity.available(2, 1));
-        final var planner = new PlacementPlanner(new PlacementState(model));
-        assertEquals(0, planner.fitCount(new PlacementRequest(4), 1, 100));
-        assertEquals(4, planner.fitCount(new PlacementRequest(5), 1, 100));
+        final var planner = new GreedyPlanner(new Engine(model));
+        assertEquals(0, planner.fitCount(new Request(4), 1, 100));
+        assertEquals(4, planner.fitCount(new Request(5), 1, 100));
     }
 
     @Test
@@ -66,12 +69,12 @@ class PlacementCapacityTest {
                     .setMinDevices(count).setMaxDevices(count).setMaxStripes(16)
                     .setMetadataExtents(reserved ? 1 : 0);
             final var model = disks(count, disk);
-            final var capacity = new PlacementCapacity(model);
+            final var capacity = new CapacityLedger(model);
             final int[] devices = new int[count];
             for (int device = 0; device < count; device++) {
                 devices[device] = device + 2;
             }
-            final var debit = capacity.prepare(new Placement(count + 2, 1, 0, new int[]{0, count}, devices));
+            final var debit = capacity.prepare(new Assignment(count + 2, 1, 0, new int[]{0, count}, devices));
             assertNotNull(debit, layouts[index].name());
             capacity.allocate(debit);
             for (final int device : devices) {
@@ -87,15 +90,15 @@ class PlacementCapacityTest {
     void iopsCapsAreAppliedAfterSplittingAndUnknownDemandRemainsUncharged() throws Exception {
         final var model = disks(2, disk(Media.HDD).setExtents(2).setIops(100).setPerDeviceIopsCap(3)
                 .setMinDevices(2).setMaxDevices(2).setMaxStripes(2));
-        final var capacity = new PlacementCapacity(model);
-        final var plan = new Placement(4, 1, 0, new int[]{0, 2}, new int[]{2, 3});
+        final var capacity = new CapacityLedger(model);
+        final var plan = new Assignment(4, 1, 0, new int[]{0, 2}, new int[]{2, 3});
         final var debit = capacity.prepare(plan);
         assertNotNull(debit);
         capacity.allocate(debit);
         assertEquals(7, capacity.available(2, 20));
         assertEquals(7, capacity.available(3, 20));
-        final var unknown = new PlacementCapacity(disks(1, disk(Media.HDD).clearIops().setPerDeviceIopsCap(3)));
-        final var unknownDebit = unknown.prepare(new Placement(3, 1, 0, new int[]{0, 1}, new int[]{2}));
+        final var unknown = new CapacityLedger(disks(1, disk(Media.HDD).clearIops().setPerDeviceIopsCap(3)));
+        final var unknownDebit = unknown.prepare(new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2}));
         assertNotNull(unknownDebit);
         unknown.allocate(unknownDebit);
         assertEquals(10, unknown.available(2, 20));
@@ -103,8 +106,8 @@ class PlacementCapacityTest {
 
     @Test
     void wholeDiskOwnershipIsExclusiveAndReversible() throws Exception {
-        final var capacity = new PlacementCapacity(disks(1, disk(Media.HDD).setFlags(1)));
-        final var plan = new Placement(3, 1, 0, new int[]{0, 1}, new int[]{2});
+        final var capacity = new CapacityLedger(disks(1, disk(Media.HDD).setFlags(1)));
+        final var plan = new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2});
         final var debit = capacity.prepare(plan);
         assertNotNull(debit);
         capacity.allocate(debit);
@@ -130,15 +133,15 @@ class PlacementCapacityTest {
                 rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD).addDisks(disk(Media.HDD).setSpindles(1))),
                 rules(Constraints.newBuilder().setId(5).setKind(Kind.SHARD).addDisks(disk(Media.HDD))),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 3, 4), resource(5, 3, 5));
-        final var capacity = new PlacementCapacity(model);
-        final var alternative = capacity.prepare(new Placement(3, 1, 0, new int[]{0, 1}, new int[]{2}));
+        final var capacity = new CapacityLedger(model);
+        final var alternative = capacity.prepare(new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2}));
         assertNotNull(alternative);
         capacity.allocate(alternative);
         assertEquals(19, capacity.available(2, 18));
         assertEquals(0, capacity.available(2, 19));
         assertEquals(1, capacity.available(2, 19, Media.SSD_VALUE));
-        assertNull(capacity.prepare(new Placement(4, 1, 0, new int[]{0, 1}, new int[]{2})));
-        final var zeroSpindles = capacity.prepare(new Placement(5, 1, 0, new int[]{0, 1}, new int[]{2}));
+        assertNull(capacity.prepare(new Assignment(4, 1, 0, new int[]{0, 1}, new int[]{2})));
+        final var zeroSpindles = capacity.prepare(new Assignment(5, 1, 0, new int[]{0, 1}, new int[]{2}));
         assertNotNull(zeroSpindles);
         capacity.allocate(zeroSpindles);
         capacity.release(alternative);
@@ -147,25 +150,25 @@ class PlacementCapacityTest {
         assertEquals(19, capacity.available(2, 18));
         capacity.release(zeroSpindles);
         assertEquals(20, capacity.available(2, 18));
-        final var planner = new PlacementPlanner(new PlacementState(model));
-        assertEquals(1, planner.fitCount(new PlacementRequest(3), 1, 100));
+        final var planner = new GreedyPlanner(new Engine(model));
+        assertEquals(1, planner.fitCount(new Request(3), 1, 100));
     }
 
     @Test
     void combinedPlansCannotOversubscribeAndMalformedPlansAlwaysThrow() throws Exception {
         final var model = disks(1, disk(Media.HDD).setExtents(11));
-        final var capacity = new PlacementCapacity(model);
-        final var plan = new Placement(3, 1, 0, new int[]{0, 1}, new int[]{2});
+        final var capacity = new CapacityLedger(model);
+        final var plan = new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2});
         assertNull(capacity.prepare(plan, plan));
         assertEquals(20, capacity.available(2, 18));
-        final var broken = new Placement(3, 1, 0, new int[]{0, 1}, new int[]{2});
+        final var broken = new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2});
         broken.devices()[0] = 1;
         assertThrows(IllegalArgumentException.class, () -> capacity.prepare(plan, broken));
         assertThrows(IllegalArgumentException.class,
-                () -> capacity.prepare(new Placement(3, 1, 0, new int[]{0, 1, 1}, new int[]{2})));
+                () -> capacity.prepare(new Assignment(3, 1, 0, new int[]{0, 1, 1}, new int[]{2})));
         assertEquals(20, capacity.available(2, 18));
-        final var planner = new PlacementPlanner(new PlacementState(model));
-        final var request = new PlacementRequest(3);
+        final var planner = new GreedyPlanner(new Engine(model));
+        final var request = new Request(3);
         assertThrows(IllegalArgumentException.class, () -> planner.numaNodes(0));
         assertThrows(IllegalArgumentException.class, () -> planner.plan(request, 2, 0));
         for (final int numa : new int[]{-1, 2}) {
@@ -184,9 +187,9 @@ class PlacementCapacityTest {
                         .addLinks(Link.newBuilder().setTarget(5).setDomain(2).setRelation(Relation.COLOCATE))),
                 rules(Constraints.newBuilder().setId(5).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3), resource(4, 3, 4), resource(5, 3, 5));
-        final var planner = new PlacementPlanner(new PlacementState(model));
-        assertEquals(0, planner.fitCount(new PlacementRequest(4, 5), 1, 100));
-        assertEquals(2, planner.fitCount(new PlacementRequest(4), 1, 100));
+        final var planner = new GreedyPlanner(new Engine(model));
+        assertEquals(0, planner.fitCount(new Request(4, 5), 1, 100));
+        assertEquals(2, planner.fitCount(new Request(4), 1, 100));
     }
 
     @Test
@@ -200,9 +203,9 @@ class PlacementCapacityTest {
                 rules(Constraints.newBuilder().setId(4).setKind(Kind.DISK).setParent(1).setMedia(Media.MEMDISK).setOrdinal(1)),
                 rules(Constraints.newBuilder().setId(5).setKind(Kind.SHARD).addDisks(disk(Media.MEMDISK).setExtents(3))),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3), resource(4, 3, 4), resource(5, 4, 5));
-        final var capacity = new PlacementCapacity(model);
-        assertNull(capacity.prepare(new Placement(5, 1, 3, new int[]{0, 1}, new int[]{4})));
-        final var debit = capacity.prepare(new Placement(5, 1, 2, new int[]{0, 1}, new int[]{4}));
+        final var capacity = new CapacityLedger(model);
+        assertNull(capacity.prepare(new Assignment(5, 1, 3, new int[]{0, 1}, new int[]{4})));
+        final var debit = capacity.prepare(new Assignment(5, 1, 2, new int[]{0, 1}, new int[]{4}));
         assertNotNull(debit);
         capacity.allocate(debit);
         assertEquals(5, capacity.available(1, 2));
@@ -210,10 +213,10 @@ class PlacementCapacityTest {
         assertEquals(1, capacity.available(4, 18));
         capacity.release(debit);
         assertEquals(8, capacity.available(1, 2));
-        final var planner = new PlacementPlanner(new PlacementState(model));
-        assertEquals(1, planner.fitCount(new PlacementRequest(5), 1, 100));
-        final var optional = new PlacementPlanner(new PlacementState(disks(1, disk(Media.HDD).setExtents(100).setFlags(2))));
-        assertEquals(7, optional.fitCount(new PlacementRequest(3), 1, 7));
+        final var planner = new GreedyPlanner(new Engine(model));
+        assertEquals(1, planner.fitCount(new Request(5), 1, 100));
+        final var optional = new GreedyPlanner(new Engine(disks(1, disk(Media.HDD).setExtents(100).setFlags(2))));
+        assertEquals(7, optional.fitCount(new Request(3), 1, 7));
     }
 
     @Test
@@ -228,10 +231,10 @@ class PlacementCapacityTest {
                 rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD).addDisks(disk(Media.SSD).setSpindles(2)
                         .setMinDevices(2).setMaxDevices(4).setMaxStripes(4))),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 3, 4));
-        final var capacity = new PlacementCapacity(model);
+        final var capacity = new CapacityLedger(model);
         assertEquals(20 / 1024.0, capacity.available(1, 7));
         assertEquals(8, capacity.available(1, 8));
-        final var alternative = capacity.prepare(new Placement(4, 1, 0, new int[]{0, 1}, new int[]{2}));
+        final var alternative = capacity.prepare(new Assignment(4, 1, 0, new int[]{0, 1}, new int[]{2}));
         assertNotNull(alternative);
         capacity.allocate(alternative);
         assertEquals(19 / 1024.0, capacity.available(1, 7));
@@ -239,7 +242,7 @@ class PlacementCapacityTest {
         assertEquals(0, capacity.available(1, 10));
         assertEquals(6, capacity.available(1, 8));
         capacity.release(alternative);
-        final var plan = new Placement(3, 1, 0, new int[]{0, 1}, new int[]{2});
+        final var plan = new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2});
         final var first = capacity.prepare(plan);
         capacity.allocate(first);
         final var second = capacity.prepare(plan);
@@ -275,15 +278,15 @@ class PlacementCapacityTest {
                     final int resource = numa ? 4 : 2;
                     records.add(resource(resource, 3, 2));
                     final var model = model(records.toArray(Record[]::new));
-                    final var planner = new PlacementPlanner(new PlacementState(model));
-                    final var request = new PlacementRequest(resource);
+                    final var planner = new GreedyPlanner(new Engine(model));
+                    final var request = new Request(resource);
                     for (final int cap : new int[]{1, 10, 100, 1000}) {
                         assertEquals(slowCount(model, resource, numa, cap, null), planner.fitCount(request, 1, cap),
                                 amount + "/" + budget + "/" + numa + "/" + cap);
                         final var candidate = plain(resource, numa ? 2 : 0);
-                        if (new PlacementCapacity(model).prepare(candidate) != null) {
+                        if (new CapacityLedger(model).prepare(candidate) != null) {
                             assertEquals(slowCount(model, resource, numa, cap, candidate),
-                                    planner.fitCount(request, 1, new Placement[]{candidate}, cap));
+                                    planner.fitCount(request, 1, new Assignment[]{candidate}, cap));
                         }
                     }
                 }
@@ -291,15 +294,15 @@ class PlacementCapacityTest {
         }
     }
 
-    private static int slowCount(PlacementModel model, int resource, boolean numa, int cap, Placement tentative) {
-        final var capacity = new PlacementCapacity(model);
+    private static int slowCount(ClusterSpec model, int resource, boolean numa, int cap, Assignment tentative) {
+        final var capacity = new CapacityLedger(model);
         if (tentative != null) {
             capacity.allocate(capacity.prepare(tentative));
         }
         int count = 0;
         final int[] nodes = numa ? new int[]{2, 3} : new int[]{0};
         while (count < cap) {
-            PlacementCapacity.Debit debit = null;
+            CapacityLedger.Debit debit = null;
             for (final int node : nodes) {
                 debit = capacity.prepare(plain(resource, node));
                 if (debit != null) {
@@ -315,8 +318,8 @@ class PlacementCapacityTest {
         return count;
     }
 
-    private static Placement plain(int resource, int numa) {
-        return new Placement(resource, 1, numa, new int[]{0}, new int[0]);
+    private static Assignment plain(int resource, int numa) {
+        return new Assignment(resource, 1, numa, new int[]{0}, new int[0]);
     }
 
     private static DiskPlan.Builder disk(Media media) {
@@ -324,7 +327,7 @@ class PlacementCapacityTest {
                 .setMinStripes(1).setMaxStripes(1);
     }
 
-    private static PlacementModel disks(int count, DiskPlan.Builder disk) throws Exception {
+    private static ClusterSpec disks(int count, DiskPlan.Builder disk) throws Exception {
         final var records = new ArrayList<Record>(List.of(
                 alloc(1, new int[]{5, 6, 7, 8, 9, 10}, 100, 100, 100, 100, 100, 100),
                 alloc(2, new int[]{18, 19, 20}, 20, 10, 10), alloc(3, new int[]{9, 10}, 99, 99),

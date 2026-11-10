@@ -1,12 +1,12 @@
-package one.cloud.schedulers;
+package one.cloud.benchmark.model;
 
-import one.cloud.schedulers.dataset.PlacementDataset;
-import one.cloud.schedulers.dataset.PlacementDataset.Allocs;
-import one.cloud.schedulers.dataset.PlacementDataset.CandidateSets;
-import one.cloud.schedulers.dataset.PlacementDataset.Rules;
+import one.cloud.benchmark.dataset.Dataset;
+import one.cloud.benchmark.dataset.Dataset.Allocs;
+import one.cloud.benchmark.dataset.Dataset.CandidateSets;
+import one.cloud.benchmark.dataset.Dataset.Rules;
 
-/** Static tables shared with the decoder. All arrays are read-only; replay state is excluded. */
-public final class PlacementModel {
+/** Shared static tables. Treat their arrays as read-only. */
+public final class ClusterSpec {
     public final long id;
     public final int hostCount;
     public final int dimensionCount;
@@ -17,7 +17,7 @@ public final class PlacementModel {
     public final Rules rules;
     public final CandidateSets candidates;
 
-    private PlacementModel(PlacementDataset dataset) {
+    private ClusterSpec(Dataset dataset) {
         id = dataset.id;
         hostCount = dataset.hostCount;
         dimensionCount = dataset.dimensionCount;
@@ -29,7 +29,7 @@ public final class PlacementModel {
         candidates = dataset.candidates;
     }
 
-    public static PlacementModel from(PlacementDataset dataset) {
-        return new PlacementModel(dataset);
+    public static ClusterSpec from(Dataset dataset) {
+        return new ClusterSpec(dataset);
     }
 }

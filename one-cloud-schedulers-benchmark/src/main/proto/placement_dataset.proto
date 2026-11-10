@@ -2,12 +2,10 @@ syntax = "proto3";
 
 package one.cloud.benchmark.dataset;
 
-option java_package = "one.cloud.schedulers.dataset";
+option java_package = "one.cloud.benchmark.dataset";
 option java_outer_classname = "PlacementDatasetProtos";
 
-// Files contain varint-length-delimited records. IDs are dense and start at 1;
-// zero is absent, except candidate sets: 0 permits every host and 1 permits none.
-// Indexed records are emitted in ascending ID order within each record kind.
+// Files store varint-length-delimited records with dense IDs starting at 1.
 message Record {
   oneof payload {
     Header header = 1;
@@ -26,7 +24,6 @@ message Header {
   uint32 resource_count = 3;
   uint32 alloc_count = 4;
   uint32 constraint_count = 5;
-  // Largest candidate-set ID, including reserved set 1.
   uint32 candidate_count = 6;
   uint32 placement_count = 7;
   uint32 operation_count = 8;
@@ -45,8 +42,6 @@ message Header {
   Stream stream = 21;
 }
 
-// The type IDs are the fixed ResourceType values. Supply and demand use the
-// same units; per-device extents/IOPS refine host storage totals, not extra demand.
 enum ResourceType {
   UNSPECIFIED = 0;
   VCORES = 1;
@@ -93,7 +88,6 @@ message Constraints {
   uint32 id = 1;
   Kind kind = 2;
   uint32 parent = 3;
-  // NUMA and DISK: local NUMA index + 1; zero means unspecified.
   uint32 ordinal = 4;
   double cpu_power = 5;
   Media media = 6;
@@ -127,18 +121,11 @@ enum Media {
   ROOTFS = 5;
 }
 
-// Host resource IDs occupy [1, host_count]. Candidate IDs >= 2 reference an
-// interned set; host IDs are sorted and unique.
 message Candidates {
   uint32 id = 1;
   repeated uint32 host = 2 [packed = true];
 }
 
-// Domain levels 1..5 mean host, NUMA, rack, hall, spine. Higher levels are opaque
-// attribute domains. A missing value is zero and fails a constraint on that level.
-// A host's level-2 value is its resource ID (the unassigned/NONE domain).
-// Choosing a NUMA child overrides it with that child's resource ID. A host
-// without NUMA inventory therefore has one level-2 domain.
 message Domain {
   uint32 level = 1;
   uint32 value = 2;
@@ -159,8 +146,6 @@ message Link {
 enum Relation {
   COLOCATE = 0;
   READY_GROUP = 1;
-  // Target is a storage group. Require a ready placed member at the candidate
-  // host, using snapshot members only. No on-demand owners are synthesized.
   SHARED_GROUP = 2;
 }
 
@@ -174,7 +159,7 @@ message DiskPlan {
   uint32 max_devices = 7;
   uint32 min_stripes = 8;
   uint32 max_stripes = 9;
-  // Bit 0: whole device, bit 1: optional volume.
+  // Bit 0 reserves the whole device. Bit 1 marks an optional volume.
   uint32 flags = 10;
   uint32 metadata_extents = 11;
   optional double per_device_iops_cap = 12;
@@ -191,9 +176,6 @@ enum Layout {
   RAID4 = 7;
 }
 
-// Every observed physical copy is retained. A resource may have several
-// placements during migration/duplicate execution. Alloc is observed occupancy,
-// independent of the resource's requested alloc profile.
 message Placement {
   uint32 resource = 1;
   uint32 host = 2;

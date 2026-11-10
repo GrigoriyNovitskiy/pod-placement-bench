@@ -1,4 +1,4 @@
-package one.cloud.schedulers;
+package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
 import java.util.Comparator;
@@ -6,9 +6,14 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.PriorityQueue;
 
+import one.cloud.benchmark.engine.SchedulingContext;
+import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
+
 final class FitCountCache {
-    private final PlacementContext context;
-    private final PlacementPlanner planner;
+    private final SchedulingContext context;
+    private final GreedyPlanner planner;
     private final int cap;
     private final int maxCachedShapes;
     private final Sample[] samples;
@@ -20,7 +25,7 @@ final class FitCountCache {
     private int head, pendingCount;
     private long generation;
 
-    FitCountCache(PlacementContext context, PlacementPlanner planner, PlacementRequest[] catalogue,
+    FitCountCache(SchedulingContext context, GreedyPlanner planner, Request[] catalogue,
             int cap, int maxCachedShapes) {
         if (cap <= 0 || maxCachedShapes <= 0) {
             throw new IllegalArgumentException("Fit-count cap and cached shape limit must be positive");
@@ -160,7 +165,7 @@ final class FitCountCache {
         return comparison == 0 ? Integer.compare(first.ordinal, second.ordinal) : comparison;
     }
 
-    private static Key key(PlacementModel model, PlacementRequest request) {
+    private static Key key(ClusterSpec model, Request request) {
         final var rules = model.rules;
         final var allocations = model.allocations;
         final var members = new HashMap<Integer, Integer>();
@@ -233,13 +238,13 @@ final class FitCountCache {
     }
 
     static final class Sample {
-        final PlacementRequest request;
+        final Request request;
         final int ordinal;
         int frequency = 1;
         long total, generation = -1;
         double bound;
 
-        Sample(PlacementRequest request, int ordinal) {
+        Sample(Request request, int ordinal) {
             this.request = request;
             this.ordinal = ordinal;
         }

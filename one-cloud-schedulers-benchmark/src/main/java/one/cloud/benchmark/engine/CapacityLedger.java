@@ -1,23 +1,26 @@
-package one.cloud.schedulers;
+package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
 
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID1_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID4_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID5_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID6_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.RAID10_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.Layout.STRIPED_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.HW_CORES_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.HW_LAN_QUEUES_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.MEM_MIB_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.NONPROD_VCORES_VALUE;
-import static one.cloud.schedulers.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
+import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
 
-final class PlacementCapacity {
-    private final PlacementModel model;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID1_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID4_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID5_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID6_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID10_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.STRIPED_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.HW_CORES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.HW_LAN_QUEUES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.MEM_MIB_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.NONPROD_VCORES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
+
+final class CapacityLedger {
+    private final ClusterSpec model;
     private final int stride;
     private final int[] slot;
     private final boolean[] hasNuma;
@@ -27,11 +30,11 @@ final class PlacementCapacity {
     private double[] used;
     private boolean[] pristine;
 
-    PlacementCapacity(PlacementModel model) {
+    CapacityLedger(ClusterSpec model) {
         this(model, true);
     }
 
-    PlacementCapacity(PlacementModel model, boolean complete) {
+    CapacityLedger(ClusterSpec model, boolean complete) {
         this.model = model;
         stride = model.dimensionCount + 2;
         slot = new int[model.alloc.length];
@@ -80,7 +83,7 @@ final class PlacementCapacity {
         }
     }
 
-    void load(PlacementContext context, int[] resources) {
+    void load(SchedulingContext context, int[] resources) {
         for (final int resource : inventory) {
             slot[resource] = -1;
         }
@@ -131,15 +134,15 @@ final class PlacementCapacity {
         return Math.max(0, capacity[offset] - used[offset]);
     }
 
-    Debit prepare(Placement... plans) {
+    Debit prepare(Assignment... plans) {
         return prepare(plans, new Debit());
     }
 
-    Debit prepare(Placement[] plans, Debit target) {
+    Debit prepare(Assignment[] plans, Debit target) {
         return prepare(plans, plans.length, target);
     }
 
-    Debit prepare(Placement[] plans, int count, Debit target) {
+    Debit prepare(Assignment[] plans, int count, Debit target) {
         target.reset();
         for (int index = 0; index < count; index++) {
             final var plan = plans[index];
