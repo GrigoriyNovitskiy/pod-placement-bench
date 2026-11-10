@@ -21,12 +21,96 @@ import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class CapacityLedgerTest {
+    @Test
+    void gpuPhysicalCountingUsesDevicesAndTentativeAssignmentsWithoutMutatingState() throws Exception {
+        final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .5), alloc(3, new int[]{11}, .6),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2)));
+        final int gpu = state.model().gpus.first(1, 11);
+        final var planner = new GreedyPlanner(state);
+        final var sample = new Request(3);
+        assertEquals(2, planner.fitCount(sample, 1, 100));
+        assertEquals(1, planner.fitCount(sample, 1, 1));
+        final var tentative = new Assignment[]{new Assignment(2, 1, 0, new int[]{0}, new int[0], new int[]{gpu})};
+        assertEquals(1, planner.fitCount(sample, 1, tentative, 100));
+        assertEquals(2, planner.fitCount(sample, 1, 100));
+        assertEquals(20, state.gpuAvailable(gpu));
+        assertEquals(20, state.gpuAvailable(gpu + 1));
+        assertEquals(2, state.available(1, 11));
+        assertEquals(0, state.revision());
+    }
+
+    @Test
+    void gpuBestFitUsesTheSmallestAdequateCardAndPreservesWholeDevices() throws Exception {
+        final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .4), alloc(3, new int[]{11}, .5),
+                alloc(4, new int[]{11}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2), resource(4, 4, 2)));
+        final int gpu = state.model().gpus.first(1, 11);
+        final var planner = new GreedyPlanner(state);
+        final var algorithm = new SchedulingAlgorithm(state, 1) {
+            @Override
+            public void schedule(Request request) {
+                final var plans = planner.plan(request, 1, 0);
+                assertNotNull(plans);
+                context.place(request, plans);
+            }
+        };
+        state.schedule(algorithm, new Request(2), new Request(3), new Request(4));
+        assertArrayEquals(new int[]{gpu}, state.placement(2).gpus());
+        assertArrayEquals(new int[]{gpu}, state.placement(3).gpus());
+        assertArrayEquals(new int[]{gpu + 1}, state.placement(4).gpus());
+        assertEquals(2, state.gpuAvailable(gpu));
+        assertEquals(0, state.gpuAvailable(gpu + 1));
+    }
+
+    @Test
+    void gpuScratchAllocationRollsBackWhenNumaDiskGeometryMustBeRetried() throws Exception {
+        final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{1, 2, 11}, 2, 4, 1), alloc(2, new int[]{1, 2}, 1, 2),
+                alloc(3, new int[]{18}, 10), alloc(4, new int[]{1, 11}, 1, .6),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.DISK).setParent(1)
+                        .setMedia(Media.MEMDISK).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.POD)
+                        .addDisks(disk(Media.MEMDISK).setExtents(1))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 3), resource(4, 3, 4), resource(5, 4, 5)));
+        final int gpu = state.model().gpus.first(1, 11);
+        final var planner = new GreedyPlanner(state);
+        final var request = new Request(5);
+        assertEquals(1, planner.fitCount(request, 1, 10));
+        final var algorithm = new SchedulingAlgorithm(state, 1) {
+            @Override
+            public void schedule(Request request) {
+                assertNull(planner.plan(request, 1, 2));
+                final var plans = planner.plan(request, 1, 3);
+                assertNotNull(plans);
+                assertArrayEquals(new int[]{gpu}, plans[0].gpus());
+                context.place(request, plans);
+            }
+        };
+        state.schedule(algorithm, request);
+        assertEquals(8, state.gpuAvailable(gpu));
+        assertEquals(9, state.available(4, 18));
+        state.remove(request);
+        assertEquals(20, state.gpuAvailable(gpu));
+        assertEquals(10, state.available(4, 18));
+        assertEquals(1, planner.fitCount(request, 1, 10));
+    }
+
     @Test
     void numaFragmentationAndDedicatedCpuUseBothLedgers() throws Exception {
         final var model = model(

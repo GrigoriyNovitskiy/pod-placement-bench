@@ -24,10 +24,14 @@ public final class TestModel {
     }
 
     public static ClusterSpec model(Record... records) throws IOException {
+        return model(ClusterSpec.GpuMode.AGGREGATE, records);
+    }
+
+    public static ClusterSpec model(ClusterSpec.GpuMode gpuMode, Record... records) throws IOException {
         final var path = Files.createTempFile("placement-model-", ".pb");
         try {
             writeModel(path, records);
-            return ClusterSpec.from(Dataset.load(path));
+            return ClusterSpec.from(Dataset.load(path), gpuMode);
         } finally {
             Files.deleteIfExists(path);
         }

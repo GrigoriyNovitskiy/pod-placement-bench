@@ -29,3 +29,9 @@ Replay a dataset with the fit-count baseline:
 
 Omit the limits to replay the complete normalized workload with the full catalogue.
 See the module README for JSON output, lifecycle normalization and measurement scope.
+
+The default `devices20` model uses synthetic individual GPUs with 20 shares per
+device. Select `--gpu-model aggregate` for legacy pooled GPU accounting. The device
+model preserves fractional-request boundaries for every algorithm without changing
+the protobuf files; its assumptions and input validation are documented in the
+module README.

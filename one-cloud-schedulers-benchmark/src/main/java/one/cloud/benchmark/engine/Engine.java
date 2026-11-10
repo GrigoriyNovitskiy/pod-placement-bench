@@ -186,6 +186,12 @@ public final class Engine implements SchedulingContext {
     }
 
     @Override
+    public int gpuAvailable(int device) {
+        checkThread();
+        return capacity.gpuAvailable(device);
+    }
+
+    @Override
     public double available(int resource, int dimension, int media) {
         checkThread();
         return capacity.available(resource, dimension, media);

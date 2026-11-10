@@ -15,6 +15,11 @@ public interface SchedulingContext {
 
     double available(int inventoryResource, int dimension);
 
+    /** Remaining shares of one synthetic GPU, from zero through twenty. */
+    default int gpuAvailable(int device) {
+        throw new UnsupportedOperationException("GPU device capacity is unavailable");
+    }
+
     default double available(int inventoryResource, int dimension, int media) {
         if (media != 0 && dimension == DEVICE_SPINDLES_VALUE
                 && media != model().rules.media[model().constraints[inventoryResource]]) {

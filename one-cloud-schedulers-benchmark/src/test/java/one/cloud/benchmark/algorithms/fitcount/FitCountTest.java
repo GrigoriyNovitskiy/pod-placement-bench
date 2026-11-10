@@ -28,6 +28,68 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FitCountTest {
     @Test
+    void deviceModeMergesFloatExportAndCanonicalGpuShapes() throws Exception {
+        for (final var mode : ClusterSpec.GpuMode.values()) {
+            final var state = new Engine(model(mode,
+                    alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .3), alloc(3, new int[]{11}, (double) .3f),
+                    rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                    rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                    resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2)));
+            final var cache = new FitCountCache(state, new GreedyPlanner(state),
+                    new Request[]{new Request(2), new Request(3)}, 10, 1);
+            cache.beginOrder();
+            final var sample = cache.next();
+            if (mode == ClusterSpec.GpuMode.DEVICES_20) {
+                assertEquals(2, sample.frequency);
+                assertNull(cache.next());
+            } else {
+                assertEquals(1, sample.frequency);
+                assertEquals(1, cache.next().frequency);
+                assertNull(cache.next());
+            }
+        }
+    }
+
+    @Test
+    void gpuCacheTracksPhysicalCopiesAcrossPlacementAndRemoval() throws Exception {
+        final var model = model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .6), alloc(3, new int[]{11}, .5),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2));
+        final var state = new Engine(model);
+        final var sampleRequest = new Request(2);
+        final var half = new Request(3);
+        final var planner = new GreedyPlanner(state);
+        final var cache = new FitCountCache(state, planner, new Request[]{sampleRequest, sampleRequest}, 10, 1);
+        cache.beginOrder();
+        final var sample = cache.next();
+        assertEquals(2, sample.frequency);
+        assertEquals(2, cache.count(sample, 1));
+        assertEquals(2, cache.total(sample));
+        try (final var scheduler = new FitCount(state, 42, new Request[]{sampleRequest})) {
+            state.schedule(scheduler, half);
+            cache.changed(1);
+            assertEquals(1, cache.count(sample, 1));
+            assertEquals(1, cache.total(sample));
+            assertEquals(1, planner.fitCount(sampleRequest, 1, 10));
+            state.schedule(scheduler, sampleRequest);
+            cache.changed(1);
+            assertEquals(0, cache.count(sample, 1));
+            assertEquals(0, cache.total(sample));
+            assertTrue(state.placement(2).gpus()[0] != state.placement(3).gpus()[0]);
+            state.remove(half);
+            cache.changed(1);
+            assertEquals(1, cache.count(sample, 1));
+            assertEquals(planner.fitCount(sampleRequest, 1, 10), cache.count(sample, 1));
+            state.remove(sampleRequest);
+            cache.changed(1);
+            assertEquals(2, cache.count(sample, 1));
+            assertEquals(2, cache.total(sample));
+        }
+    }
+
+    @Test
     void equivalentInternalNumaLinksShareOnePhysicalShape() throws Exception {
         final var model = model(
                 alloc(1, new int[]{1, 2}, 2, 3), alloc(2, new int[]{1, 2}, 1, 2),

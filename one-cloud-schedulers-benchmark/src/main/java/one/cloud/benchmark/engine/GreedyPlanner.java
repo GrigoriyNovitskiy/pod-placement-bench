@@ -9,6 +9,7 @@ import one.cloud.benchmark.model.Request;
 
 public final class GreedyPlanner {
     private static final Assignment[] EMPTY = new Assignment[0];
+    private static final int[] NO_GPUS = new int[0];
     private final SchedulingContext context;
     private final ClusterSpec model;
     private final CapacityLedger capacity;
@@ -103,7 +104,8 @@ public final class GreedyPlanner {
         for (int index = 0; index < memberCount; index++) {
             final var member = members[index];
             plans[index] = new Assignment(member.resource, host, member.numa,
-                    Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount));
+                    Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount),
+                    member.gpus.length == 0 ? NO_GPUS : member.gpus.clone());
         }
         return context.canPlace(request, plans) ? plans : null;
     }
@@ -135,7 +137,9 @@ public final class GreedyPlanner {
             }
             capacity.allocate(debit);
         }
-        if (memberCount == 1 && members[0].diskCount == 0) {
+        if (memberCount == 1 && members[0].diskCount == 0
+                && (model.gpus == null || model.gpus.demand(members[0].resource, 11) == 0
+                        && model.gpus.demand(members[0].resource, 17) == 0)) {
             ambiguous = false;
             final int fit = scalarCount(members[0].resource, cap);
             if (!ambiguous || fit == 0) {
@@ -167,6 +171,11 @@ public final class GreedyPlanner {
         for (int index = 0; index < memberCount; index++) {
             final var member = members[index];
             member.resource = request.resource(index);
+            final int gpuCount = capacity.gpuCount(member.resource, 11) + capacity.gpuCount(member.resource, 17);
+            if (gpuCount != member.gpus.length) {
+                member.gpus = model.gpus != null && gpuCount <= model.gpus.end(host, 17) - model.gpus.first(host, 11)
+                        ? new int[gpuCount] : NO_GPUS;
+            }
             final int profile = model.constraints[member.resource];
             member.diskCount = model.rules.diskOffset[profile + 1] - model.rules.diskOffset[profile];
             if (member.offsets.length < member.diskCount + 1) {
@@ -241,7 +250,11 @@ public final class GreedyPlanner {
         member.numa = numa;
         member.deviceCount = 0;
         Arrays.fill(member.offsets, 0, member.diskCount + 1, 0);
-        var debit = capacity.preparePartial(member.resource, host, numa, member.offsets, member.devices, 0, 0, member.debit);
+        if (!capacity.selectGpus(member.resource, host, member.gpus)) {
+            return false;
+        }
+        var debit = capacity.preparePartial(member.resource, host, numa, member.offsets, member.devices, 0, 0,
+                member.gpus, member.debit);
         if (debit == null) {
             return false;
         }
@@ -290,7 +303,7 @@ public final class GreedyPlanner {
         Arrays.fill(member.offsets, disk + 1, member.diskCount + 1, member.deviceCount);
         capacity.release(member.debit);
         final var next = capacity.preparePartial(member.resource, host, member.numa, member.offsets, member.devices,
-                member.deviceCount, disk + 1, member.trial);
+                member.deviceCount, disk + 1, member.gpus, member.trial);
         if (next != null) {
             member.trial = member.debit;
             member.debit = next;
@@ -434,6 +447,7 @@ public final class GreedyPlanner {
     private static final class Member {
         private int resource, numa, diskCount, deviceCount;
         private int[] offsets = new int[1], devices = new int[0];
+        private int[] gpus = NO_GPUS;
         private boolean allocated;
         private CapacityLedger.Debit debit = new CapacityLedger.Debit(), trial = new CapacityLedger.Debit();
     }

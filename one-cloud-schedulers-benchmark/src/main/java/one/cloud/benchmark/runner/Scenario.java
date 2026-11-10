@@ -6,6 +6,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.Objects;
 import java.util.PriorityQueue;
 import java.util.TreeMap;
 
@@ -32,7 +33,7 @@ public final class Scenario {
     public final String sourceOpsDigest;
 
     private Scenario(Compiler compiler) {
-        model = ClusterSpec.from(compiler.data);
+        model = ClusterSpec.from(compiler.data, compiler.gpuMode);
         requests = compiler.requests;
         events = compiler.events.values();
         checkpoints = compiler.checkpoints.values();
@@ -42,6 +43,9 @@ public final class Scenario {
         sourceOpsDigest = sourceDigest(compiler.data);
         final var hash = hash();
         hash.update(NORMALIZATION_VERSION.getBytes(StandardCharsets.UTF_8));
+        if (compiler.gpuMode != ClusterSpec.GpuMode.AGGREGATE) {
+            hash.update(compiler.gpuMode.name().getBytes(StandardCharsets.UTF_8));
+        }
         hash.update(HexFormat.of().parseHex(sourceOpsDigest));
         final var buffer = ByteBuffer.allocate(Long.BYTES);
         update(hash, buffer, model.id);
@@ -64,7 +68,11 @@ public final class Scenario {
     }
 
     public static Scenario from(Dataset dataset) {
-        return new Compiler(dataset).compile();
+        return from(dataset, ClusterSpec.GpuMode.DEVICES_20);
+    }
+
+    public static Scenario from(Dataset dataset, ClusterSpec.GpuMode gpuMode) {
+        return new Compiler(dataset, Objects.requireNonNull(gpuMode)).compile();
     }
 
     private static String sourceDigest(Dataset dataset) {
@@ -97,6 +105,7 @@ public final class Scenario {
 
     private static final class Compiler {
         private final Dataset data;
+        private final ClusterSpec.GpuMode gpuMode;
         private final Dataset.Operations operations;
         private final int resourceCount;
         private final Ints phases = new Ints();
@@ -110,11 +119,12 @@ public final class Scenario {
         private int partialChurn;
         private int expandedRestarts;
 
-        private Compiler(Dataset data) {
+        private Compiler(Dataset data, ClusterSpec.GpuMode gpuMode) {
             if (data == null || !data.operations.synthetic || data.operations.replayFromSnapshot) {
                 throw new IllegalArgumentException("A synthetic empty-start operation stream is required");
             }
             this.data = data;
+            this.gpuMode = gpuMode;
             operations = data.operations;
             resourceCount = data.alloc.length;
         }

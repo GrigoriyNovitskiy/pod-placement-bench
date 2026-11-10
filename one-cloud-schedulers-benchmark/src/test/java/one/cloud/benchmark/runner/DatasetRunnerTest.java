@@ -14,6 +14,7 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
@@ -104,6 +105,34 @@ class DatasetRunnerTest {
         assertEquals(1, first.removedUnits());
         assertEquals(1, second.removedUnits());
         assertEquals(-1, first.plannerCalls());
+    }
+
+    @Test
+    void historyChecksumIncludesGpuChoiceEvenWhenBothRunsFinishEmpty() throws Exception {
+        final var scenario = Scenario.from(trace(new Record[]{
+                alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .5),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2)}, 2, -2), ClusterSpec.GpuMode.DEVICES_20);
+        final DatasetRunner.Factory firstGpu = (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+            @Override
+            public void schedule(Request request) {
+                context.place(request, new Assignment(request.resource(0), 1, 0, new int[]{0}, new int[0], new int[]{1}));
+            }
+        };
+        final DatasetRunner.Factory secondGpu = (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+            @Override
+            public void schedule(Request request) {
+                context.place(request, new Assignment(request.resource(0), 1, 0, new int[]{0}, new int[0], new int[]{2}));
+            }
+        };
+        final var first = DatasetRunner.run(scenario, DatasetRunner.Options.defaults(), firstGpu);
+        final var second = DatasetRunner.run(scenario, DatasetRunner.Options.defaults(), secondGpu);
+        assertNotEquals(first.checksum(), second.checksum());
+        assertEquals(first.checksum(), DatasetRunner.run(scenario, DatasetRunner.Options.defaults(), firstGpu).checksum());
+        assertEquals(1, first.placedUnits());
+        assertEquals(1, first.removedUnits());
+        assertEquals(1, second.removedUnits());
     }
 
     @Test

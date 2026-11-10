@@ -85,6 +85,7 @@ class SchedulingContractTest {
     void modelSharesStaticTablesWithoutRetainingReplayState() throws Exception {
         final var dataset = dataset();
         final var model = ClusterSpec.from(dataset);
+        assertEquals(ClusterSpec.GpuMode.DEVICES_20, model.gpuMode);
         assertEquals(dataset.id, model.id);
         assertEquals(dataset.hostCount, model.hostCount);
         assertEquals(dataset.dimensionCount, model.dimensionCount);

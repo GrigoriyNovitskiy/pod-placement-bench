@@ -9,6 +9,7 @@ import java.util.PriorityQueue;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.GpuTopology;
 import one.cloud.benchmark.model.Request;
 
 final class FitCountCache {
@@ -208,8 +209,11 @@ final class FitCountCache {
             values[offset++] = root(components, index);
             values[offset++] = allocations.offset[alloc + 1] - allocations.offset[alloc];
             for (int value = allocations.offset[alloc]; value < allocations.offset[alloc + 1]; value++) {
-                values[offset++] = allocations.type[value];
-                values[offset++] = Double.doubleToLongBits(allocations.amount[value]);
+                final int dimension = allocations.type[value];
+                final double amount = model.gpus != null && (dimension == 11 || dimension == 17)
+                        ? model.gpus.demand(resource, dimension) / (double) GpuTopology.SHARES : allocations.amount[value];
+                values[offset++] = dimension;
+                values[offset++] = Double.doubleToLongBits(amount);
             }
             values[offset++] = rules.diskOffset[profile + 1] - rules.diskOffset[profile];
             for (int disk = rules.diskOffset[profile]; disk < rules.diskOffset[profile + 1]; disk++) {

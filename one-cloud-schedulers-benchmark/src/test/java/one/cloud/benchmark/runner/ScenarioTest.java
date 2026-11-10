@@ -10,6 +10,7 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
+import one.cloud.benchmark.model.ClusterSpec;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
@@ -21,6 +22,23 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ScenarioTest {
+    @Test
+    void gpuModelChangesScenarioIdentityWithoutChangingItsEvents() throws Exception {
+        final var source = trace(records(pod(1)), 2, -2);
+        final var defaults = Scenario.from(source);
+        final var aggregate = Scenario.from(source, ClusterSpec.GpuMode.AGGREGATE);
+        final var devices = Scenario.from(source, ClusterSpec.GpuMode.DEVICES_20);
+        assertEquals(ClusterSpec.GpuMode.DEVICES_20, defaults.model.gpuMode);
+        assertEquals(defaults.digest, devices.digest);
+        assertNotEquals(aggregate.digest, devices.digest);
+        assertEquals(aggregate.sourceOpsDigest, devices.sourceOpsDigest);
+        assertArrayEquals(aggregate.events, devices.events);
+        assertArrayEquals(aggregate.checkpoints, devices.checkpoints);
+        assertEquals(ClusterSpec.GpuMode.DEVICES_20, devices.model.gpuMode);
+        assertEquals(devices.digest, Scenario.from(source, ClusterSpec.GpuMode.DEVICES_20).digest);
+        assertThrows(NullPointerException.class, () -> Scenario.from(source, null));
+    }
+
     @Test
     void expandsPartialAtomicChurnThroughReadyAndSharedConsumers() throws Exception {
         for (final var relation : new Relation[]{Relation.READY_GROUP, Relation.SHARED_GROUP}) {

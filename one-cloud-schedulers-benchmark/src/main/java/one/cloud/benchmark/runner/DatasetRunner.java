@@ -291,6 +291,12 @@ public final class DatasetRunner {
         for (final int device : plan.devices()) {
             result = mix(result, device);
         }
+        if (plan.gpus().length != 0) {
+            result = mix(result, plan.gpus().length);
+            for (final int gpu : plan.gpus()) {
+                result = mix(result, gpu);
+            }
+        }
         return result;
     }
 

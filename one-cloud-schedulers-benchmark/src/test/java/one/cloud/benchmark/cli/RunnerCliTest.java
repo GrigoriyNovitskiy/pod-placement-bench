@@ -37,6 +37,7 @@ class RunnerCliTest {
         assertTrue(json.startsWith("{\n"));
         assertTrue(json.endsWith("}" + System.lineSeparator()));
         assertTrue(json.contains("\"algorithm\":\"fitcount\""));
+        assertTrue(json.contains("\"gpu_model\":\"devices20\""));
         assertTrue(json.contains("\"dataset_id\":\"42\""));
         assertTrue(json.contains("\"snapshot_sha256\":\""));
         assertTrue(json.contains("\"operations_sha256\":\""));
@@ -74,6 +75,57 @@ class RunnerCliTest {
     }
 
     @Test
+    void deviceModeRejectsGpuFragmentsThroughBothBuiltInAlgorithms() throws Exception {
+        final var rows = new Record[]{
+                alloc(1, new int[]{11}, 3), alloc(2, new int[]{11}, .8), alloc(3, new int[]{11}, .6),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)};
+        writeTrace(temporary, rows, 2, 3, 4, 5, -5, -4, -3, -2);
+        for (final var algorithm : new String[]{"fitcount", "geometric-best-fit"}) {
+            final var output = new ByteArrayOutputStream();
+            final var errors = new ByteArrayOutputStream();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm));
+            final var defaults = output.toString(StandardCharsets.UTF_8);
+            assertTrue(defaults.contains("\"gpu_model\":\"devices20\""));
+            assertTrue(defaults.contains("\"admitted_units\":3"));
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+            output.reset();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
+                    "--gpu-model", "devices20"));
+            final var devices = output.toString(StandardCharsets.UTF_8);
+            assertTrue(devices.contains("\"gpu_model\":\"devices20\""));
+            assertTrue(devices.contains("\"admitted_units\":3"));
+            assertTrue(devices.contains("\"declined_units\":1"));
+            assertTrue(devices.contains("\"committed_units\":3"));
+            assertTrue(devices.contains("\"complete\":true"));
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+            assertEquals(defaults.lines().filter(line -> line.contains("\"scenario_digest\":")
+                    || line.contains("\"result_checksum\":")).toList(),
+                    devices.lines().filter(line -> line.contains("\"scenario_digest\":")
+                            || line.contains("\"result_checksum\":")).toList());
+            output.reset();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
+                    "--gpu-model", "aggregate"));
+            assertTrue(output.toString(StandardCharsets.UTF_8).contains("\"admitted_units\":4"));
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void unsupportedDeviceDemandsFailWithoutAResult() throws Exception {
+        writeTrace(temporary, new Record[]{alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, 1.5),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2)}, 2, -2);
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(1, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "fitcount"));
+        assertEquals("", output.toString(StandardCharsets.UTF_8));
+        assertTrue(errors.toString(StandardCharsets.UTF_8).startsWith("Run failed:"));
+    }
+
+    @Test
     void prefixIsExplicitAndDoesNotTruncateTheCatalogue() throws Exception {
         writeTrace(temporary, records(), 2, 3, -3, -2);
         final var output = new ByteArrayOutputStream();
@@ -103,6 +155,7 @@ class RunnerCliTest {
                 {"--dataset", "absent", "--algorithm", "fitcount", "--cache-rows", "-1"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--max-operations", "0"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--catalogue-limit", "-1"},
+                {"--dataset", "absent", "--algorithm", "fitcount", "--gpu-model", "unknown"},
                 {"--dataset", "absent", "--dataset", "another", "--algorithm", "fitcount"},
                 {"--dataset", "absent", "--algorithm"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--unknown", "1"}
