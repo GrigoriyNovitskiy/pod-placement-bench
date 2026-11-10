@@ -14,6 +14,7 @@ import java.util.HexFormat;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
 import one.cloud.benchmark.dataset.Dataset;
+import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.runner.DatasetRunner;
 import one.cloud.benchmark.runner.Scenario;
 
@@ -26,6 +27,7 @@ public final class RunnerCli {
               --cache-rows N        Resident fitcount rows (default: 256)
               --max-operations N    Positive normalized-event prefix; omitted runs the full scenario
               --catalogue-limit N   Positive evenly sampled initial-unit limit; omitted uses all units
+              --gpu-model MODEL     aggregate (default) or devices20 (synthetic GPU devices)
               --help                Show this help
             """;
 
@@ -64,7 +66,7 @@ public final class RunnerCli {
             {
                 final var dataset = Dataset.load(snapshot, operations);
                 loaded = System.nanoTime();
-                scenario = Scenario.from(dataset);
+                scenario = Scenario.from(dataset, options.gpuMode);
             }
             final long prepared = System.nanoTime();
             final DatasetRunner.Factory factory = switch (options.algorithm) {
@@ -93,6 +95,7 @@ public final class RunnerCli {
         int cacheRows = 256;
         int maxOperations = 0;
         int catalogueLimit = 0;
+        var gpuMode = ClusterSpec.GpuMode.AGGREGATE;
         final var seen = new HashSet<String>();
         for (int index = 0; index < arguments.length; index += 2) {
             final var flag = arguments[index];
@@ -117,6 +120,11 @@ public final class RunnerCli {
                 case "--cache-rows" -> cacheRows = positive(flag, value);
                 case "--max-operations" -> maxOperations = positive(flag, value);
                 case "--catalogue-limit" -> catalogueLimit = positive(flag, value);
+                case "--gpu-model" -> gpuMode = switch (value) {
+                    case "aggregate" -> ClusterSpec.GpuMode.AGGREGATE;
+                    case "devices20" -> ClusterSpec.GpuMode.DEVICES_20;
+                    default -> throw new IllegalArgumentException("--gpu-model must be aggregate or devices20");
+                };
                 default -> throw new IllegalArgumentException("Unknown option: " + flag);
             }
         }
@@ -126,7 +134,7 @@ public final class RunnerCli {
         if (!algorithm.equals("fitcount") && !algorithm.equals("geometric-best-fit")) {
             throw new IllegalArgumentException("Unknown algorithm: " + algorithm);
         }
-        return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit);
+        return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit, gpuMode);
     }
 
     private static int positive(String flag, String value) {
@@ -155,6 +163,8 @@ public final class RunnerCli {
         out.append("{\n  \"format_version\":1,\n  \"measurement\":\"single-process diagnostic replay\",")
                 .append("\n  \"algorithm\":\"").append(options.algorithm).append("\",")
                 .append("\n  \"algorithm_class\":\"").append(result.algorithmClass()).append("\",")
+                .append("\n  \"gpu_model\":\"").append(options.gpuMode == ClusterSpec.GpuMode.AGGREGATE
+                        ? "aggregate" : "devices20").append("\",")
                 .append("\n  \"dataset_id\":\"").append(Long.toUnsignedString(scenario.model.id)).append("\",")
                 .append("\n  \"snapshot_sha256\":\"").append(snapshotHash).append("\",")
                 .append("\n  \"operations_sha256\":\"").append(operationsHash).append("\",")
@@ -260,6 +270,6 @@ public final class RunnerCli {
     }
 
     private record Arguments(Path dataset, String algorithm, long seed, int fitCap,
-            int cacheRows, int maxOperations, int catalogueLimit) {
+            int cacheRows, int maxOperations, int catalogueLimit, ClusterSpec.GpuMode gpuMode) {
     }
 }

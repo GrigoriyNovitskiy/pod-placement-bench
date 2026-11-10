@@ -53,6 +53,35 @@ all initial atomic units; a positive `--catalogue-limit` selects a deterministic
 reported sample. `--max-operations` truncates normalized atomic events, without
 changing the catalogue or the static cluster. `--help` lists the options.
 
+`--gpu-model aggregate` is the default and accounts for each GPU resource type as
+a pooled host budget. Use `--gpu-model devices20` for a synthetic device model:
+
+```sh
+./gradlew --quiet :one-cloud-schedulers-benchmark:run \
+  --args='--dataset /path/to/sc --algorithm fitcount --gpu-model devices20'
+```
+
+In `devices20`, each host's integer NVIDIA/Intel GPU capacity becomes that many
+separate devices of the corresponding type, with 20 shares per device. A positive
+request below one GPU must be a multiple of 0.05 and fit on one device. An integer
+request of one or more GPUs requires that many completely free devices. The
+model rejects fractional host capacities, requests such as 1.5 GPUs, and demands
+outside the 0.05 grid. Grid values represented within four double-precision ULPs
+of the canonical amount, or as the exact float32 representation of a grid value,
+are accepted. Device-mode GPU accounting uses the corresponding integer share
+count and canonical GPU amount; arbitrary nearby demands are not rounded to the
+grid. Unsupported data fails scenario preparation rather than turning into a
+placement decline.
+
+This is a synthetic geometry over the existing aggregates. It does not recover
+physical GPU models, host sharing modes, GPU memory requirements or transcoding
+constraints. Empty-start replay creates device occupancy through algorithm choices;
+observed snapshot GPU placements are not inferred. The same model governs common
+validation, greedy plans, physical fit-count and quality probes for every algorithm.
+For example, free shares equivalent to `[0.2, 0.2, 0.2]` cannot satisfy a 0.6 request.
+The JSON report records `gpu_model`, device-mode scenario digests differ from
+aggregate-mode digests, and the history checksum includes selected GPU IDs.
+
 For a standalone command, build the standard application distribution. Its script
 uses `JAVA_HOME` or `PATH`, so select a Java 25 runtime before launching it; Gradle
 `run` selects the configured toolchain automatically.
@@ -168,6 +197,13 @@ allocatable storage.
 An `Assignment` specifies a resource's host, NUMA node and device IDs. Its
 `numa` is zero for an unbound placement. Keep the borrowed arrays stable
 during a context call. A scoring loop can reuse them after the call returns.
+Its `devices` array describes disks; its separate `gpus` array contains synthetic
+GPU IDs. The five-argument constructor supplies an empty GPU array for existing
+aggregate-mode callers. Device-mode requests with positive GPU demand require
+explicit GPU IDs; the engine does not choose missing devices on behalf of an
+algorithm. GPU shares follow from the resource's demand and each selected device's
+type. GPU buffers have the same borrowing, snapshot and read-only contracts as
+disk buffers.
 The context must validate one assignment per member against the combined tentative
 state, including aggregate budgets and intra-unit constraints. `canPlace` is pure:
 malformed inputs throw, well-formed infeasible plans return false. It must retain
@@ -222,6 +258,21 @@ shapes. This differs from an eligible-host count, which counts each host once wh
 at least one valid NUMA/device assignment exists. The API supports either metric;
 it does not impose a shared scoring function or physical assignment planner.
 The production port and cache boundaries are described in [FITCOUNT.md](FITCOUNT.md).
+
+For device accounting, use `ClusterSpec.from(data, ClusterSpec.GpuMode.DEVICES_20)`
+or `Scenario.from(data, ClusterSpec.GpuMode.DEVICES_20)`. `model.gpus` supplies
+the immutable topology: `first(host, dimension)` and `end(host, dimension)` bound
+the IDs of one host/type, `host(device)` and `type(device)` describe a card, and
+`demand(resource, dimension)` returns requested shares. NVIDIA and Intel dimensions
+are 11 and 17. GPU IDs start at one in their own namespace; they are not dataset
+resource IDs. `model.gpus` is null in aggregate mode.
+
+`GreedyPlanner` selects the tightest fitting GPU for a fractional request,
+breaking ties by device ID, and uses completely free devices for whole-GPU
+requests. Algorithms that choose their own GPU geometry read current integer
+free shares through `context.gpuAvailable(device)` and submit their chosen IDs
+in `Assignment.gpus`. The default context method throws for implementations
+that do not provide device accounting.
 
 Decode data and construct declared units outside operation timing. Report
 algorithm-specific initialization separately. Use a fresh state, algorithm, RNG

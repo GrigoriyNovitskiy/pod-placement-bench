@@ -15,6 +15,7 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.model.Assignment;
+import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
@@ -22,6 +23,7 @@ import static one.cloud.benchmark.testsupport.TestModel.candidates;
 import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
@@ -30,6 +32,171 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EngineTest {
+    @Test
+    void gpuFloatExportDemandConsumesExactSharesAndReleasesWithoutDrift() throws Exception {
+        final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11}, 1), alloc(2, new int[]{11}, (double) .2f),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2),
+                resource(5, 2, 2), resource(6, 2, 2)));
+        final int gpu = state.model().gpus.first(1, 11);
+        final var planner = new GreedyPlanner(state);
+        final var requests = new Request[]{new Request(2), new Request(3), new Request(4), new Request(5), new Request(6)};
+        assertEquals(5, planner.fitCount(requests[0], 1, 10));
+        final var algorithm = greedy(state);
+        for (int index = 0; index < requests.length; index++) {
+            state.schedule(algorithm, requests[index]);
+            assertNotNull(state.placement(requests[index].resource(0)));
+            assertEquals(20 - (index + 1) * 4, state.gpuAvailable(gpu));
+            assertEquals(1 - (index + 1) / 5.0, state.available(1, 11), 1e-12);
+        }
+        assertEquals(0, planner.fitCount(requests[0], 1, 10));
+        for (int index = requests.length - 1; index >= 0; index--) {
+            state.remove(requests[index]);
+            assertEquals(20 - index * 4, state.gpuAvailable(gpu));
+            assertEquals(1 - index / 5.0, state.available(1, 11), 1e-12);
+        }
+        assertEquals(5, planner.fitCount(requests[0], 1, 10));
+    }
+
+    @Test
+    void gpuDevicesRejectFragmentedSharesAndReleaseTheSelectedCard() throws Exception {
+        for (final var mode : ClusterSpec.GpuMode.values()) {
+            final var records = new ArrayList<Record>(List.of(alloc(1, new int[]{11}, 3),
+                    alloc(2, new int[]{11}, .8), alloc(3, new int[]{11}, .6),
+                    rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                    rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)), resource(1, 1, 1),
+                    resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)));
+            final var state = new Engine(model(mode, records.toArray(Record[]::new)));
+            final var first = new Request(2);
+            final var second = new Request(3);
+            final var third = new Request(4);
+            final var fragmented = new Request(5);
+            final var algorithm = greedy(state);
+            state.schedule(algorithm, first, second, third);
+            assertEquals(.6, state.available(1, 11), 1e-12);
+            state.schedule(algorithm, fragmented);
+            if (mode == ClusterSpec.GpuMode.AGGREGATE) {
+                assertNotNull(state.placement(5));
+                continue;
+            }
+            assertNull(state.placement(5));
+            final int firstGpu = state.model().gpus.first(1, 11);
+            for (int device = firstGpu; device < state.model().gpus.end(1, 11); device++) {
+                assertEquals(4, state.gpuAvailable(device));
+            }
+            assertEquals(3, state.revision());
+            state.remove(first);
+            assertEquals(20, state.gpuAvailable(firstGpu));
+            assertEquals(4, state.gpuAvailable(firstGpu + 1));
+            assertEquals(4, state.gpuAvailable(firstGpu + 2));
+            state.schedule(algorithm, fragmented);
+            assertArrayEquals(new int[]{firstGpu}, state.placement(5).gpus());
+            assertEquals(8, state.gpuAvailable(firstGpu));
+        }
+    }
+
+    @Test
+    void gpuAtomicValidationAccumulatesDemandAndRollsBackLateFailures() throws Exception {
+        final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .6),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)
+                        .addLimits(Limit.newBuilder().setDomain(1).setMax(1).setHard(true))),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 3)));
+        final int gpu = state.model().gpus.first(1, 11);
+        final var rejected = new Request(2, 3);
+        final var accepted = new Request(2, 4);
+        final var algorithm = new SchedulingAlgorithm(state, 1) {
+            @Override
+            public void schedule(Request request) {
+                final int second = request.resource(1);
+                assertFalse(context.canPlace(request, gpuPlan(2, 1, gpu), gpuPlan(second, 1, gpu)));
+                final var plans = new Assignment[]{gpuPlan(2, 1, gpu), gpuPlan(second, 1, gpu + 1)};
+                if (request == rejected) {
+                    assertFalse(context.canPlace(request, plans));
+                    assertThrows(IllegalArgumentException.class, () -> context.place(request, plans));
+                    assertEquals(0, context.revision());
+                    assertEquals(0, context.groupCount(1));
+                    assertEquals(2, context.available(1, 11));
+                    assertEquals(20, context.gpuAvailable(gpu));
+                    assertEquals(20, context.gpuAvailable(gpu + 1));
+                } else {
+                    assertTrue(context.canPlace(request, plans));
+                    context.place(request, plans);
+                }
+            }
+        };
+        state.schedule(algorithm, rejected);
+        state.schedule(algorithm, accepted);
+        assertEquals(8, state.gpuAvailable(gpu));
+        assertEquals(8, state.gpuAvailable(gpu + 1));
+        assertEquals(1, state.capacityRevision(1));
+        state.remove(accepted);
+        assertEquals(20, state.gpuAvailable(gpu));
+        assertEquals(20, state.gpuAvailable(gpu + 1));
+        assertEquals(2, state.capacityRevision(1));
+    }
+
+    @Test
+    void gpuAssignmentsValidateIdentityAndSnapshotBuffersAcrossResourceTypes() throws Exception {
+        final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11, 17}, 2, 1), alloc(2, new int[]{11}, 2),
+                alloc(3, new int[]{11, 17}, .6, .25),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 3, 2), resource(5, 0, 2)));
+        final int nvidia = state.model().gpus.first(1, 11);
+        final int intel = state.model().gpus.first(1, 17);
+        final int otherHost = state.model().gpus.first(2, 11);
+        final var whole = new Request(3);
+        final var mixed = new Request(4);
+        final var zero = new Request(5);
+        final int[] selected = {nvidia, intel};
+        final var algorithm = new SchedulingAlgorithm(state, 1) {
+            @Override
+            public void schedule(Request request) {
+                if (request == whole) {
+                    assertThrows(IllegalArgumentException.class, () -> context.canPlace(request, plan(3, 1)));
+                    assertThrows(IllegalArgumentException.class,
+                            () -> context.canPlace(request, gpuPlan(3, 1, nvidia)));
+                    assertThrows(IllegalArgumentException.class,
+                            () -> context.canPlace(request, gpuPlan(3, 1, nvidia, nvidia)));
+                    assertThrows(IllegalArgumentException.class,
+                            () -> context.canPlace(request, gpuPlan(3, 1, nvidia, intel)));
+                    assertThrows(IllegalArgumentException.class,
+                            () -> context.canPlace(request, gpuPlan(3, 1, nvidia, otherHost)));
+                    assertThrows(IllegalArgumentException.class,
+                            () -> context.canPlace(request, gpuPlan(3, 1, nvidia, Integer.MAX_VALUE)));
+                    context.place(request, gpuPlan(3, 1, nvidia, nvidia + 1));
+                } else if (request == zero) {
+                    assertThrows(IllegalArgumentException.class,
+                            () -> context.canPlace(request, gpuPlan(5, 1, intel)));
+                } else if (context.gpuAvailable(nvidia) == 0) {
+                    assertFalse(context.canPlace(request, gpuPlan(4, 1, selected)));
+                } else {
+                    context.place(request, gpuPlan(4, 1, selected));
+                }
+            }
+        };
+        state.schedule(algorithm, whole, mixed, zero);
+        assertEquals(0, state.gpuAvailable(nvidia));
+        assertEquals(0, state.gpuAvailable(nvidia + 1));
+        assertEquals(20, state.gpuAvailable(intel));
+        assertNull(state.placement(4));
+        state.remove(whole);
+        state.schedule(algorithm, mixed);
+        selected[0] = otherHost;
+        assertArrayEquals(new int[]{nvidia, intel}, state.placement(4).gpus());
+        assertEquals(8, state.gpuAvailable(nvidia));
+        assertEquals(15, state.gpuAvailable(intel));
+        state.remove(mixed);
+        assertEquals(20, state.gpuAvailable(nvidia));
+        assertEquals(20, state.gpuAvailable(intel));
+    }
+
     @Test
     void commitsCombinedBudgetsAndRestoresWholeUnits() throws Exception {
         final var state = new Engine(model(
@@ -378,6 +545,23 @@ class EngineTest {
                 rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2)));
+    }
+
+    private static SchedulingAlgorithm greedy(Engine state) {
+        final var planner = new GreedyPlanner(state);
+        return new SchedulingAlgorithm(state, 1) {
+            @Override
+            public void schedule(Request request) {
+                final var assignment = planner.plan(request, 1, 0);
+                if (assignment != null) {
+                    context.place(request, assignment);
+                }
+            }
+        };
+    }
+
+    private static Assignment gpuPlan(int resource, int host, int... devices) {
+        return new Assignment(resource, host, 0, new int[]{0}, new int[0], devices);
     }
 
     private static Assignment plan(int resource, int host) {

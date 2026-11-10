@@ -5,6 +5,7 @@ import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.GpuTopology;
 
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;
@@ -21,6 +22,7 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.NO
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
 
 final class CapacityLedger {
+    private static final int[] NO_GPUS = new int[0];
     private static final int CPU_FAMILY = 0, RAM_FAMILY = 1, NETWORK_OUT_FAMILY = 2, NETWORK_IN_FAMILY = 3;
     private static final int QUEUES_FAMILY = 4, NVIDIA_FAMILY = 5, INTEL_FAMILY = 6, SPACE_FAMILY = 7;
     private static final int MEDIA_COUNT = 6;
@@ -36,6 +38,8 @@ final class CapacityLedger {
     private double[] capacity;
     private double[] used;
     private boolean[] pristine;
+    private int[] gpuRemaining = NO_GPUS;
+    private int gpuFirst, gpuEnd;
 
     CapacityLedger(ClusterSpec model) {
         this(model, true);
@@ -43,6 +47,12 @@ final class CapacityLedger {
 
     CapacityLedger(ClusterSpec model, boolean complete) {
         this.model = model;
+        if (complete && model.gpus != null) {
+            gpuFirst = 1;
+            gpuEnd = model.gpus.size() + 1;
+            gpuRemaining = new int[model.gpus.size()];
+            Arrays.fill(gpuRemaining, GpuTopology.SHARES);
+        }
         stride = model.dimensionCount + 2;
         slot = new int[model.alloc.length];
         hasNuma = new boolean[model.hostCount + 1];
@@ -102,6 +112,17 @@ final class CapacityLedger {
             slot[resource] = index;
             final int profile = model.constraints[resource];
             boolean empty = true;
+            if (model.gpus != null && model.rules.kind[profile] == 1) {
+                gpuFirst = model.gpus.first(resource, 11);
+                gpuEnd = model.gpus.end(resource, 17);
+                final int count = gpuEnd - gpuFirst;
+                if (gpuRemaining.length < count) {
+                    gpuRemaining = new int[count];
+                }
+                for (int device = gpuFirst; device < gpuEnd; device++) {
+                    gpuRemaining[device - gpuFirst] = context.gpuAvailable(device);
+                }
+            }
             for (int dimension = 1; dimension <= model.dimensionCount; dimension++) {
                 final double value = context.available(resource, dimension);
                 capacity[index * stride + dimension] = value;
@@ -216,6 +237,58 @@ final class CapacityLedger {
         return available(resource, dimension, 0);
     }
 
+    int gpuAvailable(int device) {
+        if (model.gpus == null || device < gpuFirst || device >= gpuEnd) {
+            throw new IllegalArgumentException("GPU is not loaded inventory");
+        }
+        return gpuRemaining[device - gpuFirst];
+    }
+
+    boolean selectGpus(int resource, int host, int[] selected) {
+        if (model.gpus == null) {
+            return selected.length == 0;
+        }
+        if (selected.length != gpuCount(resource, 11) + gpuCount(resource, 17)) {
+            return false;
+        }
+        int next = 0;
+        for (int dimension = 11; dimension <= 17; dimension += 6) {
+            final int demand = model.gpus.demand(resource, dimension);
+            if (demand == 0) {
+                continue;
+            }
+            final int shares = Math.min(demand, GpuTopology.SHARES);
+            final int count = demand < GpuTopology.SHARES ? 1 : demand / GpuTopology.SHARES;
+            if (count > model.gpus.end(host, dimension) - model.gpus.first(host, dimension)) {
+                return false;
+            }
+            int best = 0;
+            if (shares < GpuTopology.SHARES) {
+                for (int device = model.gpus.first(host, dimension); device < model.gpus.end(host, dimension); device++) {
+                    final int remaining = gpuAvailable(device);
+                    if (remaining >= shares && (best == 0 || remaining < gpuAvailable(best))) {
+                        best = device;
+                    }
+                }
+                if (best == 0) {
+                    return false;
+                }
+                selected[next++] = best;
+            } else {
+                final int end = next + count;
+                for (int device = model.gpus.first(host, dimension); device < model.gpus.end(host, dimension) && next < end; device++) {
+                    if (gpuAvailable(device) == GpuTopology.SHARES) {
+                        selected[next++] = device;
+                    }
+                }
+                if (next != end) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
     double available(int resource, int dimension, int media) {
         final int row = row(resource);
         if (dimension <= 0 || dimension > model.dimensionCount) {
@@ -255,23 +328,83 @@ final class CapacityLedger {
                 throw new IllegalArgumentException("Placement cannot be null");
             }
             validate(plan.resource(), plan.host(), plan.numa(), plan.diskOffsets(), plan.devices(), plan.devices().length, Integer.MAX_VALUE);
+            validateGpus(plan.resource(), plan.host(), plan.gpus());
         }
         for (int index = 0; index < count; index++) {
             final var plan = plans[index];
             if (!add(plan.resource(), plan.host(), plan.numa(), plan.diskOffsets(), plan.devices(), target, Integer.MAX_VALUE)) {
                 return null;
             }
+            addGpus(plan.resource(), plan.gpus(), target);
         }
         return check(target);
     }
 
     Debit preparePartial(int resource, int host, int numa, int[] offsets, int[] devices, int deviceCount, int disks, Debit target) {
+        return preparePartial(resource, host, numa, offsets, devices, deviceCount, disks, NO_GPUS, target);
+    }
+
+    Debit preparePartial(int resource, int host, int numa, int[] offsets, int[] devices, int deviceCount, int disks,
+            int[] gpus, Debit target) {
         target.reset();
         validate(resource, host, numa, offsets, devices, deviceCount, disks);
-        return add(resource, host, numa, offsets, devices, target, disks) ? check(target) : null;
+        validateGpus(resource, host, gpus);
+        if (!add(resource, host, numa, offsets, devices, target, disks)) {
+            return null;
+        }
+        addGpus(resource, gpus, target);
+        return check(target);
+    }
+
+    private void validateGpus(int resource, int host, int[] gpus) {
+        if (model.gpus == null) {
+            if (gpus.length != 0) {
+                throw new IllegalArgumentException("GPU assignments require the devices20 model");
+            }
+            return;
+        }
+        int nvidia = 0, intel = 0;
+        for (int index = 0; index < gpus.length; index++) {
+            final int device = gpus[index];
+            if (model.gpus.host(device) != host) {
+                throw new IllegalArgumentException("GPU does not belong to host");
+            }
+            for (int previous = 0; previous < index; previous++) {
+                if (gpus[previous] == device) {
+                    throw new IllegalArgumentException("A request cannot repeat a GPU");
+                }
+            }
+            if (model.gpus.type(device) == 11) {
+                nvidia++;
+            } else {
+                intel++;
+            }
+        }
+        if (nvidia != gpuCount(resource, 11) || intel != gpuCount(resource, 17)) {
+            throw new IllegalArgumentException("GPU assignments differ from request");
+        }
+    }
+
+    int gpuCount(int resource, int dimension) {
+        if (model.gpus == null) {
+            return 0;
+        }
+        final int demand = model.gpus.demand(resource, dimension);
+        return demand == 0 ? 0 : demand < GpuTopology.SHARES ? 1 : demand / GpuTopology.SHARES;
+    }
+
+    private void addGpus(int resource, int[] gpus, Debit debit) {
+        for (final int device : gpus) {
+            debit.gpu(device, Math.min(GpuTopology.SHARES, model.gpus.demand(resource, model.gpus.type(device))));
+        }
     }
 
     private Debit check(Debit debit) {
+        for (int index = 0; index < debit.gpuCount; index++) {
+            if (debit.gpuShares[index] > gpuAvailable(debit.gpus[index])) {
+                return null;
+            }
+        }
         for (int index = 0; index < debit.size; index++) {
             final int offset = debit.index[index];
             final int resource = inventory[offset / stride];
@@ -309,6 +442,9 @@ final class CapacityLedger {
     }
 
     private void update(Debit debit, int sign) {
+        for (int index = 0; index < debit.gpuCount; index++) {
+            gpuRemaining[debit.gpus[index] - gpuFirst] -= sign * debit.gpuShares[index];
+        }
         for (int index = 0; index < debit.deviceCount; index++) {
             project(debit.devices[index], -1);
         }
@@ -421,7 +557,9 @@ final class CapacityLedger {
             if (firstDisk != lastDisk && model.rules.kind[profile] == 5 && (dimension == 2 || dimension >= 5 && dimension <= 10)) {
                 continue;
             }
-            final double amount = dimension == 1 && cores > 0 ? cores * model.rules.cpuPower[hostProfile]
+            final double amount = model.gpus != null && (dimension == 11 || dimension == 17)
+                    ? model.gpus.demand(resource, dimension) / (double) GpuTopology.SHARES
+                    : dimension == 1 && cores > 0 ? cores * model.rules.cpuPower[hostProfile]
                     : model.allocations.amount[index];
             vcores |= dimension == 1;
             if (!addScalar(debit, host, numa, dimension, amount)) {
@@ -640,6 +778,8 @@ final class CapacityLedger {
     }
 
     static final class Debit {
+        private int[] gpus = NO_GPUS, gpuShares = NO_GPUS;
+        private int gpuCount;
         private int[] index = new int[16];
         private double[] amount = new double[16];
         private int size;
@@ -650,9 +790,26 @@ final class CapacityLedger {
         private int projectionSize;
 
         private void reset() {
+            gpuCount = 0;
             size = 0;
             deviceCount = 0;
             projectionSize = 0;
+        }
+
+        private void gpu(int device, int shares) {
+            for (int index = 0; index < gpuCount; index++) {
+                if (gpus[index] == device) {
+                    gpuShares[index] = Math.addExact(gpuShares[index], shares);
+                    return;
+                }
+            }
+            if (gpuCount == gpus.length) {
+                final int size = Math.max(4, gpuCount * 2);
+                gpus = Arrays.copyOf(gpus, size);
+                gpuShares = Arrays.copyOf(gpuShares, size);
+            }
+            gpus[gpuCount] = device;
+            gpuShares[gpuCount++] = shares;
         }
 
         private void add(int offset, double value) {
