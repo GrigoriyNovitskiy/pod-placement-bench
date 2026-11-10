@@ -75,14 +75,14 @@ class RunnerCliTest {
     }
 
     @Test
-    void deviceModeRejectsGpuFragmentsThroughBothBuiltInAlgorithms() throws Exception {
+    void deviceModeRejectsGpuFragmentsThroughAllBuiltInAlgorithms() throws Exception {
         final var rows = new Record[]{
                 alloc(1, new int[]{11}, 3), alloc(2, new int[]{11}, .8), alloc(3, new int[]{11}, .6),
                 rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)};
         writeTrace(temporary, rows, 2, 3, 4, 5, -5, -4, -3, -2);
-        for (final var algorithm : new String[]{"fitcount", "geometric-best-fit"}) {
+        for (final var algorithm : new String[]{"fitcount", "best-fit", "geometric-best-fit"}) {
             final var output = new ByteArrayOutputStream();
             final var errors = new ByteArrayOutputStream();
             assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm));
@@ -98,6 +98,7 @@ class RunnerCliTest {
             assertTrue(devices.contains("\"admitted_units\":3"));
             assertTrue(devices.contains("\"declined_units\":1"));
             assertTrue(devices.contains("\"committed_units\":3"));
+            assertTrue(devices.contains("\"candidate_planner_calls\":4"));
             assertTrue(devices.contains("\"complete\":true"));
             assertEquals("", errors.toString(StandardCharsets.UTF_8));
             assertEquals(defaults.lines().filter(line -> line.contains("\"scenario_digest\":")

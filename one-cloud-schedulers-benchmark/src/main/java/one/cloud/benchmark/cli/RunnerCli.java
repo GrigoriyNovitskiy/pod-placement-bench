@@ -11,6 +11,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.HexFormat;
 
+import one.cloud.benchmark.algorithms.bestfit.BestFit;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
 import one.cloud.benchmark.dataset.Dataset;
@@ -20,7 +21,7 @@ import one.cloud.benchmark.runner.Scenario;
 
 public final class RunnerCli {
     private static final String USAGE = """
-            Usage: pod-placement-bench --dataset DIR --algorithm fitcount|geometric-best-fit [options]
+            Usage: pod-placement-bench --dataset DIR --algorithm fitcount|best-fit|geometric-best-fit [options]
               DIR contains snapshot.pb and operations.pb.
               --seed N              Algorithm seed (default: 42)
               --fit-cap N           Copy cap for fitcount and quality probes (default: 10)
@@ -72,6 +73,7 @@ public final class RunnerCli {
             final DatasetRunner.Factory factory = switch (options.algorithm) {
                 case "fitcount" -> (context, seed, catalogue) -> new FitCount(context, seed, catalogue,
                         options.fitCap, options.cacheRows);
+                case "best-fit" -> (context, seed, catalogue) -> new BestFit(context, seed);
                 case "geometric-best-fit" -> (context, seed, catalogue) -> new GeometricBestFit(context, seed);
                 default -> throw new IllegalArgumentException("Unknown algorithm: " + options.algorithm);
             };
@@ -131,7 +133,7 @@ public final class RunnerCli {
         if (dataset == null || algorithm == null) {
             throw new IllegalArgumentException("--dataset and --algorithm are required");
         }
-        if (!algorithm.equals("fitcount") && !algorithm.equals("geometric-best-fit")) {
+        if (!algorithm.equals("fitcount") && !algorithm.equals("best-fit") && !algorithm.equals("geometric-best-fit")) {
             throw new IllegalArgumentException("Unknown algorithm: " + algorithm);
         }
         return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit, gpuMode);

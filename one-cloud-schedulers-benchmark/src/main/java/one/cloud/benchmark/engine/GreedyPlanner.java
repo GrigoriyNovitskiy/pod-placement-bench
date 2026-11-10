@@ -82,8 +82,16 @@ public final class GreedyPlanner {
     }
 
     public Assignment[] plan(Request request, int host, int numa) {
+        return plan(request, host, numa, null);
+    }
+
+    /** Writes the remaining host capacity by dimension ID for a successful plan. */
+    public Assignment[] plan(Request request, int host, int numa, double[] remaining) {
         planCalls++;
         checkHost(host);
+        if (remaining != null && remaining.length != model.dimensionCount + 1) {
+            throw new IllegalArgumentException("Remaining capacity buffer must include index zero and every dimension");
+        }
         if (numa < 0 || numa != 0 && (numa >= model.constraints.length
                 || model.rules.kind[model.constraints[numa]] != 2 || model.rules.parent[model.constraints[numa]] != host)) {
             throw new IllegalArgumentException("NUMA does not belong to host");
@@ -107,7 +115,15 @@ public final class GreedyPlanner {
                     Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount),
                     member.gpus.length == 0 ? NO_GPUS : member.gpus.clone());
         }
-        return context.canPlace(request, plans) ? plans : null;
+        if (!context.canPlace(request, plans)) {
+            return null;
+        }
+        if (remaining != null) {
+            for (int dimension = 1; dimension <= model.dimensionCount; dimension++) {
+                remaining[dimension] = capacity.available(host, dimension);
+            }
+        }
+        return plans;
     }
 
     public int fitCount(Request request, int host, int cap) {
@@ -275,7 +291,8 @@ public final class GreedyPlanner {
                 }
             }
             if (!placed && model.rules.diskMedia[disk] == 2 && !CapacityLedger.reserved(model.rules.diskLayout[disk])
-                    && (model.rules.diskFlags[disk] & 1) == 0) {
+                    && (model.rules.diskFlags[disk] & 1) == 0
+                    && model.rules.minStripes[disk] <= 1 && model.rules.maxStripes[disk] >= 1) {
                 eligible(disk, numa, true);
                 for (int next = 0; next < candidateCount; next++) {
                     chosen[0] = candidates[next];

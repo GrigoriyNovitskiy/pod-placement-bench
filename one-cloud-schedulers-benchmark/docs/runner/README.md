@@ -73,7 +73,8 @@ catalogue. Limits, catalogue/probe identity, source/scenario digests, seed, Java
 version and outcome counts accompany timing output. Full-catalogue fitcount can
 have a substantial cold first operation; this cost remains in operation timing.
 
-The built-ins are fitcount and normalized residual L2 geometric best-fit, following
-the separate [geometric specification](../geometric-best-fit/README.md). The runner
+The built-ins are `fitcount`, host-residual `best-fit` and normalized residual L2
+`geometric-best-fit`. The [geometric specification](../geometric-best-fit/README.md)
+describes the L2 score. The runner
 and CLI were independently checked before the second algorithm was added. No JMH
 fixtures, automatic parameter sweep, LP solver or ML backend are introduced here.
