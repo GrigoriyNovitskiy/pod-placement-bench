@@ -1,0 +1,217 @@
+syntax = "proto3";
+
+package one.cloud.benchmark.dataset;
+
+option java_package = "one.cloud.schedulers.dataset";
+option java_outer_classname = "PlacementDatasetProtos";
+
+// Files contain varint-length-delimited records. IDs are dense and start at 1;
+// zero is absent, except candidate sets: 0 permits every host and 1 permits none.
+// Indexed records are emitted in ascending ID order within each record kind.
+message Record {
+  oneof payload {
+    Header header = 1;
+    Alloc alloc = 2;
+    Constraints constraints = 3;
+    Candidates candidates = 4;
+    Resource resource = 5;
+    Placement placement = 6;
+    Operation operation = 7;
+  }
+}
+
+message Header {
+  uint32 version = 1;
+  fixed64 dataset_id = 2;
+  uint32 resource_count = 3;
+  uint32 alloc_count = 4;
+  uint32 constraint_count = 5;
+  // Largest candidate-set ID, including reserved set 1.
+  uint32 candidate_count = 6;
+  uint32 placement_count = 7;
+  uint32 operation_count = 8;
+  uint32 dimension_count = 9;
+  uint32 host_count = 10;
+  uint64 extent_bytes = 11;
+  uint32 alloc_value_count = 12;
+  uint32 limit_count = 13;
+  uint32 link_count = 14;
+  uint32 disk_plan_count = 15;
+  uint32 domain_count = 16;
+  uint32 device_use_count = 17;
+  uint32 candidate_host_count = 18;
+  bool synthetic_operations = 19;
+  bool replay_from_snapshot = 20;
+  Stream stream = 21;
+}
+
+// The type IDs are the fixed ResourceType values. Supply and demand use the
+// same units; per-device extents/IOPS refine host storage totals, not extra demand.
+enum ResourceType {
+  UNSPECIFIED = 0;
+  VCORES = 1;
+  MEM_MIB = 2;
+  LAN_OUT_MBIT = 3;
+  LAN_IN_MBIT = 4;
+  NVME_GIB = 5;
+  NVME_SPINDLES = 6;
+  SSD_GIB = 7;
+  SSD_SPINDLES = 8;
+  HDD_GIB = 9;
+  HDD_SPINDLES = 10;
+  NVIDIA_GPUS = 11;
+  NONPROD_VCORES = 12;
+  NONPROD_LAN_OUT_MBIT = 13;
+  NONPROD_LAN_IN_MBIT = 14;
+  HW_CORES = 15;
+  HW_LAN_QUEUES = 16;
+  INTEL_GPUS = 17;
+  DEVICE_EXTENTS = 18;
+  DEVICE_SPINDLES = 19;
+  DEVICE_IOPS = 20;
+}
+
+enum Stream {
+  MODEL = 0;
+  SNAPSHOT = 1;
+  OPERATIONS = 2;
+}
+
+message Alloc {
+  uint32 id = 1;
+  repeated uint32 type = 2 [packed = true];
+  repeated double amount = 3 [packed = true];
+}
+
+message Resource {
+  uint32 id = 1;
+  uint32 alloc = 2;
+  uint32 constraints = 3;
+}
+
+message Constraints {
+  uint32 id = 1;
+  Kind kind = 2;
+  uint32 parent = 3;
+  // NUMA and DISK: local NUMA index + 1; zero means unspecified.
+  uint32 ordinal = 4;
+  double cpu_power = 5;
+  Media media = 6;
+  uint32 candidates = 7;
+  uint32 pinned_host = 8;
+  uint32 group = 9;
+  repeated Limit limits = 10;
+  repeated Link links = 11;
+  repeated DiskPlan disks = 12;
+  repeated Domain domains = 13;
+  uint32 flags = 14;
+  Media alternative_media = 15;
+  double alternative_spindles = 16;
+}
+
+enum Kind {
+  GENERIC = 0;
+  HOST = 1;
+  NUMA = 2;
+  DISK = 3;
+  POD = 4;
+  SHARD = 5;
+}
+
+enum Media {
+  MEDIA_UNSPECIFIED = 0;
+  HDD = 1;
+  SSD = 2;
+  NVME = 3;
+  MEMDISK = 4;
+  ROOTFS = 5;
+}
+
+// Host resource IDs occupy [1, host_count]. Candidate IDs >= 2 reference an
+// interned set; host IDs are sorted and unique.
+message Candidates {
+  uint32 id = 1;
+  repeated uint32 host = 2 [packed = true];
+}
+
+// Domain levels 1..5 mean host, NUMA, rack, hall, spine. Higher levels are opaque
+// attribute domains. A missing value is zero and fails a constraint on that level.
+// A host's level-2 value is its resource ID (the unassigned/NONE domain).
+// Choosing a NUMA child overrides it with that child's resource ID. A host
+// without NUMA inventory therefore has one level-2 domain.
+message Domain {
+  uint32 level = 1;
+  uint32 value = 2;
+}
+
+message Limit {
+  uint32 domain = 1;
+  uint32 max = 2;
+  bool hard = 3;
+}
+
+message Link {
+  uint32 target = 1;
+  uint32 domain = 2;
+  Relation relation = 3;
+}
+
+enum Relation {
+  COLOCATE = 0;
+  READY_GROUP = 1;
+  // Target is a storage group. Require a ready placed member at the candidate
+  // host, using snapshot members only. No on-demand owners are synthesized.
+  SHARED_GROUP = 2;
+}
+
+message DiskPlan {
+  Media media = 1;
+  Layout layout = 2;
+  uint64 extents = 3;
+  double spindles = 4;
+  optional double iops = 5;
+  uint32 min_devices = 6;
+  uint32 max_devices = 7;
+  uint32 min_stripes = 8;
+  uint32 max_stripes = 9;
+  // Bit 0: whole device, bit 1: optional volume.
+  uint32 flags = 10;
+  uint32 metadata_extents = 11;
+  optional double per_device_iops_cap = 12;
+}
+
+enum Layout {
+  AUTO = 0;
+  LINEAR = 1;
+  STRIPED = 2;
+  RAID1 = 3;
+  RAID5 = 4;
+  RAID6 = 5;
+  RAID10 = 6;
+  RAID4 = 7;
+}
+
+// Every observed physical copy is retained. A resource may have several
+// placements during migration/duplicate execution. Alloc is observed occupancy,
+// independent of the resource's requested alloc profile.
+message Placement {
+  uint32 resource = 1;
+  uint32 host = 2;
+  uint32 numa = 3;
+  uint32 alloc = 4;
+  repeated DeviceUse devices = 5;
+}
+
+message DeviceUse {
+  uint32 device = 1;
+  uint64 extents = 2;
+  double spindles = 3;
+  optional double iops = 4;
+}
+
+message Operation {
+  uint64 time = 1;
+  uint32 resource = 2;
+  uint32 generation = 3;
+  bool create = 4;
+}
