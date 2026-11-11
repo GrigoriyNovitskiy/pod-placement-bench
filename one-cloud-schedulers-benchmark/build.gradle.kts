@@ -6,6 +6,7 @@ plugins {
 
 application {
     mainClass.set("one.cloud.benchmark.cli.RunnerCli")
+    applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
 
 repositories {
@@ -20,6 +21,7 @@ java {
 dependencies {
     api("com.google.protobuf:protobuf-java:3.25.9")
     implementation("ai.catboost:catboost-prediction:1.2.8")
+    api("com.google.code.gson:gson:2.13.2")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.14.3")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.14.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.14.3")
@@ -53,6 +55,17 @@ tasks.register<JavaExec>("runPlacementDatasetRead") {
     mainClass.set("one.cloud.benchmark.dataset.DatasetReader")
     classpath = sourceSets.main.get().runtimeClasspath
     workingDir = rootProject.projectDir
+}
+
+tasks.register<JavaExec>("runSimulator") {
+    group = "application"
+    description = "Start the local interactive placement simulator"
+    dependsOn(tasks.classes)
+    mainClass.set("one.cloud.benchmark.simulator.SimulatorServer")
+    classpath = sourceSets.main.get().runtimeClasspath
+    workingDir = rootProject.projectDir
+    jvmArgs("--enable-native-access=ALL-UNNAMED")
+    standardInput = System.`in`
 }
 
 tasks.register("writePlacementDatasetRuntime") {

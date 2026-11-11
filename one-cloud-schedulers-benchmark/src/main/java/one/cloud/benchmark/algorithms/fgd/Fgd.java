@@ -2,6 +2,8 @@ package one.cloud.benchmark.algorithms.fgd;
 
 import java.util.function.ToDoubleFunction;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
@@ -13,6 +15,28 @@ public final class Fgd extends SchedulingAlgorithm {
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
     private final boolean refineGpus;
+
+    public static AlgorithmDefinition definition() {
+        return new AlgorithmDefinition(
+                "fgd",
+                "GPU FGD",
+                AlgorithmParameters.SEED_ONLY,
+                (context, catalogue, parameters) -> new Fgd(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue));
+    }
+
+    public static AlgorithmDefinition cpuRamDefinition() {
+        return new AlgorithmDefinition(
+                "cpu-ram-fgd",
+                "CPU / RAM FGD",
+                AlgorithmParameters.SEED_ONLY,
+                (context, catalogue, parameters) -> cpuRam(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue));
+    }
 
     public Fgd(SchedulingContext context, long seed, Request[] catalogue) {
         this(context, seed, catalogue, true);

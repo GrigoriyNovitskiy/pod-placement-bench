@@ -13,12 +13,10 @@ never notify canonical algorithms. Nested trials and stale sources are rejected.
 Run from the repository root with Java 25:
 
 ```sh
-./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm bulk-fitcount --bulk-size 100 --seed 42'
-./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm dp --bulk-size 100 --seed 42'
-./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm rollout --rollout-prior /path/to/prior.pb --max-operations 200 --seed 42'
+./placement-bench run --dataset /path/to/sc --algorithm bulk-fitcount --bulk-size 100 --param seed=42
+./placement-bench run --dataset /path/to/sc --algorithm dp --bulk-size 100 --param seed=42
+./placement-bench run --dataset /path/to/sc --algorithm rollout \
+  --rollout-prior /path/to/prior.pb --max-operations 200 --param seed=42
 ```
 
 New modes default to copy cap 128 and cache 256; existing modes keep cap 10.
@@ -33,10 +31,18 @@ are included in the scenario digest before replay. All algorithms can receive th
 same announcements; a normal FitCount handles the array sequentially. A prefix
 may cut the last window; this is explicitly reported. Rollout requires B=1.
 
+The interactive simulator keeps singleton announcements. Bulk/DP are available
+there, but their window optimizations require CLI `--bulk-size`. Rollout is listed
+but disabled in the simulator until prior upload is supported; it never reads a
+server-side path from a browser-supplied parameter.
+
 JSON format 2 reports attempted units separately from `schedule_windows`. Schedule
 latency measures one complete announced window, with no division or duplicated
-per-unit samples. `algorithm_parameters` and their deterministic parameter digest
-identify the profile; `algorithm_counters` include coverage/fallbacks and work.
+per-unit samples. `algorithm_parameters` contains typed registry settings;
+`algorithm_runtime_parameters` contains the algorithm's provenance, including the
+prior digest. Their deterministic `parameter_digest` also includes runner options
+and the actual model hash; raw artifact paths are excluded. `algorithm_counters`
+include coverage/fallbacks and work.
 Logical resource vectors sum original allocation profiles, so RAID overhead and
 whole-disk waste earn no extra useful-work credit. Refusals by allocation profile
 are resource counts, including every member of a declined atomic unit.
@@ -109,8 +115,8 @@ invalid references/cardinalities/digest/weights fail the run. Groups are never
 silently shrunk. The cold virtual bank extends only the trial model; canonical
 group cardinalities and the real cluster model stay unchanged.
 
-Defaults are K=8/M=8/H=8 with one worker. CLI options `--rollout-candidates`,
-`--rollout-scenarios`, `--rollout-horizon` select an explicit smaller pilot or
+Defaults are K=8/M=8/H=8 with one worker. CLI parameters `--param candidates=...`,
+`--param scenarios=...`, `--param horizon=...` select an explicit smaller pilot or
 parameter experiment. These paths are IID weighted whole bundles with replacement;
 an overflowing last bundle ends the path without truncation or resampling.
 Each path uses distinct virtual identities. The exact specified SplitMix seeds

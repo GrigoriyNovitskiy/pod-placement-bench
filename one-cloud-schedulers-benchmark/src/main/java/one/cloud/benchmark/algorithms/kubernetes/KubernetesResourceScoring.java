@@ -1,8 +1,11 @@
 package one.cloud.benchmark.algorithms.kubernetes;
 
+import java.util.Locale;
 import java.util.Objects;
 import java.util.function.ToDoubleFunction;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
@@ -24,6 +27,15 @@ public final class KubernetesResourceScoring extends SchedulingAlgorithm {
 
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
+
+    public static AlgorithmDefinition definition(Strategy strategy) {
+        final var suffix = strategy.name().toLowerCase(Locale.ROOT).replace('_', '-');
+        return new AlgorithmDefinition("k8s-" + suffix, "K8s " + suffix, AlgorithmParameters.SEED_ONLY,
+                (context, catalogue, parameters) -> new KubernetesResourceScoring(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        strategy));
+    }
 
     public KubernetesResourceScoring(SchedulingContext context, long seed, Strategy strategy) {
         super(context, seed);

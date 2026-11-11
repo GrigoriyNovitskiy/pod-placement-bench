@@ -4,6 +4,9 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
+import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Assignment;
@@ -20,6 +23,31 @@ public final class Rollout extends SchedulingAlgorithm {
     private long[] tracedAttempts = new long[0];
     private int[] pathLengths = new int[0];
     private int decisions;
+
+    public static AlgorithmDefinition definition() {
+        final var descriptor = new AlgorithmRegistry.Descriptor(
+                "rollout",
+                "Rollout + FitCount",
+                AlgorithmParameters.ROLLOUT,
+                true,
+                1);
+
+        return new AlgorithmDefinition(descriptor, (context, catalogue, parameters, priorFile) -> {
+            final int horizon = parameters.get("horizon").getAsInt();
+            final var prior = RolloutPrior.load(priorFile, context.model(), horizon);
+
+            return new Rollout(
+                    context,
+                    parameters.get("seed").getAsLong(),
+                    catalogue,
+                    prior,
+                    parameters.get("fitCap").getAsInt(),
+                    parameters.get("cacheRows").getAsInt(),
+                    parameters.get("candidates").getAsInt(),
+                    parameters.get("scenarios").getAsInt(),
+                    horizon);
+        });
+    }
 
     public Rollout(SchedulingContext context, long seed, Request[] catalogue, RolloutPrior prior,
             int maxFitCount, int maxCachedShapes) {

@@ -3,6 +3,8 @@ package one.cloud.benchmark.algorithms.fitcount;
 import java.util.Arrays;
 import java.util.SplittableRandom;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Assignment;
@@ -10,6 +12,17 @@ import one.cloud.benchmark.model.Request;
 
 public final class RandomNFitCount extends SchedulingAlgorithm {
     private final FitCount delegate;
+
+    public static AlgorithmDefinition definition() {
+        return new AlgorithmDefinition("randomn-fitcount", "Random-N + FitCount", AlgorithmParameters.SHORTLIST,
+                (context, catalogue, parameters) -> new RandomNFitCount(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue,
+                        parameters.get("topN").getAsInt(),
+                        parameters.get("fitCap").getAsInt(),
+                        parameters.get("cacheRows").getAsInt()));
+    }
 
     public RandomNFitCount(SchedulingContext context, long seed, Request[] catalogue, int n) {
         this(context, seed, catalogue, n, 10, 256);
