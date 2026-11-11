@@ -1,7 +1,7 @@
 # Geometric best-fit
 
-Implement normalized residual L2 squared first. These are recommended starting
-parameters, not measured optima; improvement over fitcount remains to be tested.
+Geometric Best Fit uses squared normalized residuals. The current settings are
+starting parameters for evaluation.
 This adapts the norm-based approach in [vector bin packing](https://www.microsoft.com/en-us/research/wp-content/uploads/2011/01/VBPackingESA11.pdf)
 to our heterogeneous, constrained placements.
 
@@ -17,10 +17,10 @@ G(p)   = sum over nonempty families f of mean over b in A_f(p) of x_b(p)^2
 
 `R` is current remaining supply; `C` is initial full usable capacity, including
 normalized storage views. Precompute reciprocal capacities once. Scratch
-`PlacementCapacity.load` loads current `R`, not initial `C`; raw host `alloc` is
+`CapacityLedger.load` loads current `R`, not initial `C`; raw host `alloc` is
 also insufficient for storage. Sum, rather than average, the family contributions.
 
-Use actual `PlacementCapacity.Debit` entries, aggregated per cell across the whole
+Use actual `CapacityLedger.Debit` entries, aggregated per cell across the whole
 atomic request. Do not infer consumption from manifest allocation profiles.
 Group positive entries as follows; numbers are protobuf `ResourceType` values:
 
@@ -49,20 +49,19 @@ Unused GPU/NVMe capacity receives no protection from this score.
 
 ## Implementation
 
-1. Add `GeometricBestFitScheduler extends PlacementAlgorithm` in
-   `one.cloud.schedulers`; implement the single-request overload.
-2. Enumerate hosts in ID order and each `PlacementPlanner.numaNodes(host)` in its
-   existing order. Use `plan(request, host, numa)` for complete atomic placements.
-   Keep the same planner and hard-constraint validation as fitcount.
-3. Add one package-private scoring helper inside `PlacementCapacity`. Reuse
-   host-local scratch and `prepare` with a reusable `Debit`; read actual entries
-   separately from projection adjustments. Reuse allocator geometry for dedicated
-   CPU, layouts, stripes, metadata, whole disks and IOPS. Never mutate canonical
-   state, revisions or callbacks while scoring, or copy the cloud per candidate.
-4. Retain the lowest-score owned plan. Break exact ties by seeded reservoir
-   sampling; use the run seed, with no floating-point tie epsilon.
-5. Call `context.place(request, bestPlans)` once, or leave the unit unplaced.
-   Read fresh supply for each request; removals need no scorer cache updates.
+1. [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java)
+   implements the single-request overload of `SchedulingAlgorithm`.
+2. The algorithm iterates hosts by ID and visits each anchor from
+   `GreedyPlanner.numaNodes(host)`. The shared `plan(request, host, numa)` builds
+   and validates complete atomic placements.
+3. `CapacityLedger` scores actual debits in a host-local scratch ledger. It
+   reuses a `Debit` buffer and uses the allocator's geometry for dedicated CPU,
+   layouts, stripes, metadata, whole disks and IOPS.
+4. The algorithm retains the plan with the lowest score. It breaks exact ties
+   by seeded reservoir sampling.
+5. The algorithm reads fresh supply for each request. The winning
+   `context.place` call updates the engine and invokes callbacks. The request
+   stays unplaced when the planner finds no candidate.
 
 Defaults: exponent **2**, every family weight **1**, every host/NUMA anchor,
 no candidate cutoff, no migration and no periodic model update. The existing

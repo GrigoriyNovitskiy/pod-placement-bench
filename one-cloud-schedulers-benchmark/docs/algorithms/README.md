@@ -1,8 +1,7 @@
 # Algorithm implementation plans
 
-These are implementation plans, not implemented backends. Numerical settings are
-explicit starting configurations agreed for the first experiments; none has been
-selected empirically on the ten clouds. Utilization takes priority over latency.
+The table lists planned experiments and their starting configurations.
+Utilization takes priority over latency in these experiments.
 
 | Plan | Primary experiment |
 | --- | --- |
@@ -88,13 +87,13 @@ modern 9.15. No solver dependency is added by these plans.
 
 ## Implemented inventory
 
-Checked on 2026-11-10: two production-source subclasses of `SchedulingAlgorithm`
-are present and registered by the CLI:
+The CLI registers three implementations of `SchedulingAlgorithm`.
 
 - [FitCount](../../src/main/java/one/cloud/benchmark/algorithms/fitcount/FitCount.java):
   `--algorithm fitcount`.
-- [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java):
-  `--algorithm geometric-best-fit`; see its [specification](../geometric-best-fit/README.md).
+- `--algorithm best-fit` uses the host-level residual sum. [Best Fit](best-fit.md)
+- `--algorithm geometric-best-fit` uses squared residuals by resource family.
+  [Geometric Best Fit](geometric-best-fit.md)
 
 The dataset runner currently calls algorithms with B=1. `GreedyPlanner` is a
 geometry helper; the runner and engine are infrastructure. All six documents

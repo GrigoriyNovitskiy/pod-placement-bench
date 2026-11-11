@@ -49,7 +49,8 @@ For an explicit short smoke run:
   --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
 ```
 
-Built-in algorithms are `fitcount`, `best-fit` and `geometric-best-fit`.
+Built-in algorithms are `fitcount`, [`best-fit`](docs/algorithms/best-fit.md) and
+[`geometric-best-fit`](docs/algorithms/geometric-best-fit.md).
 `--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
 all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
 reported sample. `--max-operations` truncates normalized atomic events, without
@@ -260,14 +261,6 @@ shapes. This differs from an eligible-host count, which counts each host once wh
 at least one valid NUMA/device assignment exists. The API supports either metric;
 it does not impose a shared scoring function or physical assignment planner.
 The production port and cache boundaries are described in [FITCOUNT.md](FITCOUNT.md).
-
-Create `BestFit` with a fresh, empty engine using `new BestFit(engine, seed)`.
-It scores each feasible single-host plan from `GreedyPlanner` by summing
-`remaining / initialCapacity` over host dimensions with positive finite initial
-capacity. This uses the host's projected storage budgets. NUMA and device geometry
-constrain the plan through the shared validator. The seed resolves equal scores
-across the host and NUMA candidates. Best Fit commits the lowest-scoring plan
-and leaves the request unplaced when the planner finds none.
 
 `ClusterSpec.from(data)` and `Scenario.from(data)` use device accounting by default.
 Custom algorithms must submit explicit GPU IDs for GPU-bearing requests, or use
