@@ -1,6 +1,7 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
+import java.util.function.IntToDoubleFunction;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
@@ -211,6 +212,22 @@ final class CapacityLedger {
     ToDoubleFunction<Assignment[]> gpuFragmentationScorer(SchedulingContext context, int[][] hostInventory,
             Request[] catalogue) {
         final var fragmentation = new GpuFragmentation(model, catalogue);
+        return fragmentationDeltaScorer(context, hostInventory, host -> fragmentation.amount(this, host));
+    }
+
+    ToDoubleFunction<Assignment[]> cpuRamFragmentationScorer(SchedulingContext context, int[][] hostInventory,
+            Request[] catalogue) {
+        double maxCpu = 0, maxRam = 0;
+        for (int host = 1; host <= model.hostCount; host++) {
+            maxCpu = Math.max(maxCpu, supply(host, VCORES_VALUE));
+            maxRam = Math.max(maxRam, supply(host, MEM_MIB_VALUE));
+        }
+        final var fragmentation = new CpuRamFragmentation(model, catalogue, maxCpu, maxRam);
+        return fragmentationDeltaScorer(context, hostInventory, host -> fragmentation.amount(this, host));
+    }
+
+    private ToDoubleFunction<Assignment[]> fragmentationDeltaScorer(SchedulingContext context, int[][] hostInventory,
+            IntToDoubleFunction potential) {
         final var debit = new Debit();
         return plans -> {
             if (plans.length == 0 || plans[0] == null) {
@@ -232,12 +249,12 @@ final class CapacityLedger {
                 }
             }
             load(context, hostInventory[host]);
-            final double before = fragmentation.amount(this, host);
+            final double before = potential.applyAsDouble(host);
             if (prepare(plans, debit) == null) {
                 throw new IllegalArgumentException("Scored assignments exceed physical capacity");
             }
             allocate(debit);
-            return fragmentation.amount(this, host) - before;
+            return potential.applyAsDouble(host) - before;
         };
     }
 

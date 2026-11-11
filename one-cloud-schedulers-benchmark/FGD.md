@@ -71,3 +71,32 @@ The `devices20` topology is synthetic: real GPU models, memory limits, host shar
 modes and transcoding requirements are not reconstructed from the dataset. Results
 describe this declared model. Runner metadata, scenario identity, seed, catalogue
 selection and GPU assignment checksums apply in the same way as for other algorithms.
+
+## CPU and RAM variant
+
+`--algorithm cpu-ram-fgd` applies the same minimum-delta rule to a continuous
+CPU/RAM potential. It uses the shared declared catalogue and groups identical
+profiles by frequency. Each pod or shard contributes its own profile. The CPU
+demand is VCORES, or HW_CORES converted using the candidate host's CPU power.
+RAM demand is declared MEM_MIB plus nominal extents of required MEMDISK volumes
+in MiB. For a shard with disk plans, the raw MEM_MIB field is skipped as it is in
+the capacity ledger. Nominal MEMDISK demand omits placement-dependent charges
+such as stripe rounding, metadata and whole-device consumption. Profiles with
+neither CPU nor RAM demand are skipped.
+
+For a host with free CPU and RAM `(C, R)` and profile demand `(c, r)`, use
+`k = min(C/c, R/r)`, omitting the ratio for a zero demand. The stranded amounts
+are `C - k*c` and `R - k*r`. Scale each by the largest declared host capacity
+for that resource, with a scale of one for an absent resource. Sum the scaled
+amounts weighted by profile frequency. Total frequency is constant across
+candidates, so the sum ranks them like the weighted mean. Empty profiles give
+zero potential.
+
+The score is the potential after minus before the complete tentative placement.
+The capacity ledger accounts for all members of that placement, including actual
+MEMDISK charges. The score uses host totals, so NUMA variants with equal host
+balances tie. NUMA, nonproduction CPU, hardware cores, GPU, disks and other hard
+constraints still apply through the common planner and validator. The mode works
+in both GPU models and uses the planner's GPU assignment. The copy cap applies
+to shared quality probes. Each score traverses the distinct profiles twice and
+needs no host-by-profile cache or repeated trial copies.
