@@ -19,6 +19,7 @@ java {
 
 dependencies {
     api("com.google.protobuf:protobuf-java:3.25.9")
+    implementation("ai.catboost:catboost-prediction:1.2.8")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.14.3")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.14.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.14.3")

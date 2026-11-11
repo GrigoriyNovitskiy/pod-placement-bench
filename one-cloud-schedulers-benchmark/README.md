@@ -1,8 +1,8 @@
 # Placement algorithms and datasets
 
 This module contains the public protobuf schema, primitive Java model, streaming
-decoder and algorithm API. Its only runtime dependency is `protobuf-java`; it does
-not depend on any other one-cloud module. Private control-state extraction stays in
+decoder and algorithm API. Runtime dependencies are `protobuf-java` and CatBoost's
+native Java predictor; it does not depend on other one-cloud modules. Private control-state extraction stays in
 `one-cloud-master`.
 
 The `one.cloud.benchmark` namespace separates the model, engine and run tooling.
@@ -49,6 +49,10 @@ For an explicit short smoke run:
 
 Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`,
 `cpu-ram-fgd` and four [Kubernetes resource scoring strategies](docs/algorithms/kubernetes-resource-scoring.md).
+The five [CatBoost and RandomN variants](docs/algorithms/catboost.md) use packaged
+models and the same runner: `catboost-top1`, `catboost-topn-fitcount`,
+`catboost-rollout-top1`, `catboost-rollout-topn-fitcount`, and `randomn-fitcount`.
+Their shortlist size is set with `--top-n`; CatBoost accepts an optional `--model`.
 `--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
 all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
 reported sample. `--max-operations` truncates normalized atomic events, without
