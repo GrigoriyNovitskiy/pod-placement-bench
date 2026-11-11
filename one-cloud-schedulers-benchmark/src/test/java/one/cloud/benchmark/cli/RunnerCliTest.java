@@ -75,14 +75,15 @@ class RunnerCliTest {
     }
 
     @Test
-    void deviceModeRejectsGpuFragmentsThroughBothBuiltInAlgorithms() throws Exception {
+    void deviceModeRejectsGpuFragmentsThroughAllBuiltInAlgorithms() throws Exception {
         final var rows = new Record[]{
                 alloc(1, new int[]{11}, 3), alloc(2, new int[]{11}, .8), alloc(3, new int[]{11}, .6),
                 rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)};
         writeTrace(temporary, rows, 2, 3, 4, 5, -5, -4, -3, -2);
-        for (final var algorithm : new String[]{"fitcount", "geometric-best-fit"}) {
+        for (final var algorithm : new String[]{"fitcount", "geometric-best-fit", "k8s-least-allocated",
+                "k8s-most-allocated", "k8s-requested-to-capacity-ratio", "k8s-balanced-allocation"}) {
             final var output = new ByteArrayOutputStream();
             final var errors = new ByteArrayOutputStream();
             assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm));

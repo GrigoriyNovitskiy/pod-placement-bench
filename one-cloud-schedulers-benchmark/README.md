@@ -47,7 +47,8 @@ For an explicit short smoke run:
   --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
 ```
 
-Built-in algorithms are `fitcount` and `geometric-best-fit`.
+Built-in algorithms include `fitcount`, `geometric-best-fit` and four
+[Kubernetes resource scoring strategies](docs/algorithms/kubernetes-resource-scoring.md).
 `--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
 all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
 reported sample. `--max-operations` truncates normalized atomic events, without

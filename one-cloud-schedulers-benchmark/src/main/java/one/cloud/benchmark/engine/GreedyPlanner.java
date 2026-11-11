@@ -82,6 +82,11 @@ public final class GreedyPlanner {
     }
 
     public Assignment[] plan(Request request, int host, int numa) {
+        return plan(request, host, numa, null);
+    }
+
+    /** On success, fills the supplied host capacity prefix by resource dimension, starting at index one. */
+    public Assignment[] plan(Request request, int host, int numa, double[] hostRemaining) {
         planCalls++;
         checkHost(host);
         if (numa < 0 || numa != 0 && (numa >= model.constraints.length
@@ -107,7 +112,16 @@ public final class GreedyPlanner {
                     Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount),
                     member.gpus.length == 0 ? NO_GPUS : member.gpus.clone());
         }
-        return context.canPlace(request, plans) ? plans : null;
+        if (!context.canPlace(request, plans)) {
+            return null;
+        }
+        if (hostRemaining != null) {
+            final int end = Math.min(hostRemaining.length, model.dimensionCount + 1);
+            for (int dimension = 1; dimension < end; dimension++) {
+                hostRemaining[dimension] = capacity.available(host, dimension);
+            }
+        }
+        return plans;
     }
 
     public int fitCount(Request request, int host, int cap) {
