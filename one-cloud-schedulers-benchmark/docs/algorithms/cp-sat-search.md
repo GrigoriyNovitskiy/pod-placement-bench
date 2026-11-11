@@ -6,6 +6,12 @@ not predict future requests. Bulk and other announced windows are separate serie
 
 ## Search and model
 
+Backtracking reverts tentative resource reservations and assignments of pending
+requests only. It never evicts an already running pod or moves a committed shard.
+No search branch starts containers, sends real minion RPC or executes business
+lifecycle effects. Keep old placements fixed; publish only the final validated
+choice, after which normal lifecycle processing can begin.
+
 First implement bounded Java backtracking over the shared physical kernel:
 most-constrained member/volume first, stable ID/device order, reversible debits.
 Retain the ordinary FitCount result and include its assignments in every later
@@ -54,8 +60,7 @@ all plans enabled by earlier units: use the physical search plus prefix validati
 Seed defaults to 42. Presolve and other solver parameters retain pinned-version
 defaults. Choose each unit's deterministic anchor shortlist from baseline options,
 required pins and stable seeded remaining anchors; if that unit's mandatory anchors
-exceed 64, report
-fallback. A pinned host still gets required NUMA alternatives within the declared
+exceed 64, report fallback. A pinned host still gets required NUMA alternatives within the declared
 search budget. Count every expanded partial assignment against the Java budget.
 
 Store the feasible incumbent outside CP-SAT. Accept only validated FEASIBLE/OPTIMAL
@@ -70,8 +75,7 @@ checked arithmetic and verified equivalence to the kernel's addition/rounding an
 `fits` tolerance on this instance. Exact scaling of double values alone is
 insufficient. When equivalence is uncertain, omit that row from the relaxation and
 keep its exact engine-oracle check; do not round away feasible plans. Do not claim
-a global gap from an incomplete pool or an optimistic
-row relaxation. Sweep deterministic budget 0.1/0.5/2 and plans 16/32/128 separately;
+a global gap from an incomplete pool or an optimistic row relaxation. Sweep deterministic budget 0.1/0.5/2 and plans 16/32/128 separately;
 report geometry-search gain separately from host ranking and window information.
 [Solver contract](https://developers.google.com/optimization/cp/cp_solver),
 [pinned parameters](https://raw.githubusercontent.com/google/or-tools/v9.15/ortools/sat/sat_parameters.proto).

@@ -12,6 +12,12 @@ Qhat(a) = mean over M common scenarios of
           admitted future atomic units during H continuation steps
 ```
 
+The first profile executes all candidates and scenarios sequentially with one
+worker. Parallel execution is optional future optimization, with private trial
+state per worker; rollout does not require it. Only scheduler/accounting code is
+simulated: pod applications, real containers, RPC and business lifecycle effects
+are never executed by these continuations.
+
 Continuation uses the existing FitCount. Equal-unit admission is the initial
 explicit surrogate; it is not a scalar optimum of CPU, RAM and storage utilization.
 Publish logical resource vectors and class refusals, and select configurations by

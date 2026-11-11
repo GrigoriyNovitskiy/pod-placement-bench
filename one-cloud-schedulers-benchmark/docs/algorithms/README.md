@@ -9,7 +9,7 @@ selected empirically on the ten clouds. Utilization takes priority over latency.
 | [Bulk fitcount](bulk-fitcount.md) | Up to 100 announced replicas of one service; frozen-order greedy |
 | [Rollout](rollout.md) | Strict online B=1; sampled mixed-demand continuation |
 | [CP-SAT/search and SMT](cp-sat-search.md) | Alternative geometry for B=1; joint optimization only in declared windows |
-| [Dynamic programming](dynamic-programming.md) | Exact selection of separable bulk options |
+| [Dynamic programming](dynamic-programming.md) | Separable bulk options; optional 32-unit/64-host local hybrid |
 | [DCM](dcm.md) | SQL-generated encoding experiment, using a matching direct-CP control |
 | [Min-cost flow](min-cost-flow.md) | Certified one-replica-per-host bulk with laminar domain limits |
 
@@ -31,10 +31,18 @@ declared prior. Bulk/windows see only explicitly announced requests. Commit a
 chosen subset in input order, with a valid state at every prefix. A request is
 atomic; its wrapper alone does not require all members to share a host.
 
+Trials execute scheduler and accounting logic only. They do not run pod application
+code, start/stop containers or shards, send minion/provisioning RPC, or invoke real
+business lifecycle effects. Backtracking changes only unpublished tentative plans.
+Already committed placements are constants; search never undoes their commit. In
+production integration, publish the chosen placement once before normal lifecycle
+processing. The benchmark itself executes only a resource/state model.
+
 The minimal shared prerequisites are an engine-owned isolated trial state and
 separation of fitcount selection from commit. Reuse the ledger, counters and
 validation code; do not create a second authoritative validator or physical
-accounting implementation, or expose mutable debit arrays. Trials isolate placements, incoming links, readiness, domain counters,
+accounting implementation, or expose mutable debit arrays. Trials isolate
+placements, incoming links, readiness, domain counters,
 revisions, callbacks, RNG and caches. `GreedyPlanner.plan` calls `canPlace` for the
 pending request: it is neither a physical-only forecast oracle nor a complete
 candidate generator for later dependent units. These capabilities need actual
@@ -88,13 +96,16 @@ modern 9.15. No solver dependency is added by these plans.
 
 ## Implemented inventory
 
-Checked on 2026-11-10: two production-source subclasses of `SchedulingAlgorithm`
-are present and registered by the CLI:
+Checked on 2026-11-11: the CLI exposes five implemented modes backed by three
+`SchedulingAlgorithm` classes:
 
-- [FitCount](../../src/main/java/one/cloud/benchmark/algorithms/fitcount/FitCount.java):
-  `--algorithm fitcount`.
-- [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java):
-  `--algorithm geometric-best-fit`; see its [specification](../geometric-best-fit/README.md).
+| CLI mode | Implementation |
+| --- | --- |
+| `fitcount` | [FitCount](../../src/main/java/one/cloud/benchmark/algorithms/fitcount/FitCount.java), lexicographic selection |
+| `mean-fitcount` | The same class, `FitCount.weighted` |
+| `geometric-best-fit` | [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java); [specification](../geometric-best-fit/README.md) |
+| `fgd` | [Fgd](../../src/main/java/one/cloud/benchmark/algorithms/fgd/Fgd.java), GPU fragmentation |
+| `cpu-ram-fgd` | The same class, `Fgd.cpuRam` |
 
 The dataset runner currently calls algorithms with B=1. `GreedyPlanner` is a
 geometry helper; the runner and engine are infrastructure. All six documents

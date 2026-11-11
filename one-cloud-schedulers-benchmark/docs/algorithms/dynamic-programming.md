@@ -38,6 +38,55 @@ predecessor counts. Recover host counts, reconstruct concrete geometry in stable
 order and validate the original-order prefix replay. Keep the external sequential
 incumbent and prefer it unless the declared objective improves.
 
+## Optional hybrid: local DP over tentative placements
+
+Host count contributes linearly to this count-DP; N squared, catalogue length and
+physical option generation are the other costs. With 10,000 hosts and N=100,
+there can be roughly 50 million count transitions before vector work. For strict
+B=1, N=1 nearly degenerates to an ordinary host scan. The hybrid below applies
+only to an explicitly announced bulk, never to unseen future real requests.
+
+1. Build a feasible full-bulk tentative incumbent. All previously committed pod
+   and shard placements remain fixed throughout the search.
+2. Select at most 32 pending units for this pass. If there are declines, take up
+   to 16 in original order, then fill with tentative assigned units on their
+   eligible hosts/domains as potential blockers. Otherwise take assigned units
+   in original order. Rotate the starting position on the second pass.
+3. Preserve the actual assignments of every other unit as reservations in the
+   search overlay. This is not `Engine.place` of later requests before earlier
+   ones. The local base is the old committed state plus these reservations, each
+   counted once; remove the movable units' old tentative reservations from it.
+4. Include every incumbent host and actual NUMA/device plan of the movable units,
+   plus required pins and deterministic diverse alternatives, up to 64 hosts.
+   Select alternatives in stable seeded order with domain/resource-class coverage.
+   If mandatory hosts exceed the limit, retain the incumbent and report fallback.
+   Do not require a retained incumbent plan to be rediscovered by GreedyPlanner.
+   Its geometry is an extra mandatory option beyond the one generated trajectory.
+5. Recheck the decomposition gate relative to this boundary. Build local options
+   using residual physical budgets and group/domain caps. Keep the original
+   bulk-entry catalogue frequencies and scarcity order; do not resort or renormalize
+   them for the smaller area. Run the same count/tree DP on movable units only.
+6. Restore the complete batch and compare it with the full incumbent: maximum
+   admitted units, then the original frozen lexicographic loss. Prefer the incumbent
+   on a tie. Check every original-order prefix before accepting a replacement.
+   Publish the final winner only after the search; individual requests still commit
+   in input order. No committed business placement is rolled back.
+
+| Hybrid parameter | Initial value |
+| --- | --- |
+| Movable pending units / candidate hosts | 32 / 64 |
+| Passes | At most 2 |
+| Total work across both passes | 100,000,000 cost-component operations |
+| Total optimization workspace | 64 MiB |
+
+The two passes share the limits; they do not each get a fresh full budget. Fixed
+outside reservations and their constraints remain visible during both passes.
+For 64 hosts and 32 units, the count stage has roughly 34,000 transitions before
+catalogue work, excluding global planning and incumbent construction. This is a
+work estimate, not measured scheduler speed. The optimum is local to the selected
+area/options; preservation of the current objective is not future-trace dominance.
+Crossing caps or nonseparable dependencies still select search/fallback.
+
 ## Starting configuration
 
 | Parameter | Value |

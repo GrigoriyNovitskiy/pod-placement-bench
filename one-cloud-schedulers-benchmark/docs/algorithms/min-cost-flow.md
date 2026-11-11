@@ -37,6 +37,46 @@ for fixed F. Set a source-side capacity N. No huge penalty or floating-point
 scalarization is needed to prioritize admission. Reconstruct assignments for F
 actual request IDs and verify input-order prefix replay before canonical commit.
 
+## Explicit edge costs and an optional static-eligibility profile
+
+The formula above is the initial `physical-weighted` profile. It preserves the
+weighted physical-count objective; it is not automatically aware of future pins
+or filters. Put the placement cost on the source-to-host edge. Structural topology
+edges have cost zero and encode hard residual limits as capacities. Exclude an
+invalid host edge instead of assigning a finite violation penalty.
+
+A separate experimental profile, `eligibility-aware-static`, uses scoring classes
+q distinguished by physical shape, member candidate masks/pins and a normalized
+relative constraint stencil. It reuses count-only physical cache rows:
+
+```text
+E_static[q,h] = 1 when all member masks/pins permit this single-host placement
+c_static[h] = sum_q weight[q] * E_static[q,h] *
+              (F_shape(q)(S_h) - F_shape(q)(S_h after the chosen plan))
+```
+
+Class weights come from the original declared catalogue entries before physical
+shapes are merged. Do not multiply them again by a merged physical sample's
+frequency. `E_static` includes immutable masks/pins only; dynamic domain counts,
+readiness and inter-request dependencies do not become static just because their
+stencil appears in a key. Actual placements retain all engine checks. A full
+state-dependent forecast needs a different oracle/profile and cache validity rules.
+
+For example, A and B each have 4 free CPU. The current request needs 1 CPU and
+permits either host. Two future classes have weight 1: t needs 4 CPU pinned to A;
+f needs 1 CPU on either host. Physical scoring charges 2 on A and 2 on B. The static
+profile charges 2 on A (one t opportunity and one f) and 1 on B (only f). It selects
+B. This demonstrates the meaning of the correction, not measured cloud-level gain
+or exact joint future capacity.
+
+Both profiles freeze one-step edge costs for this solve. More general
+`c(a)=V(S)-V(S+a)`, LP-derived prices or repricing between tentative rounds are
+future scoring variants. A global V is generally nonadditive, so summing its
+initial marginals for 100 placements is a linear approximation. All such rounds
+remain tentative until final validation/commit. Flow optimality concerns its
+fixed network and costs. Report profile name, class/prior digest and original
+integer class weights alongside the existing parameters.
+
 ## Starting configuration
 
 | Parameter | Value |

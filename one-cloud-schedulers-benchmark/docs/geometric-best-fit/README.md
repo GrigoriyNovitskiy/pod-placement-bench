@@ -1,7 +1,14 @@
 # Geometric best-fit
 
-Implement normalized residual L2 squared first. These are recommended starting
-parameters, not measured optima; improvement over fitcount remains to be tested.
+Status: implemented in the standalone benchmark as
+[`GeometricBestFit`](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java),
+selected by `--algorithm geometric-best-fit`. This does not install or replace a
+production one-cloud scheduler. The algorithm uses normalized residual L2 squared;
+its fixed settings are not measured optima or a guarantee of better utilization.
+
+In one-cloud terminology, a host is a minion's machine; a candidate includes its
+NUMA placement and concrete devices for the pod's regular shards. A shard is a
+storage volume, and stripe layout is part of its physical allocation.
 This adapts the norm-based approach in [vector bin packing](https://www.microsoft.com/en-us/research/wp-content/uploads/2011/01/VBPackingESA11.pdf)
 to our heterogeneous, constrained placements.
 
@@ -17,10 +24,10 @@ G(p)   = sum over nonempty families f of mean over b in A_f(p) of x_b(p)^2
 
 `R` is current remaining supply; `C` is initial full usable capacity, including
 normalized storage views. Precompute reciprocal capacities once. Scratch
-`PlacementCapacity.load` loads current `R`, not initial `C`; raw host `alloc` is
+`CapacityLedger.load` loads current `R`, not initial `C`; raw host `alloc` is
 also insufficient for storage. Sum, rather than average, the family contributions.
 
-Use actual `PlacementCapacity.Debit` entries, aggregated per cell across the whole
+Use actual `CapacityLedger.Debit` entries, aggregated per cell across the whole
 atomic request. Do not infer consumption from manifest allocation profiles.
 Group positive entries as follows; numbers are protobuf `ResourceType` values:
 
@@ -47,27 +54,42 @@ zero. Family grouping and averaging are heuristics:
 NUMA/stripe cell counts affect the score; original VBP guarantees do not transfer.
 Unused GPU/NVMe capacity receives no protection from this score.
 
-## Implementation
+## Implemented execution path
 
-1. Add `GeometricBestFitScheduler extends PlacementAlgorithm` in
-   `one.cloud.schedulers`; implement the single-request overload.
-2. Enumerate hosts in ID order and each `PlacementPlanner.numaNodes(host)` in its
-   existing order. Use `plan(request, host, numa)` for complete atomic placements.
-   Keep the same planner and hard-constraint validation as fitcount.
-3. Add one package-private scoring helper inside `PlacementCapacity`. Reuse
-   host-local scratch and `prepare` with a reusable `Debit`; read actual entries
-   separately from projection adjustments. Reuse allocator geometry for dedicated
-   CPU, layouts, stripes, metadata, whole disks and IOPS. Never mutate canonical
-   state, revisions or callbacks while scoring, or copy the cloud per candidate.
-4. Retain the lowest-score owned plan. Break exact ties by seeded reservoir
-   sampling; use the run seed, with no floating-point tie epsilon.
-5. Call `context.place(request, bestPlans)` once, or leave the unit unplaced.
-   Read fresh supply for each request; removals need no scorer cache updates.
+1. `Engine.schedule` announces a `Request` containing the pod and any jointly
+   created regular shards. Its member resource IDs refer to immutable allocation
+   and constraint profiles. The engine supplies current remaining resource budgets
+   and placement/group/domain state, rather than instantaneous CPU utilization.
+2. `GeometricBestFit extends SchedulingAlgorithm` enumerates hosts in ID order and
+   each `GreedyPlanner.numaNodes(host)` in its existing order. Zero denotes an
+   unbound candidate; it cannot bypass NUMA-aware demand on a minion with NUMA.
+3. `GreedyPlanner.plan(request, host, numa)` checks candidate masks/pins, loads
+   host-local scratch supply, and greedily constructs one complete same-host plan.
+   It accounts for dedicated CPU conversion, host/NUMA resources, layouts, stripes,
+   metadata, whole disks, spindles, IOPS and device/media exclusions. `canPlace`
+   checks combined hard limits and dependencies. A failed greedy plan is not a
+   proof that every assignment on that minion is infeasible.
+4. `GreedyPlanner.normalizedResidualL2Scorer()` delegates to the shared
+   `CapacityLedger` helper. It uses `prepare` with reusable scratch/debit, then
+   computes the score above from actual positive entries. Initial full capacities
+   are captured once; current free capacity is loaded for each candidate. Canonical
+   placements, revisions and notifications do not change while scoring.
+5. Retain the lowest-score owned plan. Exact ties use seeded reservoir sampling,
+   without a floating-point tie epsilon. Call `context.place(request, bestPlans)`
+   once if a winner exists; otherwise leave the request unplaced. The engine
+   validates and commits the complete unit, then invokes its notifications.
 
-Defaults: exponent **2**, every family weight **1**, every host/NUMA anchor,
-no candidate cutoff, no migration and no periodic model update. The existing
-array overload preserves request order. Planner failure is not proof of
-infeasibility. Stream candidates and retain only the winner.
+The fixed score uses exponent **2** and every family weight **1**, all host/NUMA
+anchors, no cutoff, no migration and no periodic update. Other NUMA components and
+device choices within an anchor remain greedy. Stream candidates and retain only
+the winner. Removals need no score-cache updates because current supply is reloaded.
+
+GPU feasibility can include individual devices and shares when the device model
+is enabled. This L2 score still uses aggregate NVIDIA/Intel budget entries 11/17;
+it does not score per-GPU fragmentation. All candidate construction/scoring is
+scheduler arithmetic: no application, RPC or real pod/shard lifecycle runs while
+trying a candidate. Only the chosen model placement is committed in the benchmark;
+production lifecycle integration would follow that decision boundary.
 
 ## Select parameters against fitcount
 
@@ -77,17 +99,19 @@ create/delete lifetimes; the existing logs are synthetic, empty-start inputs.
 Fix delete IDs before replay; deleting a declined unit is a scenario no-op.
 Do not use observed target hosts or future trace events as scheduling hints.
 
-First sweep only three variants: family mean `x` (L1), family mean `x^2` (the
-default), and family max `x` (L-infinity); always sum family contributions and
-keep weights fixed. Select on three clouds, freeze the choice, then evaluate
+Only L2 squared is currently implemented; exponent/weights are not runtime
+configuration options. A future norm sweep can compare family mean `x` (L1),
+family mean `x^2` and family max `x` (L-infinity), summing family contributions
+with fixed weights. Select on three clouds, freeze the choice, then evaluate
 seven held-out clouds with at least three seeds.
 
 Report admitted units/resources, p50/p95/p99 of full `schedule` including planning,
 validation, commit and updates, memory and planner calls. Report initialization
 separately. Diagnose fragmentation with remaining greedy physical fit counts,
-using a common cap and declared probe catalogue outside operation timing. Show per-cloud results
-and a macro-average. A winner must improve quality and/or time without worsening
-the other; otherwise retain the Pareto trade-off. No such comparison has run yet.
+using a common cap and declared probe catalogue outside operation timing. Show
+per-cloud results and a macro-average. Utilization is the primary selection goal;
+report the time/quality trade-off separately. Local geometric score alone does
+not establish better admission or packing than fitcount.
 
 Scarcity pricing is a separate challenger: identical global prices and identical
 debits cannot distinguish hosts. [CvxCluster](https://arxiv.org/html/2605.01614v1)
