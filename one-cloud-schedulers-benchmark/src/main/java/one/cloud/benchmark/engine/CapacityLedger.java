@@ -226,6 +226,17 @@ final class CapacityLedger {
         return fragmentationDeltaScorer(context, hostInventory, host -> fragmentation.amount(this, host));
     }
 
+    ToDoubleFunction<Assignment[]> cpuFragmentationScorer(SchedulingContext context, int[][] hostInventory,
+            int[][] numaNodes, Request[] catalogue) {
+        double maxCpu = 0;
+        for (int host = 1; host <= model.hostCount; host++) {
+            maxCpu = Math.max(maxCpu, supply(host, VCORES_VALUE));
+            maxCpu = Math.max(maxCpu, supply(host, NONPROD_VCORES_VALUE));
+        }
+        final var fragmentation = new CpuFragmentation(model, numaNodes, catalogue, maxCpu);
+        return fragmentationDeltaScorer(context, hostInventory, host -> fragmentation.amount(this, host));
+    }
+
     private ToDoubleFunction<Assignment[]> fragmentationDeltaScorer(SchedulingContext context, int[][] hostInventory,
             IntToDoubleFunction potential) {
         final var debit = new Debit();
@@ -782,7 +793,7 @@ final class CapacityLedger {
                 || dimension == HW_CORES_VALUE || dimension == HW_LAN_QUEUES_VALUE;
     }
 
-    private static boolean fits(double demand, double limit) {
+    static boolean fits(double demand, double limit) {
         return Double.isFinite(demand) && demand <= limit + Math.ulp(limit) * 4;
     }
 

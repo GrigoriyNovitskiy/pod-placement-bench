@@ -47,8 +47,8 @@ For an explicit short smoke run:
   --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
 ```
 
-Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`
-and `cpu-ram-fgd`.
+Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`,
+`cpu-ram-fgd` and `cpu-fgd`.
 `--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
 all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
 reported sample. `--max-operations` truncates normalized atomic events, without
@@ -115,6 +115,10 @@ source references and the bounded search used for compound atomic requests.
 CPU/RAM FGD (`--algorithm cpu-ram-fgd`) minimizes the change in CPU and memory
 left unmatched by the proportions of the catalogue profiles. It scores whole-host
 balances and works with either GPU model. See [FGD.md](FGD.md#cpu-and-ram-variant).
+
+CPU FGD (`--algorithm cpu-fgd`) scores idle CPU in pools where the catalogue
+profiles cannot fit. It accounts for NUMA and uses the same placement constraints
+as the other algorithms. See [FGD.md](FGD.md#cpu-only-variant).
 
 The CLI writes one JSON result on stdout; errors go to stderr with a nonzero exit.
 It reports source/scenario identity, limits, admissions and declines, schedule and

@@ -10,23 +10,33 @@ import one.cloud.benchmark.model.GpuTopology;
 import one.cloud.benchmark.model.Request;
 
 public final class Fgd extends SchedulingAlgorithm {
+    private enum Mode { GPU, CPU_RAM, CPU }
+
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
     private final boolean refineGpus;
 
     public Fgd(SchedulingContext context, long seed, Request[] catalogue) {
-        this(context, seed, catalogue, true);
+        this(context, seed, catalogue, Mode.GPU);
     }
 
     public static Fgd cpuRam(SchedulingContext context, long seed, Request[] catalogue) {
-        return new Fgd(context, seed, catalogue, false);
+        return new Fgd(context, seed, catalogue, Mode.CPU_RAM);
     }
 
-    private Fgd(SchedulingContext context, long seed, Request[] catalogue, boolean refineGpus) {
+    public static Fgd cpu(SchedulingContext context, long seed, Request[] catalogue) {
+        return new Fgd(context, seed, catalogue, Mode.CPU);
+    }
+
+    private Fgd(SchedulingContext context, long seed, Request[] catalogue, Mode mode) {
         super(context, seed);
         planner = new GreedyPlanner(context);
-        this.refineGpus = refineGpus;
-        scorer = refineGpus ? planner.gpuFragmentationScorer(catalogue) : planner.cpuRamFragmentationScorer(catalogue);
+        refineGpus = mode == Mode.GPU;
+        scorer = switch (mode) {
+            case GPU -> planner.gpuFragmentationScorer(catalogue);
+            case CPU_RAM -> planner.cpuRamFragmentationScorer(catalogue);
+            case CPU -> planner.cpuFragmentationScorer(catalogue);
+        };
     }
 
     @Override

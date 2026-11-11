@@ -100,3 +100,28 @@ constraints still apply through the common planner and validator. The mode works
 in both GPU models and uses the planner's GPU assignment. The copy cap applies
 to shared quality probes. Each score traverses the distinct profiles twice and
 needs no host-by-profile cache or repeated trial copies.
+
+## CPU-only variant
+
+`--algorithm cpu-fgd` uses a threshold per catalogue profile. Each pod or shard
+contributes its CPU requirements, with repeated profiles weighted by frequency.
+VCORES and NONPROD_VCORES are separate scalar pools. Dedicated cores are converted
+to effective VCORES using the candidate host's CPU power and also checked against
+the separate HW_CORES budget. The score measures vCPU capacity in the requested
+pools. HW_CORES constrain usability without contributing additional vCPU capacity.
+
+If a profile fails a CPU budget at host level, all free vCPU in its requested
+pools is stranded. On a NUMA host, a node contributes usable capacity only if
+the entire CPU profile fits that node. Sum those eligible nodes' free capacity
+within each pool, cap it at the corresponding host balance and subtract it from
+that balance to get stranded vCPU. A host without NUMA uses one scalar pool per
+CPU type. For example, 0.6 vCPU can come from a single pool with 0.6 free, while
+three NUMA nodes with 0.2 vCPU free each cannot satisfy that request.
+
+Normalize each stranded pool by the same maximum declared host CPU pool and sum
+the frequency-weighted values. Minimize the change after minus before the actual
+tentative placement. A pool that can admit the profile contributes its whole
+eligible balance, irrespective of how many copies could fit. Equal scores use
+seeded tie-breaking, including when all profiles fit every pool before and after.
+RAM, GPU, storage and other placement constraints still apply through the shared
+planner. Both GPU accounting modes are supported.

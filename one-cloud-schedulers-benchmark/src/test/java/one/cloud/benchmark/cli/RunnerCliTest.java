@@ -122,7 +122,8 @@ class RunnerCliTest {
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)};
         writeTrace(temporary, rows, 2, 3, 4, 5, -5, -4, -3, -2);
-        for (final var algorithm : new String[]{"fitcount", "mean-fitcount", "geometric-best-fit", "cpu-ram-fgd"}) {
+        final var algorithms = new String[]{"fitcount", "mean-fitcount", "geometric-best-fit", "cpu-ram-fgd", "cpu-fgd"};
+        for (final var algorithm : algorithms) {
             final var output = new ByteArrayOutputStream();
             final var errors = new ByteArrayOutputStream();
             assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm));

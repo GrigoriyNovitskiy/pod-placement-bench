@@ -87,6 +87,11 @@ public final class GreedyPlanner {
         return capacity.cpuRamFragmentationScorer(context, inventory, catalogue);
     }
 
+    /** Scores the change in stranded CPU pools on the planner's owner thread. */
+    public ToDoubleFunction<Assignment[]> cpuFragmentationScorer(Request[] catalogue) {
+        return capacity.cpuFragmentationScorer(context, inventory, nodes, catalogue);
+    }
+
     public long planCalls() {
         return planCalls;
     }

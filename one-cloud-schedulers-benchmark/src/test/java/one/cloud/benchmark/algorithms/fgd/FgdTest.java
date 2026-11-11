@@ -2,6 +2,7 @@ package one.cloud.benchmark.algorithms.fgd;
 
 import org.junit.jupiter.api.Test;
 
+import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
@@ -25,6 +26,91 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FgdTest {
+    @Test
+    void cpuFgdUsesTheSmallerNumaPoolToKeepLargerRequestsFeasible() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1}, 8), alloc(2, new int[]{1}, 6), alloc(3, new int[]{1}, 2),
+                alloc(4, new int[]{1}, 5),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 3, 4), resource(5, 4, 4)));
+        final var request = new Request(4);
+        try (final var algorithm = Fgd.cpu(state, 0, new Request[]{new Request(5)})) {
+            state.schedule(algorithm, request);
+            assertEquals(3, state.placement(4).numa());
+            assertEquals(6, state.available(2, 1));
+            assertEquals(0, state.available(3, 1));
+            state.remove(request);
+            state.schedule(algorithm, request);
+            assertEquals(3, state.placement(4).numa());
+        }
+    }
+
+    @Test
+    void fractionalCpuMustFitWithinOneNumaPool() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1}, .6), alloc(2, new int[]{1}, .2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.NUMA).setParent(1).setOrdinal(3)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.NUMA).setParent(2).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(6).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3),
+                resource(5, 2, 4), resource(6, 1, 5), resource(7, 1, 6)));
+        final var request = new Request(7);
+        try (final var algorithm = Fgd.cpu(state, 0, new Request[]{request})) {
+            state.schedule(algorithm, request);
+            assertEquals(6, state.placement(7).numa());
+            assertEquals(.6, state.available(1, 1));
+            assertEquals(0, state.available(6, 1));
+        }
+    }
+
+    @Test
+    void cpuProfilesCheckDedicatedCoresAndNonprodOnTheSameNumaNode() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1, 12, 15}, 8, 8, 2), alloc(2, new int[]{1, 12}, 4, 4),
+                alloc(3, new int[]{1, 12, 15}, 4, 4, 2), alloc(4, new int[]{12}, 1),
+                alloc(5, new int[]{1, 12, 15}, 5, 4, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST).setCpuPower(2)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 4, 4), resource(5, 5, 4)));
+        final var planner = new GreedyPlanner(state);
+        final var scorer = planner.cpuFragmentationScorer(new Request[]{new Request(5)});
+        final var first = new Assignment(4, 1, 2, new int[]{0}, new int[0]);
+        final var second = new Assignment(4, 1, 3, new int[]{0}, new int[0]);
+        assertEquals(-1.0 / 8, scorer.applyAsDouble(new Assignment[]{first}), 1e-12);
+        assertEquals(7.0 / 8, scorer.applyAsDouble(new Assignment[]{second}), 1e-12);
+        assertEquals(8, state.available(1, 12));
+    }
+
+    @Test
+    void cpuFgdCountsStrandedPoolsInsteadOfWholeCopies() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 3), alloc(2, new int[]{1}, 6),
+                alloc(3, new int[]{1}, 1), alloc(4, new int[]{1}, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 2), resource(5, 1, 2));
+        final var request = new Request(3);
+        final var catalogue = new Request[]{new Request(4), new Request(5)};
+        final var fitCountState = new Engine(model);
+        try (final var algorithm = FitCount.weighted(fitCountState, 0, catalogue, 10, 256)) {
+            fitCountState.schedule(algorithm, request);
+            assertEquals(1, fitCountState.placement(3).host());
+        }
+        final var cpuState = new Engine(model);
+        try (final var algorithm = Fgd.cpu(cpuState, 0, catalogue)) {
+            cpuState.schedule(algorithm, request);
+            assertEquals(2, cpuState.placement(3).host());
+        }
+    }
+
     @Test
     void cpuRamScoreDistinguishesHostsWithIdenticalWholeCopyCounts() throws Exception {
         final var state = new Engine(model(

@@ -21,7 +21,7 @@ import one.cloud.benchmark.runner.Scenario;
 
 public final class RunnerCli {
     private static final String USAGE = """
-            Usage: pod-placement-bench --dataset DIR --algorithm fitcount|mean-fitcount|geometric-best-fit|fgd|cpu-ram-fgd [options]
+            Usage: pod-placement-bench --dataset DIR --algorithm fitcount|mean-fitcount|geometric-best-fit|fgd|cpu-ram-fgd|cpu-fgd [options]
               DIR contains snapshot.pb and operations.pb.
               --seed N              Algorithm seed (default: 42)
               --fit-cap N           Copy cap for both fit-count variants and quality probes (default: 10)
@@ -78,6 +78,7 @@ public final class RunnerCli {
                 case "geometric-best-fit" -> (context, seed, catalogue) -> new GeometricBestFit(context, seed);
                 case "fgd" -> Fgd::new;
                 case "cpu-ram-fgd" -> Fgd::cpuRam;
+                case "cpu-fgd" -> Fgd::cpu;
                 default -> throw new IllegalArgumentException("Unknown algorithm: " + options.algorithm);
             };
             final var result = DatasetRunner.run(scenario, new DatasetRunner.Options(options.seed,
@@ -137,7 +138,8 @@ public final class RunnerCli {
             throw new IllegalArgumentException("--dataset and --algorithm are required");
         }
         if (!algorithm.equals("fitcount") && !algorithm.equals("mean-fitcount")
-                && !algorithm.equals("geometric-best-fit") && !algorithm.equals("fgd") && !algorithm.equals("cpu-ram-fgd")) {
+                && !algorithm.equals("geometric-best-fit") && !algorithm.equals("fgd")
+                && !algorithm.equals("cpu-ram-fgd") && !algorithm.equals("cpu-fgd")) {
             throw new IllegalArgumentException("Unknown algorithm: " + algorithm);
         }
         return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit, gpuMode);
