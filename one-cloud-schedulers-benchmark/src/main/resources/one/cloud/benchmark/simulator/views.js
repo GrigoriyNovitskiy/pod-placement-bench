@@ -3,7 +3,7 @@ export const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, chara
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
 })[character]);
 
-const colors = ["#7661dc", "#369e9e", "#d39a4c", "#678fd0", "#b478aa", "#709d63"];
+const colors = Array.from({ length: 6 }, (_, index) => `var(--algorithm-${index + 1})`);
 const labels = {
     VCORES: "CPU", MEM_MIB: "RAM", LAN_OUT_MBIT: "Network out", LAN_IN_MBIT: "Network in",
     NVME_GIB: "NVMe", NVME_SPINDLES: "NVMe spindles", SSD_GIB: "SSD", SSD_SPINDLES: "SSD spindles",
@@ -33,11 +33,11 @@ function percentage(used, total) {
 }
 
 function color(resource) {
-    if (resource.name.includes("GPU")) return "#d3a45d";
-    if (resource.name === "MEM_MIB") return "#6598da";
-    if (/SSD|HDD|NVME|DEVICE/.test(resource.name)) return "#39a58d";
-    if (resource.name.includes("LAN")) return "#7f9ac0";
-    return "#7661dc";
+    if (resource.name.includes("GPU")) return "var(--resource-gpu)";
+    if (resource.name === "MEM_MIB") return "var(--resource-ram)";
+    if (/SSD|HDD|NVME|DEVICE/.test(resource.name)) return "var(--resource-storage)";
+    if (resource.name.includes("LAN")) return "var(--resource-network)";
+    return "var(--resource-cpu)";
 }
 
 function bar(resource) {
@@ -88,11 +88,12 @@ export function renderState(state, view) {
         </span>`).join("");
     $("clusters").style.gridTemplateColumns = `repeat(${Math.min(lanes.length, 2)}, minmax(0, 1fr))`;
     $("clusters").innerHTML = lanes.map((lane, index) => cluster(lane, index, names[index], view)).join("");
+    layoutMaps(view);
     applyMapTransform(view);
 
     const totalHosts = lanes[0]?.totalHosts || 0;
     const shown = lanes[0]?.hosts.length || 0;
-    $("hosts-page").textContent = `${shown ? view.hostOffset + 1 : 0}–${view.hostOffset + shown} / ${totalHosts}`;
+    $("hosts-page").textContent = `Хосты ${shown ? view.hostOffset + 1 : 0}–${view.hostOffset + shown} из ${totalHosts}`;
     $("hosts-prev").disabled = view.hostOffset === 0;
     $("hosts-next").disabled = view.hostOffset + shown >= totalHosts;
     renderTables(state, names);
@@ -132,6 +133,9 @@ function cluster(lane, index, name, view) {
         [counters.activePods, "активных pod"], [counters.activeShards, "активных shard"]
     ];
     const last = lane.lastEvent?.kind ? lane.lastEvent : null;
+    const placedHost = last?.status === "placed"
+        ? last.members.find(member => member.assignment)?.assignment.host : null;
+    const placedHostName = lane.hosts.find(host => host.id === placedHost)?.name || `#${placedHost}`;
     const outcomes = { placed: "Размещён", rejected: "Не размещён", removed: "Удалён", skipped: "Удаление: no-op" };
     const outcome = last ? `${outcomes[last.status] || last.status} · ${last.name}` : "Ожидает первого события";
     const descriptor = view.algorithms.find(item => item.id === lane.algorithm.id);
@@ -148,24 +152,24 @@ function cluster(lane, index, name, view) {
             <div class="lane-stat"><b>${number(count)}</b><span>${title}</span></div>`).join("")}</div>
         <div class="map" data-map="${index}"><div class="map-stage">
             <svg class="map-links" aria-hidden="true"></svg>
-            ${lane.hosts.map((host, position) => node(host, index, position, lane, view)).join("")}
+            ${lane.hosts.map(host => node(host, index, lane, view)).join("")}
         </div></div>
         <div class="lane-outcome ${last?.status === "rejected" ? "failure" : "success"}">
-            ${escapeHtml(outcome)} ${last ? `<span class="subtle">· ${number(last.durationMs)} мс</span>` : ""}
+            <span>${escapeHtml(outcome)}${placedHost ? ` → ${escapeHtml(placedHostName)}` : ""}
+                ${last ? `<span class="subtle">· ${number(last.durationMs)} мс</span>` : ""}</span>
+            ${placedHost ? `<button data-action="show-placement" data-lane="${index}">К размещению →</button>` : ""}
         </div>
     </article>`;
 }
 
-function node(host, laneIndex, position, lane, view) {
-    const coordinate = view.positions.get(host.id) || { x: 16 + position % 2 * 220, y: 20 + Math.floor(position / 2) * 208 };
+function node(host, laneIndex, lane, view) {
     const selected = view.selection?.lane === laneIndex && view.selection?.resource === host.id;
     const lastMembers = lane.lastEvent?.members || [];
     const highlighted = lastMembers.some(member => member.assignment?.host === host.id);
     const visibleResources = host.resources.filter(resource => ["VCORES", "MEM_MIB", "NVIDIA_GPUS", "INTEL_GPUS"]
         .includes(resource.name) && (resource.total > 0 || ["VCORES", "MEM_MIB"].includes(resource.name)));
     return `<article class="node ${selected ? "selected" : ""} ${highlighted ? "highlight" : ""}"
-            data-action="select-resource" data-lane="${laneIndex}" data-resource="${host.id}"
-            style="left:${coordinate.x}px;top:${coordinate.y}px">
+            data-action="select-resource" data-lane="${laneIndex}" data-resource="${host.id}">
         <div class="node-heading" data-drag-host="${host.id}"><span>▤</span><b>${escapeHtml(host.name)}</b>
             <span class="ready">● ${host.activeResources} active</span></div>
         <div class="node-resources">${visibleResources.map(resource => `
@@ -181,6 +185,26 @@ function node(host, laneIndex, position, lane, view) {
                 ? `<span class="empty-node">+${host.activeResources - host.members.length} · в инспекторе</span>` : ""}
         </div>
     </article>`;
+}
+
+export function layoutMaps(view) {
+    const maps = [...document.querySelectorAll(".map")];
+    if (!maps.length) return;
+
+    const width = Math.min(...maps.map(map => map.clientWidth));
+    const hostCount = Math.max(...maps.map(map => map.querySelectorAll(".node").length));
+    const columns = Math.max(1, Math.min(hostCount, Math.max(2, Math.ceil(width / 220))));
+
+    for (const map of maps) {
+        map.querySelectorAll(".node").forEach((node, index) => {
+            const coordinate = view.positions.get(Number(node.dataset.resource)) || {
+                x: 16 + index % columns * 220,
+                y: 20 + Math.floor(index / columns) * 208
+            };
+            node.style.left = `${coordinate.x}px`;
+            node.style.top = `${coordinate.y}px`;
+        });
+    }
 }
 
 function renderTables(state, names) {
@@ -267,6 +291,8 @@ export function renderInspector(detail, view) {
     let content = `<h3 class="object-title">${escapeHtml(detail.name)}</h3>
         <p class="hint">${escapeHtml(view.laneName)} · ID ${detail.id}</p>`;
     if (isInventory) {
+        if (isHost && view.config) content += `<button class="danger" style="margin-top:12px"
+            data-action="delete-host" data-resource="${detail.id}">Удалить хост</button>`;
         content += detail.resources.filter(resource => resource.total || resource.used || resource.capacityKnown === false)
             .map(resource => keyValue(label(resource.name), resource.capacityKnown === false
                 ? "Без лимита в модели" : `${amount(resource.used, resource.name)} / `

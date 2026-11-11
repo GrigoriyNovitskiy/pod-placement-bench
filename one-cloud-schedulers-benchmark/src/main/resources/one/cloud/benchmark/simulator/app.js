@@ -1,9 +1,9 @@
 import {
     $, escapeHtml, label, number, algorithmName, renderState, renderInspector,
-    renderEvent, renderProbes, applyMapTransform, drawLinks
+    renderEvent, renderProbes, applyMapTransform, drawLinks, layoutMaps
 } from "/views.js";
 
-const pageSize = 6;
+const pageSize = 12;
 const eventPageSize = 30;
 const mainResources = [
     ["VCORES", "vCPU"], ["MEM_MIB", "ГиБ"], ["SSD_GIB", "ГиБ"], ["HDD_GIB", "ГиБ"],
@@ -200,6 +200,7 @@ function openDialog(title, description, html, submitLabel, handler) {
     $("dialog-error").textContent = "";
     $("dialog-submit").textContent = submitLabel;
     $("dialog-submit").hidden = handler == null;
+    $("dialog-submit").classList.remove("danger");
     dialogHandler = handler;
     $("dialog").showModal();
 }
@@ -263,8 +264,38 @@ function hostDialog() {
             view.config = config;
             clearPresentation();
             await refresh();
+            fitMap();
             notify("Хост добавлен. Все алгоритмы начали сценарий заново.");
         });
+}
+
+function deleteHostDialog(hostId) {
+    if (!view.config) return;
+    const host = view.config.hosts[hostId - 1];
+    if (!host) return;
+
+    openDialog(`Удалить ${host.name}?`,
+        "Хост и его диски будут удалены из сценария. Текущие размещения сбросятся у всех алгоритмов.",
+        `<p style="margin-top:18px">Очередь запросов сохранится. Все алгоритмы начнут с первого события.</p>`,
+        "Удалить и начать сначала", async () => {
+            const config = structuredClone(view.config);
+            const references = config.requests.flatMap(request => request.members
+                .filter(member => member.pinnedHost === host.name || member.allowedHosts?.includes(host.name))
+                .map(member => `${request.name} / ${member.name}`));
+            if (references.length) {
+                throw new Error(`На хост ссылаются ограничения запросов: ${references.join(", ")}. `
+                    + "Сначала измените их в сценарии.");
+            }
+
+            config.hosts = config.hosts.filter(candidate => candidate.name !== host.name);
+            await post("/api/manual", { config, cursor: 0, algorithms: settings() });
+            view.config = config;
+            clearPresentation();
+            await refresh();
+            fitMap();
+            notify(`Хост ${host.name} удалён. Все алгоритмы начали сценарий заново.`);
+        });
+    $("dialog-submit").classList.add("danger");
 }
 
 function requestDialog() {
@@ -439,17 +470,40 @@ async function deleteUnit(requestIndex) {
 }
 
 function setZoom(zoom) {
-    view.zoom = Math.max(.2, Math.min(2, zoom));
+    view.zoom = Math.max(.1, Math.min(2, zoom));
     applyMapTransform(view);
     drawLinks(view.detail, view.selection);
 }
 
 function fitMap() {
-    const map = document.querySelector(".map");
-    if (!map) return;
-    const rows = Math.ceil((view.state.lanes[0]?.hosts.length || 1) / 2);
-    view.pan = { x: 0, y: 0 };
-    setZoom(Math.min(1, map.clientWidth / 456, map.clientHeight / (rows * 208 + 25)));
+    layoutMaps(view);
+    const maps = [...document.querySelectorAll(".map")];
+    const nodes = [...document.querySelectorAll(".map .node")];
+    if (!maps.length || !nodes.length) return;
+
+    const left = Math.min(...nodes.map(node => node.offsetLeft));
+    const top = Math.min(...nodes.map(node => node.offsetTop));
+    const right = Math.max(...nodes.map(node => node.offsetLeft + node.offsetWidth));
+    const bottom = Math.max(...nodes.map(node => node.offsetTop + node.offsetHeight));
+    const width = Math.min(...maps.map(map => map.clientWidth));
+    const height = Math.min(...maps.map(map => map.clientHeight));
+    const zoom = Math.max(.1, Math.min(1, width / (right - left + 32), height / (bottom - top + 32)));
+
+    view.pan = { x: (16 - left) * zoom, y: (16 - top) * zoom };
+    setZoom(zoom);
+}
+
+async function showPlacement(lane) {
+    const event = view.state.lanes[lane]?.lastEvent;
+    const assignment = event?.status === "placed"
+        ? event.members.find(member => member.assignment)?.assignment : null;
+    if (!assignment) return;
+
+    view.hostOffset = Math.floor((assignment.host - 1) / pageSize) * pageSize;
+    view.selection = { lane, resource: assignment.host };
+    view.event = null;
+    await refresh();
+    fitMap();
 }
 
 function bindMap() {
@@ -548,6 +602,13 @@ function bindControls() {
         if (!control) return;
         const lane = Number(control.dataset.lane);
         switch (control.dataset.action) {
+            case "delete-host":
+                deleteHostDialog(Number(control.dataset.resource));
+                break;
+            case "show-placement":
+                pause();
+                perform(() => showPlacement(lane));
+                break;
             case "select-resource":
                 inspect(lane, Number(control.dataset.resource)).catch(showError);
                 break;
