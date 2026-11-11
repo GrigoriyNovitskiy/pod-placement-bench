@@ -75,6 +75,46 @@ class RunnerCliTest {
     }
 
     @Test
+    void runsFgdWithDeviceAccountingAndRejectsAggregateMode() throws Exception {
+        writeTrace(temporary, new Record[]{
+                alloc(1, new int[]{11}, 3), alloc(2, new int[]{11}, .8), alloc(3, new int[]{11}, .6),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)},
+                2, 3, 4, 5, -5, -4, -3, -2);
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "fgd"));
+        final var json = output.toString(StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"algorithm\":\"fgd\""));
+        assertTrue(json.contains("one.cloud.benchmark.algorithms.fgd.Fgd"));
+        assertTrue(json.contains("\"gpu_model\":\"devices20\""));
+        assertTrue(json.contains("\"admitted_units\":3"));
+        assertTrue(json.contains("\"declined_units\":1"));
+        assertTrue(json.contains("\"committed_units\":3"));
+        assertTrue(json.contains("\"complete\":true"));
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        output.reset();
+        assertEquals(1, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "fgd",
+                "--gpu-model", "aggregate"));
+        assertEquals("", output.toString(StandardCharsets.UTF_8));
+        assertTrue(errors.toString(StandardCharsets.UTF_8).contains("devices20"));
+    }
+
+    @Test
+    void fgdSupportsAnEmptyScenarioAndCatalogue() throws Exception {
+        writeTrace(temporary, records());
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "fgd"));
+        final var json = output.toString(StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"processed_operations\":0"));
+        assertTrue(json.contains("\"catalogue_units\":0"));
+        assertTrue(json.contains("\"mean\":null"));
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
     void deviceModeRejectsGpuFragmentsThroughBothBuiltInAlgorithms() throws Exception {
         final var rows = new Record[]{
                 alloc(1, new int[]{11}, 3), alloc(2, new int[]{11}, .8), alloc(3, new int[]{11}, .6),

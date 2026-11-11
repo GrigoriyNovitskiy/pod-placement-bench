@@ -35,3 +35,7 @@ device. Select `--gpu-model aggregate` for legacy pooled GPU accounting. The dev
 model preserves fractional-request boundaries for every algorithm without changing
 the protobuf files; its assumptions and input validation are documented in the
 module README.
+
+Use `--algorithm fgd` for the GPU fragmentation gradient descent baseline. It uses
+the default device model and the declared workload catalogue; see
+[FGD](one-cloud-schedulers-benchmark/FGD.md) for the scoring rule and atomic-request adaptation.

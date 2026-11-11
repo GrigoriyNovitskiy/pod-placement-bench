@@ -77,6 +77,11 @@ public final class GreedyPlanner {
         return capacity.normalizedResidualL2Scorer(context, inventory);
     }
 
+    /** Scores the change in frequency-weighted GPU fragmentation shares; use only on its owner thread. */
+    public ToDoubleFunction<Assignment[]> gpuFragmentationScorer(Request[] catalogue) {
+        return capacity.gpuFragmentationScorer(context, inventory, catalogue);
+    }
+
     public long planCalls() {
         return planCalls;
     }

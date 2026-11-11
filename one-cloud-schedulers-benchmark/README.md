@@ -97,6 +97,14 @@ It shares planner geometry and hard constraints with fitcount and streams candid
 while retaining only the winner. The copy cap still controls common quality probes;
 the cache-row option only affects fitcount.
 
+FGD is available with `--algorithm fgd` and requires the `devices20` GPU model.
+It minimizes the frequency-weighted change in unusable GPU shares for the declared
+CPU/GPU workload, including the choice of a physical card for fractional requests.
+CPU-only clusters and empty catalogues use seeded tie-breaking. Its catalogue uses
+the same declared input as fitcount; the copy cap controls common quality probes,
+and the cache-row option has no effect on FGD. See [FGD.md](FGD.md) for its metric,
+source references and the bounded search used for compound atomic requests.
+
 The CLI writes one JSON result on stdout; errors go to stderr with a nonzero exit.
 It reports source/scenario identity, limits, admissions and declines, schedule and
 removal percentiles, sampled heap use, planner calls and a history checksum.
