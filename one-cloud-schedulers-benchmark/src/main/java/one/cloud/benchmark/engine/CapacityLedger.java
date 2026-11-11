@@ -6,6 +6,7 @@ import java.util.function.ToDoubleFunction;
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.GpuTopology;
+import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.AUTO_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.LINEAR_VALUE;
@@ -204,6 +205,39 @@ final class CapacityLedger {
                 }
             }
             return score;
+        };
+    }
+
+    ToDoubleFunction<Assignment[]> gpuFragmentationScorer(SchedulingContext context, int[][] hostInventory,
+            Request[] catalogue) {
+        final var fragmentation = new GpuFragmentation(model, catalogue);
+        final var debit = new Debit();
+        return plans -> {
+            if (plans.length == 0 || plans[0] == null) {
+                throw new IllegalArgumentException("A scored plan must be nonempty");
+            }
+            final int host = plans[0].host();
+            if (host <= 0 || host > model.hostCount) {
+                throw new IllegalArgumentException("Invalid scored host");
+            }
+            for (int index = 0; index < plans.length; index++) {
+                final var plan = plans[index];
+                if (plan == null || plan.host() != host) {
+                    throw new IllegalArgumentException("Scored assignments must share one host");
+                }
+                for (int previous = 0; previous < index; previous++) {
+                    if (plans[previous].resource() == plan.resource()) {
+                        throw new IllegalArgumentException("Scored resources must be distinct");
+                    }
+                }
+            }
+            load(context, hostInventory[host]);
+            final double before = fragmentation.amount(this, host);
+            if (prepare(plans, debit) == null) {
+                throw new IllegalArgumentException("Scored assignments exceed physical capacity");
+            }
+            allocate(debit);
+            return fragmentation.amount(this, host) - before;
         };
     }
 
