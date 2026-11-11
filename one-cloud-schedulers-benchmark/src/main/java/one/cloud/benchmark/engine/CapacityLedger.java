@@ -1,7 +1,9 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
+import java.util.function.DoubleBinaryOperator;
 import java.util.function.IntToDoubleFunction;
+import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
@@ -17,9 +19,12 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID5_VA
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID6_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.RAID10_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout.STRIPED_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.DEVICE_IOPS_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.HW_CORES_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.HW_LAN_QUEUES_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.INTEL_GPUS_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.MEM_MIB_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.NVIDIA_GPUS_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.NONPROD_VCORES_VALUE;
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
 
@@ -138,22 +143,29 @@ final class CapacityLedger {
     }
 
     ToDoubleFunction<Assignment[]> normalizedResidualL2Scorer(SchedulingContext context, int[][] hostInventory) {
-        final var initial = new CapacityLedger(model);
-        final var initialSlots = initial.slot;
-        final var factors = initial.capacity;
-        for (int offset = 0; offset < factors.length; offset++) {
-            final double full = factors[offset];
-            if (offset % stride == 20 && full == Double.MAX_VALUE) {
-                factors[offset] = Double.NaN;
-            } else if (full > 0) {
-                final double inverse = 1 / full;
-                // Negative factors retain tiny capacities whose reciprocal overflows.
-                factors[offset] = Double.isFinite(inverse) ? inverse : -full;
+        return resourceFamilyScorer(context, hostInventory, false, false, (remaining, total) -> {
+            final double fraction = remaining / total;
+            return fraction * fraction;
+        }, (before, after) -> {
+            double score = 0;
+            for (final double value : after) {
+                if (!Double.isNaN(value)) {
+                    score += value;
+                }
             }
-        }
+            return score;
+        });
+    }
+
+    ToDoubleFunction<Assignment[]> resourceFamilyScorer(SchedulingContext context, int[][] hostInventory,
+            boolean includeHostCpuRam, boolean compareBefore, DoubleBinaryOperator cellScore,
+            ToDoubleBiFunction<double[], double[]> combine) {
+        final var initial = new CapacityLedger(model);
+        final int[] initialSlots = initial.slot;
+        final double[] totals = initial.capacity;
         final var debit = new Debit();
-        final double[] sums = new double[IOPS_FAMILY + MEDIA_COUNT];
-        final int[] counts = new int[sums.length];
+        final int families = IOPS_FAMILY + MEDIA_COUNT + Math.max(0, model.dimensionCount - DEVICE_IOPS_VALUE);
+        final var scores = new FamilyScores(families, compareBefore, cellScore, combine);
         return plans -> {
             if (plans.length == 0 || plans[0] == null) {
                 throw new IllegalArgumentException("A scored plan must be nonempty");
@@ -177,36 +189,84 @@ final class CapacityLedger {
             if (prepare(plans, debit) == null) {
                 throw new IllegalArgumentException("Scored assignments exceed physical capacity");
             }
-            Arrays.fill(sums, 0);
-            Arrays.fill(counts, 0);
+            scores.reset();
             for (int index = 0; index < debit.size; index++) {
-                if (debit.amount[index] <= 0) {
-                    continue;
-                }
                 final int offset = debit.index[index];
                 final int resource = inventory[offset / stride];
                 final int dimension = offset % stride;
-                final double factor = factors[initialSlots[resource] * stride + dimension];
-                if (Double.isNaN(factor)) {
+                if ((includeHostCpuRam && resource == host && dimension <= MEM_MIB_VALUE)
+                        || (model.gpus != null && (dimension == NVIDIA_GPUS_VALUE || dimension == INTEL_GPUS_VALUE))) {
                     continue;
                 }
-                if (factor == 0) {
+                final double total = totals[initialSlots[resource] * stride + dimension];
+                if (dimension == DEVICE_IOPS_VALUE && total == Double.MAX_VALUE) {
+                    continue;
+                }
+                if (total == 0) {
                     throw new IllegalArgumentException("Positive debit against zero initial capacity");
                 }
-                final double remaining = Math.max(0, capacity[offset] - used[offset] - debit.amount[index]);
-                final double residual = factor > 0 ? remaining * factor : remaining / -factor;
-                final int family = family(resource, dimension);
-                sums[family] += residual * residual;
-                counts[family]++;
+                scores.add(family(resource, dimension), total, capacity[offset], debit.amount[index]);
             }
-            double score = 0;
-            for (int family = 0; family < sums.length; family++) {
-                if (counts[family] != 0) {
-                    score += sums[family] / counts[family];
+            if (includeHostCpuRam) {
+                for (int dimension = VCORES_VALUE; dimension <= Math.min(MEM_MIB_VALUE, model.dimensionCount); dimension++) {
+                    final double total = totals[initialSlots[host] * stride + dimension];
+                    if (total > 0) {
+                        final int offset = row(host) * stride + dimension;
+                        scores.add(family(host, dimension), total, capacity[offset], debit.get(offset));
+                    }
                 }
             }
-            return score;
+            for (int index = 0; index < debit.gpuCount; index++) {
+                final int device = debit.gpus[index];
+                final int family = model.gpus.type(device) == NVIDIA_GPUS_VALUE ? NVIDIA_FAMILY : INTEL_FAMILY;
+                scores.add(family, GpuTopology.SHARES, gpuAvailable(device), debit.gpuShares[index]);
+            }
+            return scores.finish();
         };
+    }
+
+    private static final class FamilyScores {
+        private final DoubleBinaryOperator cellScore;
+        private final ToDoubleBiFunction<double[], double[]> combine;
+        private final double[] before, after;
+        private final int[] counts;
+
+        FamilyScores(int families, boolean compareBefore, DoubleBinaryOperator cellScore,
+                ToDoubleBiFunction<double[], double[]> combine) {
+            this.cellScore = cellScore;
+            this.combine = combine;
+            before = compareBefore ? new double[families] : null;
+            after = new double[families];
+            counts = new int[families];
+        }
+
+        void reset() {
+            Arrays.fill(after, 0);
+            Arrays.fill(counts, 0);
+            if (before != null) {
+                Arrays.fill(before, 0);
+            }
+        }
+
+        void add(int family, double total, double remaining, double debit) {
+            if (before != null) {
+                before[family] += cellScore.applyAsDouble(Math.min(total, remaining), total);
+            }
+            final double residual = Math.max(0, Math.min(total, remaining - debit));
+            after[family] += cellScore.applyAsDouble(residual, total);
+            counts[family]++;
+        }
+
+        double finish() {
+            for (int family = 0; family < counts.length; family++) {
+                final int count = counts[family];
+                after[family] = count == 0 ? Double.NaN : after[family] / count;
+                if (before != null) {
+                    before[family] = count == 0 ? Double.NaN : before[family] / count;
+                }
+            }
+            return combine.applyAsDouble(before, after);
+        }
     }
 
     ToDoubleFunction<Assignment[]> gpuFragmentationScorer(SchedulingContext context, int[][] hostInventory,
@@ -280,7 +340,7 @@ final class CapacityLedger {
             case 18 -> model.rules.media[profile] == 4 ? RAM_FAMILY : SPACE_FAMILY + model.rules.media[profile];
             case 19 -> SPINDLES_FAMILY + model.rules.media[profile];
             case 20 -> IOPS_FAMILY + model.rules.media[profile];
-            default -> throw new IllegalArgumentException("Unsupported scored resource dimension");
+            default -> IOPS_FAMILY + MEDIA_COUNT + dimension - DEVICE_IOPS_VALUE - 1;
         };
     }
 

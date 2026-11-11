@@ -1,6 +1,8 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
+import java.util.function.DoubleBinaryOperator;
+import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
@@ -77,6 +79,16 @@ public final class GreedyPlanner {
         return capacity.normalizedResidualL2Scorer(context, inventory);
     }
 
+    /**
+     * Scores feasible same-host plans. The cell function receives remaining and total capacity.
+     * The combiner receives read-only family means, with NaN for absent families and null before
+     * means unless requested. Host CPU and RAM are included when present.
+     */
+    public ToDoubleFunction<Assignment[]> resourceFamilyScorer(DoubleBinaryOperator cellScore,
+            ToDoubleBiFunction<double[], double[]> combine, boolean compareBefore) {
+        return capacity.resourceFamilyScorer(context, inventory, true, compareBefore, cellScore, combine);
+    }
+
     /** Scores the change in frequency-weighted GPU fragmentation shares; use only on its owner thread. */
     public ToDoubleFunction<Assignment[]> gpuFragmentationScorer(Request[] catalogue) {
         return capacity.gpuFragmentationScorer(context, inventory, catalogue);
@@ -92,6 +104,11 @@ public final class GreedyPlanner {
     }
 
     public Assignment[] plan(Request request, int host, int numa) {
+        return plan(request, host, numa, null);
+    }
+
+    /** On success, fills the supplied host capacity prefix by resource dimension, starting at index one. */
+    public Assignment[] plan(Request request, int host, int numa, double[] hostRemaining) {
         planCalls++;
         checkHost(host);
         if (numa < 0 || numa != 0 && (numa >= model.constraints.length
@@ -117,7 +134,16 @@ public final class GreedyPlanner {
                     Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount),
                     member.gpus.length == 0 ? NO_GPUS : member.gpus.clone());
         }
-        return context.canPlace(request, plans) ? plans : null;
+        if (!context.canPlace(request, plans)) {
+            return null;
+        }
+        if (hostRemaining != null) {
+            final int end = Math.min(hostRemaining.length, model.dimensionCount + 1);
+            for (int dimension = 1; dimension < end; dimension++) {
+                hostRemaining[dimension] = capacity.available(host, dimension);
+            }
+        }
+        return plans;
     }
 
     public int fitCount(Request request, int host, int cap) {

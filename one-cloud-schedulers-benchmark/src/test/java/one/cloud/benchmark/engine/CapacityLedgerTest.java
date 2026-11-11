@@ -476,6 +476,17 @@ class CapacityLedgerTest {
     }
 
     @Test
+    void geometricScoreUsesTheAssignedGpuInsteadOfTheHostAggregate() throws Exception {
+        final var model = model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2));
+        final int gpu = model.gpus.first(1, 11);
+        assertEquals(.64, score(model, new Assignment(2, 1, 0, new int[]{0}, new int[0], new int[]{gpu})), 1e-12);
+    }
+
+    @Test
     void geometricScoreRetainsInitialCapacityReloadsSupplyAndDoesNotMutateState() throws Exception {
         final var model = model(
                 alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 6), alloc(3, new int[]{1}, 2),

@@ -37,7 +37,7 @@ Group positive entries as follows; numbers are protobuf `ResourceType` values:
 | RAM | `2`, host/NUMA, and MEMDISK device extents `18` |
 | Network out / in | `3, 13` / `4, 14`, two families |
 | Network queues | `16` |
-| NVIDIA / Intel GPUs | `11` / `17`, two families |
+| NVIDIA / Intel GPUs | selected device shares in device mode, host `11` / `17` in aggregate mode |
 | Device space | `18`, one family per primary physical media; MEMDISK goes to RAM |
 | Device spindles | `19` or the alternative spindle slot, one family per selected allocation media |
 | Device IOPS | `20`, one family per primary physical media |
@@ -52,7 +52,7 @@ including the `Double.MAX_VALUE` sentinel. A positive debit against zero capacit
 is an error, not an epsilon denominator. A plan with no scored debits has score
 zero. Family grouping and averaging are heuristics:
 NUMA/stripe cell counts affect the score; original VBP guarantees do not transfer.
-Unused GPU/NVMe capacity receives no protection from this score.
+Only debited cells enter the score. Other declared scalar dimensions each form their own family.
 
 ## Implemented execution path
 

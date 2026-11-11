@@ -11,9 +11,10 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.HexFormat;
 
-import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.fgd.Fgd;
+import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
+import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.dataset.Dataset;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.runner.DatasetRunner;
@@ -21,7 +22,10 @@ import one.cloud.benchmark.runner.Scenario;
 
 public final class RunnerCli {
     private static final String USAGE = """
-            Usage: pod-placement-bench --dataset DIR --algorithm fitcount|mean-fitcount|geometric-best-fit|fgd|cpu-ram-fgd [options]
+            Usage: pod-placement-bench --dataset DIR --algorithm NAME [options]
+              Algorithms: fitcount, mean-fitcount, geometric-best-fit, fgd, cpu-ram-fgd,
+                          k8s-least-allocated, k8s-most-allocated, k8s-requested-to-capacity-ratio,
+                          k8s-balanced-allocation.
               DIR contains snapshot.pb and operations.pb.
               --seed N              Algorithm seed (default: 42)
               --fit-cap N           Copy cap for both fit-count variants and quality probes (default: 10)
@@ -48,8 +52,27 @@ public final class RunnerCli {
             return 0;
         }
         final Arguments options;
+        final DatasetRunner.Factory factory;
         try {
             options = parse(arguments);
+            factory = switch (options.algorithm) {
+                case "fitcount" -> (context, seed, catalogue) -> new FitCount(context, seed, catalogue,
+                        options.fitCap, options.cacheRows);
+                case "mean-fitcount" -> (context, seed, catalogue) -> FitCount.weighted(context, seed, catalogue,
+                        options.fitCap, options.cacheRows);
+                case "geometric-best-fit" -> (context, seed, catalogue) -> new GeometricBestFit(context, seed);
+                case "fgd" -> Fgd::new;
+                case "cpu-ram-fgd" -> Fgd::cpuRam;
+                case "k8s-least-allocated" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
+                        context, seed, KubernetesResourceScoring.Strategy.LEAST_ALLOCATED);
+                case "k8s-most-allocated" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
+                        context, seed, KubernetesResourceScoring.Strategy.MOST_ALLOCATED);
+                case "k8s-requested-to-capacity-ratio" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
+                        context, seed, KubernetesResourceScoring.Strategy.REQUESTED_TO_CAPACITY_RATIO);
+                case "k8s-balanced-allocation" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
+                        context, seed, KubernetesResourceScoring.Strategy.BALANCED_ALLOCATION);
+                default -> throw new IllegalArgumentException("Unknown algorithm: " + options.algorithm);
+            };
         } catch (IllegalArgumentException failure) {
             errors.println(failure.getMessage());
             errors.print(USAGE);
@@ -70,16 +93,6 @@ public final class RunnerCli {
                 scenario = Scenario.from(dataset, options.gpuMode);
             }
             final long prepared = System.nanoTime();
-            final DatasetRunner.Factory factory = switch (options.algorithm) {
-                case "fitcount" -> (context, seed, catalogue) -> new FitCount(context, seed, catalogue,
-                        options.fitCap, options.cacheRows);
-                case "mean-fitcount" -> (context, seed, catalogue) -> FitCount.weighted(context, seed, catalogue,
-                        options.fitCap, options.cacheRows);
-                case "geometric-best-fit" -> (context, seed, catalogue) -> new GeometricBestFit(context, seed);
-                case "fgd" -> Fgd::new;
-                case "cpu-ram-fgd" -> Fgd::cpuRam;
-                default -> throw new IllegalArgumentException("Unknown algorithm: " + options.algorithm);
-            };
             final var result = DatasetRunner.run(scenario, new DatasetRunner.Options(options.seed,
                     options.maxOperations, options.catalogueLimit, options.fitCap), factory);
             final long completed = System.nanoTime();
@@ -135,10 +148,6 @@ public final class RunnerCli {
         }
         if (dataset == null || algorithm == null) {
             throw new IllegalArgumentException("--dataset and --algorithm are required");
-        }
-        if (!algorithm.equals("fitcount") && !algorithm.equals("mean-fitcount")
-                && !algorithm.equals("geometric-best-fit") && !algorithm.equals("fgd") && !algorithm.equals("cpu-ram-fgd")) {
-            throw new IllegalArgumentException("Unknown algorithm: " + algorithm);
         }
         return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit, gpuMode);
     }
