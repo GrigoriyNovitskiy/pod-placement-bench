@@ -82,6 +82,11 @@ public final class GreedyPlanner {
         return capacity.gpuFragmentationScorer(context, inventory, catalogue);
     }
 
+    /** Scores the change in frequency-weighted host CPU/RAM fragmentation on the planner's owner thread. */
+    public ToDoubleFunction<Assignment[]> cpuRamFragmentationScorer(Request[] catalogue) {
+        return capacity.cpuRamFragmentationScorer(context, inventory, catalogue);
+    }
+
     public long planCalls() {
         return planCalls;
     }

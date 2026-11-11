@@ -12,11 +12,21 @@ import one.cloud.benchmark.model.Request;
 public final class Fgd extends SchedulingAlgorithm {
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
+    private final boolean refineGpus;
 
     public Fgd(SchedulingContext context, long seed, Request[] catalogue) {
+        this(context, seed, catalogue, true);
+    }
+
+    public static Fgd cpuRam(SchedulingContext context, long seed, Request[] catalogue) {
+        return new Fgd(context, seed, catalogue, false);
+    }
+
+    private Fgd(SchedulingContext context, long seed, Request[] catalogue, boolean refineGpus) {
         super(context, seed);
         planner = new GreedyPlanner(context);
-        scorer = planner.gpuFragmentationScorer(catalogue);
+        this.refineGpus = refineGpus;
+        scorer = refineGpus ? planner.gpuFragmentationScorer(catalogue) : planner.cpuRamFragmentationScorer(catalogue);
     }
 
     @Override
@@ -30,7 +40,7 @@ public final class Fgd extends SchedulingAlgorithm {
                 if (plans == null) {
                     continue;
                 }
-                final double score = improveGpus(request, plans);
+                final double score = refineGpus ? improveGpus(request, plans) : scorer.applyAsDouble(plans);
                 if (score < bestScore) {
                     best = plans;
                     bestScore = score;
