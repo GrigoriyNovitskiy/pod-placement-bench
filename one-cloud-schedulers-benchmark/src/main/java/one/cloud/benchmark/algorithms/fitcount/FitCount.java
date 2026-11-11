@@ -10,16 +10,22 @@ import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class FitCount extends SchedulingAlgorithm {
+    @FunctionalInterface
+    public interface CandidateSelector {
+        /** Read only the first count plans; return nonempty, strictly increasing indices. */
+        int[] select(Request request, Assignment[][] plans, int count) throws Exception;
+    }
+
     private final GreedyPlanner planner;
     private final FitCountCache cache;
     private final int cap;
     private final int[] hosts;
     private final Assignment[][] plans;
     private final long[] weightedLosses;
+    private final CandidateSelector selector;
     private Assignment[][] alternativePlans;
     private int[] alternativeHosts;
     private int planCount;
-
 
     public FitCount(SchedulingContext context, long seed, Request[] catalogue) {
         this(context, seed, catalogue, 10, 256);
@@ -27,20 +33,26 @@ public final class FitCount extends SchedulingAlgorithm {
 
     public FitCount(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes) {
-        this(context, seed, catalogue, maxFitCount, maxCachedShapes, false);
+        this(context, seed, catalogue, maxFitCount, maxCachedShapes, false, null);
+    }
+
+    public FitCount(SchedulingContext context, long seed, Request[] catalogue,
+            int maxFitCount, int maxCachedShapes, CandidateSelector selector) {
+        this(context, seed, catalogue, maxFitCount, maxCachedShapes, false, selector);
     }
 
     public static FitCount weighted(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes) {
-        return new FitCount(context, seed, catalogue, maxFitCount, maxCachedShapes, true);
+        return new FitCount(context, seed, catalogue, maxFitCount, maxCachedShapes, true, null);
     }
 
     private FitCount(SchedulingContext context, long seed, Request[] catalogue,
-            int maxFitCount, int maxCachedShapes, boolean weighted) {
+            int maxFitCount, int maxCachedShapes, boolean weighted, CandidateSelector selector) {
         super(context, seed);
         planner = new GreedyPlanner(context);
         cache = new FitCountCache(context, planner, catalogue, maxFitCount, maxCachedShapes);
         cap = maxFitCount;
+        this.selector = selector;
         int candidates = 0;
         for (int host = 1; host <= context.model().hostCount; host++) {
             candidates = Math.addExact(candidates, planner.numaNodes(host).length);
@@ -61,7 +73,7 @@ public final class FitCount extends SchedulingAlgorithm {
     public Assignment[] select(Request request) {
         try {
             collect(request);
-            return winner();
+            return winner(request);
         } finally {
             clearPlans();
         }
@@ -95,7 +107,7 @@ public final class FitCount extends SchedulingAlgorithm {
                 alternativeHosts[index] = alternativeHosts[other];
                 alternativeHosts[other] = host;
             }
-            final var best = winner();
+            final var best = winner(request);
             final var result = new Assignment[Math.min(limit, feasibleHosts)][];
             result[0] = best;
             int next = 1;
@@ -130,10 +142,13 @@ public final class FitCount extends SchedulingAlgorithm {
         }
     }
 
-    private Assignment[] winner() {
+    private Assignment[] winner(Request request) {
         int candidates = planCount;
         if (candidates == 0) {
             return null;
+        }
+        if (selector != null && candidates > 1) {
+            candidates = retainSelected(request, candidates);
         }
         if (candidates > 1) {
             candidates = weightedLosses == null ? retainLexicographicBest(candidates) : retainWeightedBest(candidates);
@@ -144,6 +159,33 @@ public final class FitCount extends SchedulingAlgorithm {
     private void clearPlans() {
         Arrays.fill(plans, 0, planCount, null);
         planCount = 0;
+    }
+
+    private int retainSelected(Request request, int candidates) {
+        final int[] selected;
+        try {
+            selected = selector.select(request, plans, candidates);
+        } catch (RuntimeException failure) {
+            throw failure;
+        } catch (Exception failure) {
+            throw new IllegalStateException("Candidate selection failed", failure);
+        }
+        if (selected == null || selected.length == 0 || selected.length > candidates) {
+            throw new IllegalArgumentException("Selector must retain at least one feasible candidate");
+        }
+        int previous = -1;
+        for (final int index : selected) {
+            if (index <= previous || index >= candidates) {
+                throw new IllegalArgumentException("Selector indices must be increasing and within candidate bounds");
+            }
+            previous = index;
+        }
+        for (int retained = 0; retained < selected.length; retained++) {
+            final int index = selected[retained];
+            hosts[retained] = hosts[index];
+            plans[retained] = plans[index];
+        }
+        return selected.length;
     }
 
     private int retainLexicographicBest(int candidates) {

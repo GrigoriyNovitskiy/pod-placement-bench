@@ -4,6 +4,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.Files;
 
 import com.google.protobuf.ByteString;
@@ -23,11 +24,105 @@ import static one.cloud.benchmark.testsupport.TestModel.rules;
 import static one.cloud.benchmark.testsupport.TestModel.writeTrace;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RunnerCliTest {
     @TempDir
     Path temporary;
+
+    @Test
+    void runsPackagedCatBoostAndRandomAlgorithmsThroughTheCommonRunner() throws Exception {
+        writeTrace(temporary, new Record[]{
+                alloc(1, new int[]{1, 2}, 4, 4096), alloc(2, new int[]{1, 2}, 2, 1024),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 2)},
+                3, 4, -4, -3);
+        for (final var algorithm : new String[]{"catboost-top1", "catboost-topn-fitcount",
+                "catboost-rollout-top1", "catboost-rollout-topn-fitcount", "randomn-fitcount"}) {
+            final var output = new ByteArrayOutputStream();
+            final var errors = new ByteArrayOutputStream();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(),
+                    "--algorithm", algorithm), errors.toString(StandardCharsets.UTF_8));
+            final var json = output.toString(StandardCharsets.UTF_8);
+            assertTrue(json.contains("\"algorithm\":\"" + algorithm + "\""));
+            final var className = switch (algorithm) {
+                case "catboost-top1" -> "catboost.CatBoostTop1";
+                case "catboost-topn-fitcount" -> "catboost.CatBoostTopNFitCount";
+                case "catboost-rollout-top1" -> "catboost.CatBoostRolloutTop1";
+                case "catboost-rollout-topn-fitcount" -> "catboost.CatBoostRolloutTopNFitCount";
+                default -> "fitcount.RandomNFitCount";
+            };
+            assertTrue(json.contains("one.cloud.benchmark.algorithms." + className));
+            assertTrue(json.contains("\"admitted_units\":2"));
+            assertTrue(json.contains("\"committed_units\":2"));
+            assertTrue(json.contains("\"complete\":true"));
+            assertTrue(json.contains("\"top_n\":" + (algorithm.endsWith("top1") ? 1 : 20)));
+            final var hash = algorithm.contains("rollout")
+                    ? "33187df07d340b52c60e635b78396bd0369845651684eee2bef3a079e7880174"
+                    : "38da593f67c7531c963c0d09ea62eab0e1bc5ced168a0cf52a8e5e1b5ecac417";
+            if (algorithm.startsWith("catboost")) {
+                assertTrue(json.contains("\"model_sha256\":\"" + hash + "\""));
+            } else {
+                assertFalse(json.contains("\"model_sha256\""));
+            }
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        }
+        for (final var algorithm : new String[]{"randomn-fitcount", "catboost-topn-fitcount",
+                "catboost-rollout-topn-fitcount"}) {
+            final var output = new ByteArrayOutputStream();
+            final var errors = new ByteArrayOutputStream();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
+                    "--top-n", "1"));
+            final var first = parameterDigest(output.toString(StandardCharsets.UTF_8));
+            output.reset();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
+                    "--top-n", "2"));
+            assertNotEquals(first, parameterDigest(output.toString(StandardCharsets.UTF_8)));
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void externalModelIsIdentifiedByItsLoadedBytesAndInvalidModelsFail() throws Exception {
+        writeTrace(temporary, records(), 2, 3, -3, -2);
+        final var model = temporary.resolve("custom.cbm");
+        try (final var input = getClass().getResourceAsStream(
+                "/one/cloud/benchmark/algorithms/catboost/rollout.cbm")) {
+            Files.copy(input, model);
+        }
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(),
+                "--algorithm", "catboost-top1", "--model", model.toString()));
+        final var json = output.toString(StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"model_source\":\"external\""));
+        assertTrue(json.contains("33187df07d340b52c60e635b78396bd0369845651684eee2bef3a079e7880174"));
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        final var rolloutDigest = parameterDigest(json);
+        try (final var input = getClass().getResourceAsStream(
+                "/one/cloud/benchmark/algorithms/catboost/fitcount.cbm")) {
+            Files.copy(input, model, StandardCopyOption.REPLACE_EXISTING);
+        }
+        output.reset();
+        assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(),
+                "--algorithm", "catboost-top1", "--model", model.toString()));
+        final var fitcountDigest = parameterDigest(output.toString(StandardCharsets.UTF_8));
+        assertNotEquals(rolloutDigest, fitcountDigest);
+        final var alias = temporary.resolve("same-model.cbm");
+        Files.copy(model, alias);
+        output.reset();
+        assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(),
+                "--algorithm", "catboost-top1", "--model", alias.toString()));
+        assertEquals(fitcountDigest, parameterDigest(output.toString(StandardCharsets.UTF_8)));
+        Files.writeString(model, "invalid model");
+        output.reset();
+        assertEquals(1, invoke(output, errors, "--dataset", temporary.toString(),
+                "--algorithm", "catboost-top1", "--model", model.toString()));
+        assertEquals("", output.toString(StandardCharsets.UTF_8));
+        assertTrue(errors.toString(StandardCharsets.UTF_8).startsWith("Run failed:"));
+    }
 
     @Test
     void selectsBulkAndDpWithExplicitWindowsAndNewProfileDefaults() throws Exception {
@@ -255,6 +350,10 @@ class RunnerCliTest {
                 {"--dataset", "absent", "--algorithm", "fitcount", "--max-operations", "0"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--catalogue-limit", "-1"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--gpu-model", "unknown"},
+                {"--dataset", "absent", "--algorithm", "randomn-fitcount", "--top-n", "0"},
+                {"--dataset", "absent", "--algorithm", "randomn-fitcount", "--model", "absent.cbm"},
+                {"--dataset", "absent", "--algorithm", "fitcount", "--top-n", "2"},
+                {"--dataset", "absent", "--algorithm", "catboost-top1", "--top-n", "2"},
                 {"--dataset", "absent", "--dataset", "another", "--algorithm", "fitcount"},
                 {"--dataset", "absent", "--algorithm"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--bulk-size", "101"},
@@ -288,6 +387,13 @@ class RunnerCliTest {
         assertTrue(json.contains("\"mean\":null"));
         assertTrue(json.contains("\"quality_checkpoints\":[\n  ]"));
         assertEquals("", errors.toString(StandardCharsets.UTF_8));
+    }
+
+    private static String parameterDigest(String json) {
+        final var key = "\"parameter_digest\":\"";
+        final int start = json.indexOf(key);
+        assertTrue(start >= 0);
+        return json.substring(start + key.length(), start + key.length() + 64);
     }
 
     private static int invoke(ByteArrayOutputStream output, ByteArrayOutputStream errors, String... arguments) {

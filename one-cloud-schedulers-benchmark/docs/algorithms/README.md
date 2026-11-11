@@ -2,7 +2,11 @@
 
 These documents define implementation contracts and planned experiments.
 Bulk fitcount, count/tree DP and rollout are implemented; see
-[implementation and usage](IMPLEMENTATION.md). Numerical settings are
+[implementation and usage](IMPLEMENTATION.md). CatBoost and RandomN shortlist
+algorithms, packaged models and historical measurements are described in the
+[CatBoost guide](catboost.md).
+
+Numerical settings below are
 explicit starting configurations agreed for the first experiments; none has been
 selected empirically on the ten clouds. Utilization takes priority over latency.
 
@@ -111,6 +115,9 @@ modes):
 | `bulk-fitcount` | `BulkFitCount`, frozen-order greedy and sequential-incumbent guard |
 | `dp` | `BulkFitCount.dynamicProgramming`, guarded count/tree selection |
 | `rollout` | `Rollout`, explicit prior and common isolated continuation paths |
+| `catboost-top1` / `catboost-topn-fitcount` | `CatBoostTop1` / `CatBoostTopNFitCount`, imitation model |
+| `catboost-rollout-top1` / `catboost-rollout-topn-fitcount` | `CatBoostRolloutTop1` / `CatBoostRolloutTopNFitCount`, trained rollout model |
+| `randomn-fitcount` | `RandomNFitCount`, seeded shortlist then FitCount |
 
 The runner defaults to B=1 and accepts explicit versioned service-burst windows. `GreedyPlanner` is a
 geometry helper; the runner and engine are infrastructure. The optional local DP hybrid and the CP-SAT/DCM/min-cost-flow backends remain

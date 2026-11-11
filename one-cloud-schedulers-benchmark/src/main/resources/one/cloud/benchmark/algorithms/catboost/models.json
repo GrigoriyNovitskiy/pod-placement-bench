@@ -1,0 +1,83 @@
+{
+  "feature_schema": "legacy-v2-member-score-sum",
+  "atomic_request_score": "sum of per-member raw scores; not trained as a joint model",
+  "training_datasets": [
+    "02",
+    "05",
+    "07",
+    "09"
+  ],
+  "training_states": 1816,
+  "training_candidates": 5732,
+  "gpu_training_states": 188,
+  "parameters": {
+    "allow_writing_files": false,
+    "depth": 4,
+    "iterations": 250,
+    "learning_rate": 0.1,
+    "loss_function": "QuerySoftMax",
+    "random_seed": 42,
+    "task_type": "CPU",
+    "thread_count": 4,
+    "use_best_model": false
+  },
+  "common_features_sha256": "c93b8c503f7c1bf88ddc97d5a5daf74538bcb09ab94db6e3f5b88e5990e35e7d",
+  "common_csv_sha256": "d75e66cf8c6855a9c1f2c3685fd39f2c3f62cd3e88e71aa4c539291416dcc025",
+  "models": {
+    "fitcount": {
+      "file": "fitcount.cbm",
+      "sha256": "38da593f67c7531c963c0d09ea62eab0e1bc5ced168a0cf52a8e5e1b5ecac417",
+      "target": "FitCount preference"
+    },
+    "rollout": {
+      "file": "rollout.cbm",
+      "sha256": "33187df07d340b52c60e635b78396bd0369845651684eee2bef3a079e7880174",
+      "target": "maximum mean future accepted pods; FitCount preference on ties"
+    }
+  },
+  "rollout": {
+    "events": 1000,
+    "candidates_max": 4,
+    "continuations": 2,
+    "continuation_policy": "Random20 + FitCount",
+    "reward": "future accepted pods, excluding current request"
+  },
+  "training_state_policy": "FirstFit; shared states, candidates and feature rows for both models",
+  "selection": "fixed 250 trees; no validation checkpoint selection",
+  "excluded_features": {
+    "request_flags": "Raw bitmask has no feature encoding"
+  },
+  "legacy_fitcount": {
+    "catalogue_size": 32,
+    "catalogue_seed": 42,
+    "max_fit": 10,
+    "cache_rows": 64
+  },
+  "gpu_features": "aggregate NVIDIA/Intel capacity; per-device fragmentation is not a learned feature",
+  "device_extent_feature_unit_bytes": 67108864,
+  "maximum_inference_batch_rows": 1024,
+  "preprocessing": {
+    "categorical_features": [
+      "request_kind"
+    ],
+    "binary_features": [
+      "has_numa"
+    ],
+    "category_encoding": "integer_code_as_string",
+    "numeric_scaling": "none",
+    "imputation": "none",
+    "dropped_constants": {
+      "anchor_free_intel_gpus": 0.0,
+      "cluster_free_fraction_intel_gpus": 0.0,
+      "cluster_free_fraction_std_intel_gpus": 0.0,
+      "cluster_free_intel_gpus": 0.0,
+      "host_capacity_intel_gpus": 0.0,
+      "host_free_fraction_intel_gpus": 0.0,
+      "host_free_intel_gpus": 0.0,
+      "request_hw_cores": 0.0,
+      "request_intel_gpus": 0.0,
+      "request_over_host_free_hw_cores": 0.0,
+      "request_over_host_free_intel_gpus": 0.0
+    }
+  }
+}
