@@ -1,6 +1,8 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Arrays;
+import java.util.function.DoubleBinaryOperator;
+import java.util.function.ToDoubleBiFunction;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.model.Assignment;
@@ -75,6 +77,16 @@ public final class GreedyPlanner {
     /** Scores complete, same-host plans returned by this planner; use only on its owner thread. */
     public ToDoubleFunction<Assignment[]> normalizedResidualL2Scorer() {
         return capacity.normalizedResidualL2Scorer(context, inventory);
+    }
+
+    /**
+     * Scores feasible same-host plans. The cell function receives remaining and total capacity.
+     * The combiner receives borrowed family means, with NaN for absent families and null before
+     * means unless requested. Host CPU and RAM are included when present.
+     */
+    public ToDoubleFunction<Assignment[]> resourceFamilyScorer(DoubleBinaryOperator cellScore,
+            ToDoubleBiFunction<double[], double[]> combine, boolean compareBefore) {
+        return capacity.resourceFamilyScorer(context, inventory, true, compareBefore, cellScore, combine);
     }
 
     public long planCalls() {
