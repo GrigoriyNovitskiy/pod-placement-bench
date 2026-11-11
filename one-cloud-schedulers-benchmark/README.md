@@ -47,7 +47,7 @@ For an explicit short smoke run:
   --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
 ```
 
-Built-in algorithms are `fitcount` and `geometric-best-fit`.
+Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit` and `fgd`.
 `--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
 all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
 reported sample. `--max-operations` truncates normalized atomic events, without
@@ -92,10 +92,16 @@ one-cloud-schedulers-benchmark/build/install/one-cloud-schedulers-benchmark/bin/
   --dataset /path/to/sc --algorithm fitcount
 ```
 
+Mean FitCount (`--algorithm mean-fitcount`) shares the original FitCount planner
+and cache. It minimizes the mean loss of copies across catalogue entries, with
+each shape weighted by its frequency. Both variants honor `--fit-cap` and
+`--cache-rows`. See [FITCOUNT.md](FITCOUNT.md#mean-fitcount) for the scoring rule
+and its cost.
+
 Geometric best-fit uses normalized residual L2 squared with fixed family weights.
 It shares planner geometry and hard constraints with fitcount and streams candidates
 while retaining only the winner. The copy cap still controls common quality probes;
-the cache-row option only affects fitcount.
+the cache-row option only affects the two FitCount variants.
 
 FGD is available with `--algorithm fgd` and requires the `devices20` GPU model.
 It minimizes the frequency-weighted change in unusable GPU shares for the declared

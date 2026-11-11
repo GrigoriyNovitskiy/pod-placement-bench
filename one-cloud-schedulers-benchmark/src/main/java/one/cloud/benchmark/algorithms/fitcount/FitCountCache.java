@@ -114,6 +114,14 @@ final class FitCountCache {
         return refresh(sample)[host];
     }
 
+    Sample[] samples() {
+        return samples;
+    }
+
+    int[] counts(Sample sample) {
+        return refresh(sample);
+    }
+
     long total(Sample sample) {
         refresh(sample);
         return sample.total;
