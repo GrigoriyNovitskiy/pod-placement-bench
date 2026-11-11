@@ -9,6 +9,10 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.DE
 public interface SchedulingContext {
     ClusterSpec model();
 
+    default Engine.Trial trial(ClusterSpec trialModel) {
+        throw new UnsupportedOperationException("Isolated trials are unavailable");
+    }
+
     long revision();
 
     long capacityRevision(int host);

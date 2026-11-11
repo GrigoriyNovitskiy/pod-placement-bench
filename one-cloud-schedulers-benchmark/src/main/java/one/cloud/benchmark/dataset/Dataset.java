@@ -113,6 +113,109 @@ public final class Dataset {
         public final double[] diskSpindles, diskIops, diskIopsCap;
         public final int[] domainOffset, domainLevel, domainValue;
 
+        public Rules append(int[] profiles, int[] groups, int[][] targets) {
+            if (profiles.length != groups.length || profiles.length != targets.length) {
+                throw new IllegalArgumentException("Virtual profile columns have different sizes");
+            }
+            int limits = limitDomain.length, links = linkTarget.length;
+            int disks = diskMedia.length, domains = domainLevel.length;
+            for (int index = 0; index < profiles.length; index++) {
+                final int profile = profiles[index];
+                if (profile <= 0 || profile >= kind.length || targets[index] == null
+                        || targets[index].length != linkOffset[profile + 1] - linkOffset[profile]) {
+                    throw new IllegalArgumentException("Invalid virtual source profile or links");
+                }
+                limits = Math.addExact(limits, limitOffset[profile + 1] - limitOffset[profile]);
+                links = Math.addExact(links, targets[index].length);
+                disks = Math.addExact(disks, diskOffset[profile + 1] - diskOffset[profile]);
+                domains = Math.addExact(domains, domainOffset[profile + 1] - domainOffset[profile]);
+            }
+            final int count = Math.addExact(kind.length - 1, profiles.length);
+            if (72L * (count + 1L) + 9L * limits + 12L * links + 64L * disks + 8L * domains
+                    > Runtime.getRuntime().maxMemory() / 2) {
+                throw new IllegalArgumentException("Virtual constraint tables exceed the configured heap budget");
+            }
+            final var result = new Rules(Header.newBuilder().setConstraintCount(count).setLimitCount(limits)
+                    .setLinkCount(links).setDiskPlanCount(disks).setDomainCount(domains).build());
+            final int[][] columns = {kind, parent, ordinal, media, alternativeMedia, candidates, pinnedHost, group, flags};
+            final int[][] copies = {result.kind, result.parent, result.ordinal, result.media, result.alternativeMedia,
+                    result.candidates, result.pinnedHost, result.group, result.flags};
+            for (int column = 0; column < columns.length; column++) {
+                System.arraycopy(columns[column], 0, copies[column], 0, kind.length);
+            }
+            System.arraycopy(cpuPower, 0, result.cpuPower, 0, cpuPower.length);
+            System.arraycopy(alternativeSpindles, 0, result.alternativeSpindles, 0, alternativeSpindles.length);
+            System.arraycopy(limitOffset, 0, result.limitOffset, 0, limitOffset.length);
+            System.arraycopy(limitDomain, 0, result.limitDomain, 0, limitDomain.length);
+            System.arraycopy(limitMax, 0, result.limitMax, 0, limitMax.length);
+            System.arraycopy(limitHard, 0, result.limitHard, 0, limitHard.length);
+            System.arraycopy(linkOffset, 0, result.linkOffset, 0, linkOffset.length);
+            System.arraycopy(linkTarget, 0, result.linkTarget, 0, linkTarget.length);
+            System.arraycopy(linkDomain, 0, result.linkDomain, 0, linkDomain.length);
+            System.arraycopy(linkKind, 0, result.linkKind, 0, linkKind.length);
+            System.arraycopy(diskOffset, 0, result.diskOffset, 0, diskOffset.length);
+            final int[][] diskColumns = {diskMedia, diskLayout, minDevices, maxDevices, minStripes, maxStripes,
+                    diskFlags, metadataExtents};
+            final int[][] diskCopies = {result.diskMedia, result.diskLayout, result.minDevices, result.maxDevices,
+                    result.minStripes, result.maxStripes, result.diskFlags, result.metadataExtents};
+            for (int column = 0; column < diskColumns.length; column++) {
+                System.arraycopy(diskColumns[column], 0, diskCopies[column], 0, diskMedia.length);
+            }
+            System.arraycopy(diskExtents, 0, result.diskExtents, 0, diskExtents.length);
+            System.arraycopy(diskSpindles, 0, result.diskSpindles, 0, diskSpindles.length);
+            System.arraycopy(diskIops, 0, result.diskIops, 0, diskIops.length);
+            System.arraycopy(diskIopsCap, 0, result.diskIopsCap, 0, diskIopsCap.length);
+            System.arraycopy(domainOffset, 0, result.domainOffset, 0, domainOffset.length);
+            System.arraycopy(domainLevel, 0, result.domainLevel, 0, domainLevel.length);
+            System.arraycopy(domainValue, 0, result.domainValue, 0, domainValue.length);
+            limits = limitDomain.length;
+            links = linkTarget.length;
+            disks = diskMedia.length;
+            domains = domainLevel.length;
+            for (int index = 0; index < profiles.length; index++) {
+                final int profile = profiles[index];
+                final int target = kind.length + index;
+                for (int column = 0; column < columns.length; column++) {
+                    copies[column][target] = columns[column][profile];
+                }
+                result.group[target] = groups[index];
+                result.cpuPower[target] = cpuPower[profile];
+                result.alternativeSpindles[target] = alternativeSpindles[profile];
+                final int limitCount = limitOffset[profile + 1] - limitOffset[profile];
+                result.limitOffset[target] = limits;
+                System.arraycopy(limitDomain, limitOffset[profile], result.limitDomain, limits, limitCount);
+                System.arraycopy(limitMax, limitOffset[profile], result.limitMax, limits, limitCount);
+                System.arraycopy(limitHard, limitOffset[profile], result.limitHard, limits, limitCount);
+                limits += limitCount;
+                result.limitOffset[target + 1] = limits;
+                final int linkCount = targets[index].length;
+                result.linkOffset[target] = links;
+                System.arraycopy(targets[index], 0, result.linkTarget, links, linkCount);
+                System.arraycopy(linkDomain, linkOffset[profile], result.linkDomain, links, linkCount);
+                System.arraycopy(linkKind, linkOffset[profile], result.linkKind, links, linkCount);
+                links += linkCount;
+                result.linkOffset[target + 1] = links;
+                final int diskCount = diskOffset[profile + 1] - diskOffset[profile];
+                result.diskOffset[target] = disks;
+                for (int column = 0; column < diskColumns.length; column++) {
+                    System.arraycopy(diskColumns[column], diskOffset[profile], diskCopies[column], disks, diskCount);
+                }
+                System.arraycopy(diskExtents, diskOffset[profile], result.diskExtents, disks, diskCount);
+                System.arraycopy(diskSpindles, diskOffset[profile], result.diskSpindles, disks, diskCount);
+                System.arraycopy(diskIops, diskOffset[profile], result.diskIops, disks, diskCount);
+                System.arraycopy(diskIopsCap, diskOffset[profile], result.diskIopsCap, disks, diskCount);
+                disks += diskCount;
+                result.diskOffset[target + 1] = disks;
+                final int domainCount = domainOffset[profile + 1] - domainOffset[profile];
+                result.domainOffset[target] = domains;
+                System.arraycopy(domainLevel, domainOffset[profile], result.domainLevel, domains, domainCount);
+                System.arraycopy(domainValue, domainOffset[profile], result.domainValue, domains, domainCount);
+                domains += domainCount;
+                result.domainOffset[target + 1] = domains;
+            }
+            return result;
+        }
+
         private Rules(Header header) {
             final int count = size(header.getConstraintCount()) + 1;
             kind = new int[count];

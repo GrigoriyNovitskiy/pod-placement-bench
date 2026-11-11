@@ -23,6 +23,29 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ScenarioTest {
     @Test
+    void announcesOnlyConsecutiveSameServiceCreatesAndKeepsChurnBoundaries() throws Exception {
+        final var source = Scenario.from(trace(records(pod(1), pod(1), pod(2), pod(1)),
+                2, 3, 4, 5, -2, -3, 2, 3, -5, -4, -3, -2));
+        final var bursts = source.withServiceBursts(3);
+        assertEquals(source, source.withServiceBursts(1));
+        assertArrayEquals(source.events, bursts.events);
+        assertArrayEquals(source.checkpoints, bursts.checkpoints);
+        assertEquals(source.sourceOpsDigest, bursts.sourceOpsDigest);
+        assertNotEquals(source.digest, bursts.digest);
+        assertEquals(bursts.digest, source.withServiceBursts(3).digest);
+        assertNotEquals(bursts.digest, source.withServiceBursts(2).digest);
+        assertEquals(2, bursts.windowEnd(0));
+        assertEquals(3, bursts.windowEnd(2));
+        assertEquals(4, bursts.windowEnd(3));
+        assertEquals(5, bursts.windowEnd(4));
+        assertEquals(6, bursts.windowEnd(5));
+        assertEquals(8, bursts.windowEnd(6));
+        assertThrows(IllegalArgumentException.class, () -> bursts.windowEnd(1));
+        assertThrows(IllegalArgumentException.class, () -> source.withServiceBursts(101));
+        assertThrows(IllegalArgumentException.class, () -> bursts.withServiceBursts(2));
+    }
+
+    @Test
     void gpuModelChangesScenarioIdentityWithoutChangingItsEvents() throws Exception {
         final var source = trace(records(pod(1)), 2, -2);
         final var defaults = Scenario.from(source);

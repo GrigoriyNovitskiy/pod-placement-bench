@@ -1,6 +1,7 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
+import java.util.SplittableRandom;
 
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
@@ -15,6 +16,10 @@ public final class FitCount extends SchedulingAlgorithm {
     private final int[] hosts;
     private final Assignment[][] plans;
     private final long[] weightedLosses;
+    private Assignment[][] alternativePlans;
+    private int[] alternativeHosts;
+    private int planCount;
+
 
     public FitCount(SchedulingContext context, long seed, Request[] catalogue) {
         this(context, seed, catalogue, 10, 256);
@@ -47,28 +52,98 @@ public final class FitCount extends SchedulingAlgorithm {
 
     @Override
     public void schedule(Request request) {
-        int allocated = 0;
+        final var plan = select(request);
+        if (plan != null) {
+            context.place(request, plan);
+        }
+    }
+
+    public Assignment[] select(Request request) {
         try {
-            for (int host = 1; host <= context.model().hostCount; host++) {
-                for (final int numa : planner.numaNodes(host)) {
-                    final var plan = planner.plan(request, host, numa);
-                    if (plan != null) {
-                        hosts[allocated] = host;
-                        plans[allocated++] = plan;
-                    }
+            collect(request);
+            return winner();
+        } finally {
+            clearPlans();
+        }
+    }
+
+    public Assignment[][] selectCandidates(Request request, int limit, long seed) {
+        if (limit <= 0) {
+            throw new IllegalArgumentException("Candidate limit must be positive");
+        }
+        int feasibleHosts = 0;
+        try {
+            collect(request);
+            if (planCount == 0) {
+                return new Assignment[0][];
+            }
+            if (alternativePlans == null) {
+                alternativePlans = new Assignment[context.model().hostCount + 1][];
+                alternativeHosts = new int[alternativePlans.length - 1];
+            }
+            for (int index = 0; index < planCount; index++) {
+                final int host = hosts[index];
+                if (alternativePlans[host] == null) {
+                    alternativePlans[host] = plans[index];
+                    alternativeHosts[feasibleHosts++] = host;
                 }
             }
-            int candidates = allocated;
-            if (candidates == 0) {
-                return;
+            final var permutation = new SplittableRandom(seed);
+            for (int index = feasibleHosts - 1; index > 0; index--) {
+                final int other = permutation.nextInt(index + 1);
+                final int host = alternativeHosts[index];
+                alternativeHosts[index] = alternativeHosts[other];
+                alternativeHosts[other] = host;
             }
-            if (candidates > 1) {
-                candidates = weightedLosses == null ? retainLexicographicBest(candidates) : retainWeightedBest(candidates);
+            final var best = winner();
+            final var result = new Assignment[Math.min(limit, feasibleHosts)][];
+            result[0] = best;
+            int next = 1;
+            for (int index = 0; index < feasibleHosts && next < result.length; index++) {
+                final int host = alternativeHosts[index];
+                if (host != best[0].host()) {
+                    result[next++] = alternativePlans[host];
+                }
             }
-            context.place(request, plans[candidates == 1 ? 0 : random.nextInt(candidates)]);
+            return result;
         } finally {
-            Arrays.fill(plans, 0, allocated, null);
+            clearPlans();
+            for (int index = 0; index < feasibleHosts; index++) {
+                alternativePlans[alternativeHosts[index]] = null;
+            }
         }
+    }
+
+    FitCountCache cache() {
+        return cache;
+    }
+
+    private void collect(Request request) {
+        for (int host = 1; host <= context.model().hostCount; host++) {
+            for (final int numa : planner.numaNodes(host)) {
+                final var plan = planner.plan(request, host, numa);
+                if (plan != null) {
+                    hosts[planCount] = host;
+                    plans[planCount++] = plan;
+                }
+            }
+        }
+    }
+
+    private Assignment[] winner() {
+        int candidates = planCount;
+        if (candidates == 0) {
+            return null;
+        }
+        if (candidates > 1) {
+            candidates = weightedLosses == null ? retainLexicographicBest(candidates) : retainWeightedBest(candidates);
+        }
+        return plans[candidates == 1 ? 0 : random.nextInt(candidates)];
+    }
+
+    private void clearPlans() {
+        Arrays.fill(plans, 0, planCount, null);
+        planCount = 0;
     }
 
     private int retainLexicographicBest(int candidates) {

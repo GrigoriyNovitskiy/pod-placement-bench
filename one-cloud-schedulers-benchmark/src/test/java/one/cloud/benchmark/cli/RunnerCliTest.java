@@ -4,6 +4,9 @@ import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
+import java.nio.file.Files;
+
+import com.google.protobuf.ByteString;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -11,6 +14,8 @@ import org.junit.jupiter.api.io.TempDir;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.RolloutPriorProtos;
+import one.cloud.benchmark.algorithms.fitcount.RolloutPrior;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
@@ -23,6 +28,58 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RunnerCliTest {
     @TempDir
     Path temporary;
+
+    @Test
+    void selectsBulkAndDpWithExplicitWindowsAndNewProfileDefaults() throws Exception {
+        final var records = new Record[]{alloc(1, new int[]{1}, 1), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2)};
+        writeTrace(temporary, records, 2, 3, -3, -2);
+        for (final var algorithm : new String[]{"bulk-fitcount", "dp"}) {
+            final var output = new ByteArrayOutputStream();
+            final var errors = new ByteArrayOutputStream();
+            assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", algorithm,
+                    "--bulk-size", "100"));
+            final var json = output.toString(StandardCharsets.UTF_8);
+            assertTrue(json.contains("\"copy_cap\":128"));
+            assertTrue(json.contains("\"attempted_units\":2"));
+            assertTrue(json.contains("\"schedule_windows\":1"));
+            assertTrue(json.contains("\"admitted_units\":1"));
+            assertTrue(json.contains("\"declined_units\":1"));
+            assertTrue(json.contains("\"announcement\":\"service-bursts-v1\""));
+            assertTrue(json.contains("\"algorithm_parameters\":"));
+            assertTrue(json.contains("\"parameter_digest\":\""));
+            assertTrue(json.contains("\"logical_resources\":{\"requested\":{\"1\":2.0},\"admitted\":{\"1\":1.0}}"));
+            assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void rolloutUsesAnExplicitSignedPriorWithIndependentVirtualInstances() throws Exception {
+        writeTrace(temporary, records(), 2, 3, -3, -2);
+        final var prior = RolloutPriorProtos.Prior.newBuilder().setVersion("rollout-prior-v1").setDatasetId(42)
+                .addBundles(RolloutPriorProtos.Bundle.newBuilder().setId(1).setWeight(1)
+                        .addUnits(RolloutPriorProtos.Unit.newBuilder().setId(1)
+                                .addMembers(RolloutPriorProtos.Member.newBuilder().setSourceResource(2))))
+                .build();
+        final var path = temporary.resolve("prior.pb");
+        Files.write(path, prior.toBuilder().setSha256(ByteString.copyFrom(RolloutPrior.canonicalDigest(prior)))
+                .build().toByteArray());
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "--dataset", temporary.toString(), "--algorithm", "rollout",
+                "--rollout-prior", path.toString(), "--rollout-candidates", "2", "--rollout-scenarios", "2",
+                "--rollout-horizon", "1"));
+        final var json = output.toString(StandardCharsets.UTF_8);
+        assertTrue(json.contains("\"algorithm\":\"rollout\""));
+        assertTrue(json.contains("\"copy_cap\":128"));
+        assertTrue(json.contains("\"prior_digest\":\""));
+        assertTrue(json.contains("\"admitted_units\":1"));
+        assertTrue(json.contains("\"declined_units\":1"));
+        assertTrue(json.contains("\"continuation_calls\":2"));
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+    }
 
     @Test
     void emitsOneReportWithInputIdentityOptionsAdmissionsAndOccupiedQuality() throws Exception {
@@ -200,6 +257,10 @@ class RunnerCliTest {
                 {"--dataset", "absent", "--algorithm", "fitcount", "--gpu-model", "unknown"},
                 {"--dataset", "absent", "--dataset", "another", "--algorithm", "fitcount"},
                 {"--dataset", "absent", "--algorithm"},
+                {"--dataset", "absent", "--algorithm", "fitcount", "--bulk-size", "101"},
+                {"--dataset", "absent", "--algorithm", "rollout"},
+                {"--dataset", "absent", "--algorithm", "rollout", "--rollout-prior", "absent", "--bulk-size", "2"},
+                {"--dataset", "absent", "--algorithm", "fitcount", "--rollout-prior", "absent"},
                 {"--dataset", "absent", "--algorithm", "fitcount", "--unknown", "1"}
         };
         for (final var arguments : invalid) {

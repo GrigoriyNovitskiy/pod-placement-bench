@@ -9,6 +9,9 @@ import org.junit.jupiter.api.Test;
 
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Domain;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Limit;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
@@ -538,6 +541,220 @@ class EngineTest {
             assertEquals(0, state.groupCount(1));
             assertEquals(0, state.groupCount(2));
         }
+    }
+
+    @Test
+    void isolatedTrialsRestoreFloatingStorageGpuAndGroupStateExactly() throws Exception {
+        final var specification = model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{1, 9, 10, 11}, 1, 100, 100, 1),
+                alloc(2, new int[]{18, 19, 20}, 20, .1, Double.MAX_VALUE),
+                alloc(3, new int[]{1, 11}, .3, .2), alloc(4, new int[]{1, 11}, .1, .2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)
+                        .setAlternativeMedia(Media.SSD).setAlternativeSpindles(4)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setGroup(1)
+                        .addLinks(Link.newBuilder().setTarget(5).setDomain(1))
+                        .addLinks(Link.newBuilder().setRelation(Relation.READY_GROUP).setTarget(2).setDomain(1))),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.SHARD).setGroup(2)
+                        .addDisks(DiskPlan.newBuilder().setMedia(Media.SSD).setExtents(1).setSpindles(.1)
+                                .setMinDevices(1).setMaxDevices(1).setMinStripes(1).setMaxStripes(1))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 4, 4), resource(5, 0, 5));
+        final var source = new Engine(specification);
+        final var base = new Request(3);
+        final var pending = new Request(4, 5);
+        final var notifications = new ArrayList<Integer>();
+        final var sourcePlanner = new GreedyPlanner(source);
+        final var sourcePolicy = new SchedulingAlgorithm(source, 42) {
+            @Override
+            public void schedule(Request request) {
+                final var plans = sourcePlanner.plan(request, 1, 0);
+                assertNotNull(plans);
+                context.place(request, plans);
+            }
+
+            @Override
+            public void placed(Assignment plan) {
+                notifications.add(plan.resource());
+            }
+        };
+        source.schedule(sourcePolicy, base);
+        final var trial = source.trial(specification);
+        final var state = trial.state();
+        final int gpu = specification.gpus.first(1, 11);
+        assertThrows(IllegalStateException.class, () -> state.remove(base));
+        final long cpuBits = Double.doubleToLongBits(source.available(1, 1));
+        final long spindleBits = Double.doubleToLongBits(source.available(1, 8));
+        for (int pass = 0; pass < 20; pass++) {
+            if (pass == 0) {
+                final var planner = new GreedyPlanner(state);
+                final var failing = new SchedulingAlgorithm(state, 1) {
+                    @Override
+                    public void schedule(Request request) {
+                        final var plans = planner.plan(request, 1, 0);
+                        assertNotNull(plans);
+                        context.place(request, plans);
+                    }
+
+                    @Override
+                    public void placed(Assignment plan) {
+                        throw new IllegalStateException("Private trial callback");
+                    }
+                };
+                assertThrows(IllegalStateException.class, () -> state.schedule(failing, pending));
+            } else {
+                state.schedule(greedy(state), pending);
+                assertNotNull(state.placement(4));
+                assertNotNull(state.placement(5));
+                assertEquals(2, state.groupCount(1));
+                assertEquals(1, state.groupCount(2));
+                assertEquals(12, state.gpuAvailable(gpu));
+                if ((pass & 1) == 0) {
+                    state.remove(pending);
+                }
+            }
+            trial.reset();
+            trial.reset();
+            assertEquals(cpuBits, Double.doubleToLongBits(state.available(1, 1)));
+            assertEquals(spindleBits, Double.doubleToLongBits(state.available(1, 8)));
+            assertEquals(source.available(1, 7), state.available(1, 7));
+            assertEquals(source.available(1, 9), state.available(1, 9));
+            assertEquals(source.available(2, 18), state.available(2, 18));
+            assertEquals(source.available(2, 19), state.available(2, 19));
+            assertEquals(source.available(2, 19, Media.SSD_VALUE), state.available(2, 19, Media.SSD_VALUE));
+            assertEquals(16, state.gpuAvailable(gpu));
+            assertEquals(1, state.groupCount(1));
+            assertEquals(0, state.groupCount(2));
+            assertEquals(1, state.domainCount(1, 1, 1));
+            assertEquals(source.revision(), state.revision());
+            assertEquals(source.capacityRevision(1), state.capacityRevision(1));
+            assertNull(state.placement(4));
+            assertNull(state.placement(5));
+            assertEquals(List.of(3), notifications);
+            assertEquals(cpuBits, Double.doubleToLongBits(source.available(1, 1)));
+            assertEquals(16, source.gpuAvailable(gpu));
+        }
+        source.remove(base);
+        assertThrows(IllegalStateException.class, trial::reset);
+        assertThrows(IllegalStateException.class, trial::state);
+    }
+
+    @Test
+    void trialsCopyExternalReadinessAndDoNotLeakIncomingDependencies() throws Exception {
+        final var source = new Engine(model(alloc(1, new int[]{1}, 8), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.SHARD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)
+                        .addLinks(Link.newBuilder().setRelation(Relation.READY_GROUP).setTarget(1).setDomain(1))
+                        .addLinks(Link.newBuilder().setRelation(Relation.SHARED_GROUP).setTarget(1).setDomain(1))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 3)));
+        final var first = new Request(2);
+        final var second = new Request(3);
+        final var consumer = new Request(4);
+        final var policy = greedy(source);
+        source.schedule(policy, first, second);
+        final var trial = source.trial(source.model());
+        final var state = trial.state();
+        for (int pass = 0; pass < 2; pass++) {
+            state.schedule(greedy(state), consumer);
+            assertNotNull(state.placement(4));
+            assertEquals(2, state.groupCount(1));
+            assertEquals(1, state.groupCount(2));
+            assertNull(source.placement(4));
+            trial.reset();
+            assertEquals(0, state.groupCount(2));
+        }
+        source.remove(first);
+        source.remove(second);
+        assertEquals(8, source.available(1, 1));
+    }
+
+    @Test
+    void virtualBanksPreserveOriginalGroupsAndCloneCompletePhysicalGeometry() throws Exception {
+        final var source = model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{1, 11}, 4, 1), alloc(2, new int[]{18, 19, 20}, 20, 2, 100),
+                alloc(3, new int[]{1, 11}, .5, .2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.HDD)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1).setPinnedHost(1).setCandidates(2)
+                        .addLinks(Link.newBuilder().setTarget(5).setDomain(1))
+                        .addLinks(Link.newBuilder().setRelation(Relation.READY_GROUP).setTarget(2).setDomain(1))
+                        .addLimits(Limit.newBuilder().setDomain(1).setMax(1).setHard(true))),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD).setGroup(2)
+                        .addDisks(DiskPlan.newBuilder().setMedia(Media.HDD).setLayout(Layout.RAID1)
+                                .setExtents(9).setMetadataExtents(1).setMinDevices(2).setMaxDevices(2)
+                                .setMinStripes(1).setMaxStripes(2))),
+                candidates(2, 1), resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2),
+                resource(4, 3, 3), resource(5, 0, 4));
+        final var virtual = source.withVirtualResources(new ClusterSpec.VirtualResource[]{
+                new ClusterSpec.VirtualResource(4, 3, new int[]{7, 4}),
+                new ClusterSpec.VirtualResource(5, 4, new int[0])});
+        assertTrue(virtual.extendsModel(source));
+        assertTrue(virtual.allocations == source.allocations);
+        assertTrue(virtual.candidates == source.candidates);
+        assertArrayEquals(source.alloc, java.util.Arrays.copyOf(virtual.alloc, source.alloc.length));
+        assertArrayEquals(source.constraints, java.util.Arrays.copyOf(virtual.constraints, source.constraints.length));
+        assertEquals(source.gpus.first(1, 11), virtual.gpus.first(1, 11));
+        final var canonical = new Engine(source);
+        final var trial = canonical.trial(virtual);
+        final var state = trial.state();
+        final var unit = new Request(6, 7);
+        final var policy = greedy(state);
+        state.schedule(policy, unit);
+        assertNotNull(state.placement(6));
+        assertNotNull(state.placement(7));
+        assertEquals(10, state.available(2, 18));
+        assertEquals(10, state.available(3, 18));
+        assertEquals(1, state.groupCount(3));
+        assertEquals(1, state.groupCount(4));
+        assertEquals(0, state.groupCount(1));
+        assertEquals(0, state.groupCount(2));
+        state.remove(unit);
+        assertEquals(4, state.available(1, 1));
+        assertEquals(20, state.available(2, 18));
+        assertEquals(20, state.available(3, 18));
+        assertEquals(20, state.gpuAvailable(virtual.gpus.first(1, 11)));
+        assertEquals(0, state.groupCount(3));
+        assertEquals(0, state.groupCount(4));
+        state.schedule(policy, unit);
+        assertNotNull(state.placement(6));
+        assertNotNull(state.placement(7));
+        trial.reset();
+        assertEquals(20, state.available(2, 18));
+        assertEquals(20, state.gpuAvailable(virtual.gpus.first(1, 11)));
+        canonical.schedule(greedy(canonical), new Request(4, 5));
+        assertNotNull(canonical.placement(4));
+        assertEquals(1, canonical.groupCount(1));
+        assertEquals(1, canonical.groupCount(2));
+        assertThrows(IllegalArgumentException.class, () -> source.withVirtualResources(new ClusterSpec.VirtualResource[]{
+                new ClusterSpec.VirtualResource(1, 0, new int[0])}));
+        assertThrows(IllegalArgumentException.class, () -> source.withVirtualResources(new ClusterSpec.VirtualResource[]{
+                new ClusterSpec.VirtualResource(4, 1, new int[]{5, 2})}));
+        assertThrows(IllegalArgumentException.class, () -> source.withVirtualResources(new ClusterSpec.VirtualResource[]{
+                new ClusterSpec.VirtualResource(4, 3, new int[0])}));
+        assertThrows(IllegalArgumentException.class, () -> canonical.trial(model(
+                alloc(1, new int[]{1}, 1), rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                resource(1, 1, 1))));
+    }
+
+    @Test
+    void trialsRejectNestedSnapshotsAndInvalidateWhenTheirSourceFailsWithoutACommit() throws Exception {
+        final var source = scalarState();
+        final var detached = source.trial(source.model()).state();
+        assertThrows(IllegalStateException.class, () -> detached.trial(detached.model()));
+        final var escaped = new Engine.Trial[1];
+        final var failing = new SchedulingAlgorithm(source, 1) {
+            @Override
+            public void schedule(Request request) {
+                escaped[0] = context.trial(context.model());
+                throw new IllegalStateException("Canonical policy failed");
+            }
+        };
+        assertThrows(IllegalStateException.class, () -> source.schedule(failing, new Request(2)));
+        assertEquals(0, source.revision());
+        assertThrows(IllegalStateException.class, escaped[0]::state);
+        assertThrows(IllegalStateException.class, escaped[0]::reset);
+        assertThrows(IllegalStateException.class, () -> detached.available(1, 1));
     }
 
     private static Engine scalarState() throws Exception {

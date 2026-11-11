@@ -3,6 +3,7 @@ package one.cloud.benchmark.runner;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 import one.cloud.benchmark.engine.Engine;
@@ -49,7 +50,24 @@ public final class DatasetRunner {
             long placedUnits, long attemptedResources, long placedResources, long removedUnits, long skippedRemovals,
             int peakActiveUnits, long peakActiveResources, int peakUsedHosts,
             long plannerCalls, long checksum, long heapBeforeBytes, long sampledPeakHeapBytes,
-            Latency scheduling, Latency removal, List<Checkpoint> checkpoints) {
+            Latency scheduling, Latency removal, List<Checkpoint> checkpoints,
+            long attemptedUnits, boolean truncatedWindow, Map<String, String> parameters, Map<String, Long> counters,
+            double[] requestedLogical, double[] admittedLogical, long[] refusedResourcesByAllocation) {
+        public Result(Options options, String scenarioDigest, String algorithmClass, int processedOperations,
+                int catalogueSize, long catalogueChecksum, int probeCount, long probeChecksum,
+                long initializationNanos, long algorithmInitializationNanos, long replayNanos, long qualityNanos,
+                long placedUnits, long attemptedResources, long placedResources, long removedUnits, long skippedRemovals,
+                int peakActiveUnits, long peakActiveResources, int peakUsedHosts,
+                long plannerCalls, long checksum, long heapBeforeBytes, long sampledPeakHeapBytes,
+                Latency scheduling, Latency removal, List<Checkpoint> checkpoints) {
+            this(options, scenarioDigest, algorithmClass, processedOperations,
+                    catalogueSize, catalogueChecksum, probeCount, probeChecksum,
+                    initializationNanos, algorithmInitializationNanos, replayNanos, qualityNanos,
+                    placedUnits, attemptedResources, placedResources, removedUnits, skippedRemovals,
+                    peakActiveUnits, peakActiveResources, peakUsedHosts, plannerCalls, checksum,
+                    heapBeforeBytes, sampledPeakHeapBytes, scheduling, removal, checkpoints,
+                    scheduling.count(), false, Map.of(), Map.of(), new double[0], new double[0], new long[0]);
+        }
     }
 
     public static Result run(Scenario scenario, Options options, Factory factory) throws Exception {
@@ -66,6 +84,8 @@ public final class DatasetRunner {
         private final boolean[] desired, admitted;
         private final int[] hostByResource, hostUse;
         private final long[] scheduleTimes, removeTimes;
+        private final double[] requestedLogical, admittedLogical;
+        private final long[] refusedResourcesByAllocation;
         private final ArrayList<Checkpoint> checkpoints = new ArrayList<>();
         private final long started = System.nanoTime();
         private final long heapBefore = heapUsed();
@@ -75,6 +95,8 @@ public final class DatasetRunner {
         private int peakActiveUnits, peakUsedHosts;
         private long activeResources, logicalResources, peakActiveResources;
         private long placedUnits, attemptedResources, placedResources, removedUnits, skippedRemovals;
+        private long attemptedUnits;
+        private boolean truncatedWindow;
         private long scheduleNanos, removeNanos, qualityNanos;
         private long checksum = HASH_START, sampledPeakHeap = heapBefore;
 
@@ -99,6 +121,9 @@ public final class DatasetRunner {
             }
             scheduleTimes = new long[creates];
             removeTimes = new long[limit - creates];
+            requestedLogical = new double[scenario.model.dimensionCount + 1];
+            admittedLogical = new double[requestedLogical.length];
+            refusedResourcesByAllocation = new long[scenario.model.allocations.offset.length - 1];
         }
 
         private Result run(Factory factory) throws Exception {
@@ -111,7 +136,7 @@ public final class DatasetRunner {
                     throw new IllegalArgumentException("Algorithm initialization changed the fresh engine");
                 }
                 int checkpoint = 0;
-                for (int index = 0; index < limit; index++) {
+                for (int index = 0; index < limit;) {
                     final int event = scenario.events[index];
                     if (event == 0 || event == Integer.MIN_VALUE) {
                         throw new IllegalArgumentException("Invalid scenario event");
@@ -121,17 +146,22 @@ public final class DatasetRunner {
                         throw new IllegalArgumentException("Scenario unit is out of range");
                     }
                     final var request = scenario.requests[unit];
-                    checksum = mix(mix(checksum, index), event);
+                    final int completed;
                     if (event > 0) {
-                        create(algorithm, unit, request);
+                        final int announcedEnd = scenario.windowEnd(index);
+                        completed = Math.min(announcedEnd, limit);
+                        truncatedWindow |= completed != announcedEnd;
+                        create(algorithm, index, completed);
                     } else {
+                        checksum = mix(mix(checksum, index), event);
                         remove(unit, request);
+                        completed = index + 1;
                     }
-                    final int completed = index + 1;
                     if (checkpoint < scenario.checkpoints.length && scenario.checkpoints[checkpoint] == completed) {
                         checkpoint(completed);
                         checkpoint++;
                     }
+                    index = completed;
                 }
                 if (limit < scenario.events.length && logicalUnits > 0
                         && (checkpoints.isEmpty() || checkpoints.getLast().operation != limit)) {
@@ -145,23 +175,40 @@ public final class DatasetRunner {
                         placedUnits, attemptedResources, placedResources, removedUnits, skippedRemovals,
                         peakActiveUnits, peakActiveResources, peakUsedHosts, algorithm.plannerCalls(), checksum,
                         heapBefore, sampledPeakHeap, latency(scheduleTimes, scheduleCount, scheduleNanos),
-                        latency(removeTimes, removeCount, removeNanos), List.copyOf(checkpoints));
+                        latency(removeTimes, removeCount, removeNanos), List.copyOf(checkpoints),
+                        attemptedUnits, truncatedWindow, Map.copyOf(algorithm.parameters()), Map.copyOf(algorithm.counters()),
+                        requestedLogical, admittedLogical, refusedResourcesByAllocation);
             }
         }
 
-        private void create(SchedulingAlgorithm algorithm, int unit, Request request) throws Exception {
-            if (desired[unit]) {
-                throw new IllegalArgumentException("Repeated scenario creation");
+        private void create(SchedulingAlgorithm algorithm, int first, int end) throws Exception {
+            final var window = new Request[end - first];
+            for (int index = first; index < end; index++) {
+                final int event = scenario.events[index];
+                if (event <= 0 || event > scenario.requests.length || desired[event - 1]) {
+                    throw new IllegalArgumentException("Invalid or repeated scenario creation");
+                }
+                final var request = scenario.requests[event - 1];
+                window[index - first] = request;
+                desired[event - 1] = true;
+                logicalUnits++;
+                logicalResources += request.size();
+                attemptedUnits++;
+                attemptedResources += request.size();
             }
-            desired[unit] = true;
-            logicalUnits++;
-            logicalResources += request.size();
-            attemptedResources += request.size();
             final long start = System.nanoTime();
-            engine.schedule(algorithm, request);
+            engine.schedule(algorithm, window);
             final long elapsed = System.nanoTime() - start;
             scheduleTimes[scheduleCount++] = elapsed;
             scheduleNanos = Math.addExact(scheduleNanos, elapsed);
+            for (int index = first; index < end; index++) {
+                final int event = scenario.events[index];
+                checksum = mix(mix(checksum, index), event);
+                created(event - 1, window[index - first]);
+            }
+        }
+
+        private void created(int unit, Request request) {
             final boolean placed = engine.placement(request.resource(0)) != null;
             checksum = mix(checksum, placed ? 1 : 0);
             for (int index = 0; index < request.size(); index++) {
@@ -170,6 +217,7 @@ public final class DatasetRunner {
                 if ((plan != null) != placed) {
                     throw new IllegalStateException("Engine committed a partial scheduling unit");
                 }
+                logical(resource, placed);
                 if (placed) {
                     hostByResource[resource] = plan.host();
                     if (hostUse[plan.host()]++ == 0) {
@@ -188,6 +236,30 @@ public final class DatasetRunner {
                 peakActiveResources = Math.max(peakActiveResources, activeResources);
                 peakUsedHosts = Math.max(peakUsedHosts, usedHosts);
             }
+        }
+
+        private void logical(int resource, boolean placed) {
+            final var allocations = scenario.model.allocations;
+            final int profile = scenario.model.alloc[resource];
+            if (!placed) {
+                refusedResourcesByAllocation[profile]++;
+            }
+            for (int index = allocations.offset[profile]; index < allocations.offset[profile + 1]; index++) {
+                final int dimension = allocations.type[index];
+                final double amount = allocations.amount[index];
+                requestedLogical[dimension] = addLogical(requestedLogical[dimension], amount);
+                if (placed) {
+                    admittedLogical[dimension] = addLogical(admittedLogical[dimension], amount);
+                }
+            }
+        }
+
+        private double addLogical(double accumulated, double amount) {
+            final double sum = accumulated + amount;
+            if (!Double.isFinite(sum)) {
+                throw new ArithmeticException("Logical resource totals overflowed");
+            }
+            return sum;
         }
 
         private void remove(int unit, Request request) {

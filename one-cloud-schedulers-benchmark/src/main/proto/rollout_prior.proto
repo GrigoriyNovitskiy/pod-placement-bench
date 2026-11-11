@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package one.cloud.benchmark.dataset;
+
+option java_package = "one.cloud.benchmark.dataset";
+option java_outer_classname = "RolloutPriorProtos";
+
+message Prior {
+  string version = 1;
+  fixed64 dataset_id = 2;
+  repeated Bundle bundles = 3;
+  bytes sha256 = 4;
+}
+
+message Bundle {
+  uint32 id = 1;
+  uint64 weight = 2;
+  repeated Unit units = 3;
+  repeated Group groups = 4;
+  repeated uint32 external_resources = 5 [packed = true];
+  repeated uint32 external_groups = 6 [packed = true];
+}
+
+message Unit {
+  uint32 id = 1;
+  repeated Member members = 2;
+}
+
+message Member {
+  uint32 source_resource = 1;
+  uint32 candidates = 2;
+  uint32 pinned_host = 3;
+}
+
+message Group {
+  uint32 source_group = 1;
+  uint32 cardinality = 2;
+}

@@ -1,5 +1,6 @@
 package one.cloud.benchmark.engine;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
 import java.util.Objects;
@@ -14,6 +15,9 @@ import one.cloud.benchmark.model.Request;
 public final class Engine implements SchedulingContext {
     private static final long[] NO_LINKS = new long[0];
     private final ClusterSpec model;
+    private final Engine trialSource;
+    private final long trialRevision;
+    private final ArrayList<Unit> trialUnits;
     private final CapacityLedger capacity;
     private final Thread owner = Thread.currentThread();
     private final Assignment[] placements;
@@ -32,6 +36,9 @@ public final class Engine implements SchedulingContext {
 
     public Engine(ClusterSpec model) {
         this.model = Objects.requireNonNull(model);
+        trialSource = null;
+        trialRevision = 0;
+        trialUnits = null;
         capacity = new CapacityLedger(model);
         placements = new Assignment[model.alloc.length];
         units = new Unit[placements.length];
@@ -68,6 +75,54 @@ public final class Engine implements SchedulingContext {
             }
         }
         domains = keys.stream().mapToLong(Long::longValue).toArray();
+    }
+
+    private Engine(Engine source, ClusterSpec model) {
+        source.checkThread();
+        if (source.trialSource != null) {
+            throw new IllegalStateException("Nested trials are unsupported");
+        }
+        if (source.failure != null || !model.extendsModel(source.model)) {
+            throw new IllegalArgumentException("Trial model must extend a valid source state");
+        }
+        this.model = model;
+        trialSource = source;
+        trialRevision = source.revision;
+        trialUnits = new ArrayList<>();
+        capacity = new CapacityLedger(source.capacity, model);
+        placements = Arrays.copyOf(source.placements, model.alloc.length);
+        units = Arrays.copyOf(source.units, placements.length);
+        tentative = new Assignment[placements.length];
+        windowOwner = new int[placements.length];
+        seen = new int[placements.length];
+        hostRevisions = source.hostRevisions.clone();
+        int maxGroup = source.groupSizes.length - 1;
+        for (final int group : model.rules.group) {
+            maxGroup = Math.max(maxGroup, group);
+        }
+        for (int link = 0; link < model.rules.linkTarget.length; link++) {
+            if (model.rules.linkKind[link] != Relation.COLOCATE_VALUE) {
+                maxGroup = Math.max(maxGroup, model.rules.linkTarget[link]);
+            }
+        }
+        groupSizes = Arrays.copyOf(source.groupSizes, maxGroup + 1);
+        for (int resource = source.placements.length; resource < placements.length; resource++) {
+            final int group = model.rules.group[model.constraints[resource]];
+            if (group != 0) {
+                groupSizes[group]++;
+            }
+        }
+        groupCounts = Arrays.copyOf(source.groupCounts, groupSizes.length);
+        tentativeGroups = new int[groupSizes.length];
+        domains = source.domains;
+        counts.copy(source.counts);
+        incoming.copy(source.incoming);
+        revision = source.revision;
+    }
+
+    @Override
+    public Trial trial(ClusterSpec trialModel) {
+        return new Trial(this, Objects.requireNonNull(trialModel));
     }
 
     public void schedule(SchedulingAlgorithm algorithm, Request... requests) throws Exception {
@@ -130,6 +185,9 @@ public final class Engine implements SchedulingContext {
         final var unit = units[resource];
         if (unit == null || unit.request != request) {
             throw new IllegalArgumentException("The exact committed unit must be removed");
+        }
+        if (trialSource != null && resource < trialSource.units.length && unit == trialSource.units[resource]) {
+            throw new IllegalStateException("A trial cannot remove a previously committed unit");
         }
         for (final var plan : unit.plans) {
             update(plan, 1, tentativeGroups, tentativeCounts);
@@ -259,6 +317,9 @@ public final class Engine implements SchedulingContext {
         }
         nextRequest = pending.get(request) + 1;
         changed(unit);
+        if (trialUnits != null) {
+            trialUnits.add(unit);
+        }
         notify(unit.plans, true);
     }
 
@@ -515,9 +576,58 @@ public final class Engine implements SchedulingContext {
         return ++sequence;
     }
 
+    public static final class Trial {
+        private final Engine state;
+
+        private Trial(Engine source, ClusterSpec model) {
+            state = new Engine(source, model);
+        }
+
+        public Engine state() {
+            state.checkThread();
+            return state;
+        }
+
+        public void reset() {
+            state.checkThread();
+            if (state.pending != null || state.notifying) {
+                throw new IllegalStateException("Cannot reset an active trial");
+            }
+            for (int index = state.trialUnits.size() - 1; index >= 0; index--) {
+                final var unit = state.trialUnits.get(index);
+                if (state.units[unit.plans[0].resource()] != unit) {
+                    continue;
+                }
+                state.capacity.release(unit.debit);
+                for (final long link : unit.outgoing) {
+                    state.incoming.add(link, -1);
+                }
+                for (final var plan : unit.plans) {
+                    state.placements[plan.resource()] = null;
+                    state.units[plan.resource()] = null;
+                    state.update(plan, -1, state.groupCounts, state.counts);
+                }
+            }
+            for (final var unit : state.trialUnits) {
+                state.capacity.restore(state.trialSource.capacity, unit.debit);
+                for (final int host : unit.hosts) {
+                    state.hostRevisions[host] = state.trialSource.hostRevisions[host];
+                }
+            }
+            state.trialUnits.clear();
+            state.revision = state.trialRevision;
+            state.algorithm = null;
+            state.failure = null;
+            state.nextRequest = 0;
+        }
+    }
+
     private void checkThread() {
         if (Thread.currentThread() != owner) {
             throw new IllegalStateException("Placement state is confined to its owner thread");
+        }
+        if (trialSource != null && (trialSource.failure != null || trialSource.revision != trialRevision)) {
+            throw new IllegalStateException("Trial source has failed or changed");
         }
     }
 
@@ -553,6 +663,12 @@ public final class Engine implements SchedulingContext {
         private long[] keys = new long[16];
         private int[] values = new int[16];
         private int size;
+
+        private void copy(Counts source) {
+            keys = source.keys.clone();
+            values = source.values.clone();
+            size = source.size;
+        }
 
         private int get(long key) {
             final int index = slot(key);

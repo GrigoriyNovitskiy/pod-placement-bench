@@ -107,6 +107,40 @@ final class CapacityLedger {
         }
     }
 
+    CapacityLedger(CapacityLedger source, ClusterSpec model) {
+        this.model = model;
+        stride = source.stride;
+        slot = Arrays.copyOf(source.slot, model.alloc.length);
+        Arrays.fill(slot, source.slot.length, slot.length, -1);
+        hasNuma = source.hasNuma;
+        hasStorage = source.hasStorage;
+        inventory = source.inventory;
+        capacity = source.capacity.clone();
+        used = source.used.clone();
+        pristine = source.pristine.clone();
+        gpuRemaining = source.gpuRemaining.clone();
+        gpuFirst = source.gpuFirst;
+        gpuEnd = source.gpuEnd;
+    }
+
+    void restore(CapacityLedger source, Debit debit) {
+        for (int index = 0; index < debit.size; index++) {
+            final int offset = debit.index[index];
+            used[offset] = source.used[offset];
+            pristine[offset / stride] = source.pristine[offset / stride];
+        }
+        for (int index = 0; index < debit.deviceCount; index++) {
+            final int resource = debit.devices[index];
+            final int host = model.rules.parent[model.constraints[resource]];
+            final int offset = row(host) * stride;
+            System.arraycopy(source.capacity, offset + 5, capacity, offset + 5, 6);
+        }
+        for (int index = 0; index < debit.gpuCount; index++) {
+            final int device = debit.gpus[index] - gpuFirst;
+            gpuRemaining[device] = source.gpuRemaining[device];
+        }
+    }
+
     void load(SchedulingContext context, int[] resources) {
         for (final int resource : inventory) {
             slot[resource] = -1;

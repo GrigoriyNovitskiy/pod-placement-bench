@@ -2,6 +2,8 @@ package one.cloud.benchmark.runner;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
@@ -25,10 +27,79 @@ import static one.cloud.benchmark.testsupport.TestModel.trace;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatasetRunnerTest {
+    @Test
+    void measuresWholeAnnouncedWindowsAndReportsUnitsLogicalWorkAndPrefixCuts() throws Exception {
+        final var scenario = Scenario.from(trace(new Record[]{
+                alloc(1, new int[]{1}, 2), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2)},
+                2, 3, 4, -4, -3, -2)).withServiceBursts(2);
+        final var windows = new ArrayList<Integer>();
+        final DatasetRunner.Factory factory = (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+            final FitCount fallback = new FitCount(context, seed, catalogue);
+
+            @Override
+            public void schedule(Request[] requests) {
+                windows.add(requests.length);
+                for (final var request : requests) {
+                    fallback.schedule(request);
+                }
+            }
+
+            @Override
+            public void schedule(Request request) {
+                throw new AssertionError("Runner must announce the window");
+            }
+
+            @Override
+            public void placed(Assignment placement) {
+                fallback.placed(placement);
+            }
+
+            @Override
+            public void removed(Assignment placement) {
+                fallback.removed(placement);
+            }
+
+            @Override
+            public Map<String, String> parameters() {
+                return Map.of("policy", "window-test");
+            }
+
+            @Override
+            public Map<String, Long> counters() {
+                return Map.of("windows", (long) windows.size());
+            }
+        };
+        final var full = DatasetRunner.run(scenario, DatasetRunner.Options.defaults(), factory);
+        assertEquals(List.of(2, 1), windows);
+        assertEquals(3, full.attemptedUnits());
+        assertEquals(2, full.scheduling().count());
+        assertEquals(2, full.placedUnits());
+        assertEquals(2, full.removedUnits());
+        assertEquals(1, full.skippedRemovals());
+        assertEquals(3, full.requestedLogical()[1]);
+        assertEquals(2, full.admittedLogical()[1]);
+        assertEquals(1, full.refusedResourcesByAllocation()[2]);
+        assertEquals("window-test", full.parameters().get("policy"));
+        assertEquals(2L, full.counters().get("windows"));
+        assertFalse(full.truncatedWindow());
+        windows.clear();
+        final var prefix = DatasetRunner.run(scenario, new DatasetRunner.Options(42, 1, 0, 10), factory);
+        assertEquals(List.of(1), windows);
+        assertTrue(prefix.truncatedWindow());
+        assertEquals(1, prefix.attemptedUnits());
+        assertEquals(1, prefix.scheduling().count());
+        assertEquals(full.scenarioDigest(), prefix.scenarioDigest());
+        assertEquals(full.catalogueChecksum(), prefix.catalogueChecksum());
+    }
+
     @Test
     void fgdReplayIsRepeatableAcrossGpuChurnAndFullDrain() throws Exception {
         final var scenario = Scenario.from(trace(new Record[]{
@@ -209,6 +280,18 @@ class DatasetRunnerTest {
         assertEquals(0, result.removal().count());
         assertEquals(0, result.catalogueSize());
         assertTrue(result.checkpoints().isEmpty());
+        final var legacy = new DatasetRunner.Result(result.options(), result.scenarioDigest(), result.algorithmClass(),
+                result.processedOperations(), result.catalogueSize(), result.catalogueChecksum(), result.probeCount(),
+                result.probeChecksum(), result.initializationNanos(), result.algorithmInitializationNanos(),
+                result.replayNanos(), result.qualityNanos(), result.placedUnits(), result.attemptedResources(),
+                result.placedResources(), result.removedUnits(), result.skippedRemovals(), result.peakActiveUnits(),
+                result.peakActiveResources(), result.peakUsedHosts(), result.plannerCalls(), result.checksum(),
+                result.heapBeforeBytes(), result.sampledPeakHeapBytes(), result.scheduling(), result.removal(),
+                result.checkpoints());
+        assertEquals(result.checksum(), legacy.checksum());
+        assertEquals(result.scheduling().count(), legacy.attemptedUnits());
+        assertTrue(legacy.parameters().isEmpty());
+        assertEquals(0, legacy.requestedLogical().length);
         assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, -1, 0, 1));
         assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, 0, -1, 1));
         assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, 0, 0, 0));

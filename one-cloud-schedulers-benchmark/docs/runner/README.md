@@ -77,3 +77,21 @@ The built-ins are fitcount and normalized residual L2 geometric best-fit, follow
 the separate [geometric specification](../geometric-best-fit/README.md). The runner
 and CLI were independently checked before the second algorithm was added. No JMH
 fixtures, automatic parameter sweep, LP solver or ML backend are introduced here.
+
+## Announced service bursts
+
+`Scenario.withServiceBursts(size)` cold-compiles consecutive same-service creates
+into windows of at most 100, using version `service-bursts-v1`. It preserves order
+and breaks at deletes and occupied checkpoints. The announcement boundaries and
+size are included in the scenario digest before scheduling; the operation prefix
+does not change that digest. A truncated final window is explicitly reported.
+
+The runner times one complete `Engine.schedule(window)` call. JSON format 2 keeps
+attempted units and schedule-window counts separate; latency samples are whole
+windows. B=1 behavior and checksum ordering are preserved. Logical requested and
+admitted vectors use original allocation profiles; declined resource counts are
+grouped by allocation profile. New algorithms also report static parameters, a
+parameter digest and outcome/work/fallback counters.
+
+See [bulk, DP and rollout usage](../algorithms/IMPLEMENTATION.md) for the distinct
+online and announced-window profiles and explicit forecast manifest.

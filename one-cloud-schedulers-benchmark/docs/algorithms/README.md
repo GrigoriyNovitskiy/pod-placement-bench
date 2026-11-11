@@ -1,6 +1,8 @@
 # Algorithm implementation plans
 
-These are implementation plans, not implemented backends. Numerical settings are
+These documents define implementation contracts and planned experiments.
+Bulk fitcount, count/tree DP and rollout are implemented; see
+[implementation and usage](IMPLEMENTATION.md). Numerical settings are
 explicit starting configurations agreed for the first experiments; none has been
 selected empirically on the ten clouds. Utilization takes priority over latency.
 
@@ -45,8 +47,8 @@ accounting implementation, or expose mutable debit arrays. Trials isolate
 placements, incoming links, readiness, domain counters,
 revisions, callbacks, RNG and caches. `GreedyPlanner.plan` calls `canPlace` for the
 pending request: it is neither a physical-only forecast oracle nor a complete
-candidate generator for later dependent units. These capabilities need actual
-implementation before the new algorithms can run.
+candidate generator for later dependent units. These capabilities are implemented by `Engine.Trial` and `FitCount.select`;
+the common physical kernel remains authoritative.
 
 The common comparison profile uses the full declared catalogue, physical copy
 cap **128**, cache rows **256**, seed **42** and one worker. This does not change
@@ -96,8 +98,8 @@ modern 9.15. No solver dependency is added by these plans.
 
 ## Implemented inventory
 
-Checked on 2026-11-11: the CLI exposes five implemented modes backed by three
-`SchedulingAlgorithm` classes:
+The CLI includes the following implementations (plus the four Kubernetes scoring
+modes):
 
 | CLI mode | Implementation |
 | --- | --- |
@@ -106,7 +108,11 @@ Checked on 2026-11-11: the CLI exposes five implemented modes backed by three
 | `geometric-best-fit` | [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java); [specification](../geometric-best-fit/README.md) |
 | `fgd` | [Fgd](../../src/main/java/one/cloud/benchmark/algorithms/fgd/Fgd.java), GPU fragmentation |
 | `cpu-ram-fgd` | The same class, `Fgd.cpuRam` |
+| `bulk-fitcount` | `BulkFitCount`, frozen-order greedy and sequential-incumbent guard |
+| `dp` | `BulkFitCount.dynamicProgramming`, guarded count/tree selection |
+| `rollout` | `Rollout`, explicit prior and common isolated continuation paths |
 
-The dataset runner currently calls algorithms with B=1. `GreedyPlanner` is a
-geometry helper; the runner and engine are infrastructure. All six documents
-listed at the top of this index remain plans, not implementations.
+The runner defaults to B=1 and accepts explicit versioned service-burst windows. `GreedyPlanner` is a
+geometry helper; the runner and engine are infrastructure. The optional local DP hybrid and the CP-SAT/DCM/min-cost-flow backends remain
+plans. Bulk fitcount, count/tree DP and rollout use the shared engine trials.
+The CLI additionally exposes the four Kubernetes resource-scoring modes.

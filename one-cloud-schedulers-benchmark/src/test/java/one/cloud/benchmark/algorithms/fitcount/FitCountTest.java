@@ -1,6 +1,7 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 
 import org.junit.jupiter.api.Test;
 
@@ -13,6 +14,8 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.Engine;
+import one.cloud.benchmark.engine.SchedulingAlgorithm;
+import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
@@ -362,6 +365,74 @@ class FitCountTest {
             }
         }
         assertArrayEquals(placements[0], placements[1]);
+    }
+
+    @Test
+    void detachedSelectionPreservesTheBaselineAndReturnsDistinctOwnedAlternatives() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 4), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 1, 1),
+                resource(4, 2, 2), resource(5, 2, 2));
+        final var requests = new Request[]{new Request(4), new Request(5)};
+        for (final int limit : new int[]{1, 2, 8}) {
+            for (final long candidateSeed : new long[]{1, 42, -1}) {
+                final var baseline = new Engine(model);
+                final var selected = new Engine(model);
+                try (final var ordinary = new FitCount(baseline, 42, requests);
+                        final var chooser = new FitCount(selected, 42, requests)) {
+                    final var owned = new ArrayList<Assignment[]>();
+                    final var wrapper = new SchedulingAlgorithm(selected, 99) {
+                        @Override
+                        public void schedule(Request request) {
+                            final long revision = context.revision();
+                            final var candidates = chooser.selectCandidates(request, limit, candidateSeed);
+                            assertEquals(revision, context.revision());
+                            assertEquals(Math.min(limit, 3), candidates.length);
+                            final var hosts = new HashSet<Integer>();
+                            for (final var plans : candidates) {
+                                assertEquals(request.resource(0), plans[0].resource());
+                                assertTrue(hosts.add(plans[0].host()));
+                                assertTrue(context.canPlace(request, plans));
+                            }
+                            owned.add(candidates[0]);
+                            context.place(request, candidates[0]);
+                        }
+
+                        @Override
+                        public void placed(Assignment plan) {
+                            chooser.placed(plan);
+                        }
+
+                        @Override
+                        public void removed(Assignment plan) {
+                            chooser.removed(plan);
+                        }
+                    };
+                    for (int pass = 0; pass < 2; pass++) {
+                        for (final var request : requests) {
+                            baseline.schedule(ordinary, request);
+                            selected.schedule(wrapper, request);
+                            final var expected = baseline.placement(request.resource(0));
+                            final var actual = selected.placement(request.resource(0));
+                            assertEquals(expected.host(), actual.host());
+                            assertEquals(expected.numa(), actual.numa());
+                            assertArrayEquals(expected.devices(), actual.devices());
+                        }
+                        for (int index = requests.length - 1; index >= 0; index--) {
+                            baseline.remove(requests[index]);
+                            selected.remove(requests[index]);
+                        }
+                    }
+                    assertEquals(4, owned.size());
+                    assertEquals(4, owned.getFirst()[0].resource());
+                    assertEquals(1, owned.getFirst()[0].diskOffsets().length);
+                    assertEquals(0, owned.getFirst()[0].diskOffsets()[0]);
+                    assertThrows(IllegalArgumentException.class,
+                            () -> chooser.selectCandidates(requests[0], 0, candidateSeed));
+                }
+            }
+        }
     }
 
     private static ClusterSpec scalarModel(double first, double second) throws Exception {

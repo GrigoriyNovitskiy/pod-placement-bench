@@ -83,6 +83,14 @@ For example, free shares equivalent to `[0.2, 0.2, 0.2]` cannot satisfy a 0.6 re
 The JSON report records `gpu_model`, device-mode scenario digests differ from
 aggregate-mode digests, and the history checksum includes selected GPU IDs.
 
+
+Bulk fitcount, count/tree DP and strict online rollout are available as
+`bulk-fitcount`, `dp` and `rollout`. Bulk/DP need an explicitly announced service
+burst (`--bulk-size 100`); rollout needs a `--rollout-prior` protobuf manifest.
+Their default physical copy cap is 128. See the
+[implementation and usage](docs/algorithms/IMPLEMENTATION.md) for gates, exact
+trial isolation, prior construction, limits and reporting.
+
 For a standalone command, build the standard application distribution. Its script
 uses `JAVA_HOME` or `PATH`, so select a Java 25 runtime before launching it; Gradle
 `run` selects the configured toolchain automatically.

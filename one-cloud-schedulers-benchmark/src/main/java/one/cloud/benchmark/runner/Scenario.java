@@ -21,6 +21,7 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation.COLOCA
 /** Cold, deterministic normalization of complete synthetic traces into atomic request lifetimes. */
 public final class Scenario {
     public static final String NORMALIZATION_VERSION = "joint-phases-v1";
+    public static final String BURST_VERSION = "service-bursts-v1";
 
     public final ClusterSpec model;
     public final Request[] requests;
@@ -31,8 +32,12 @@ public final class Scenario {
     public final int expandedRestarts;
     public final String digest;
     public final String sourceOpsDigest;
+    public final int maxBurstSize;
+    private final int[] windowEnds;
 
     private Scenario(Compiler compiler) {
+        maxBurstSize = 1;
+        windowEnds = new int[0];
         model = ClusterSpec.from(compiler.data, compiler.gpuMode);
         requests = compiler.requests;
         events = compiler.events.values();
@@ -65,6 +70,63 @@ public final class Scenario {
             update(hash, buffer, checkpoint);
         }
         digest = HexFormat.of().formatHex(hash.digest());
+    }
+
+    private Scenario(Scenario source, int size) {
+        model = source.model;
+        requests = source.requests;
+        events = source.events;
+        checkpoints = source.checkpoints;
+        rawOperations = source.rawOperations;
+        partialChurn = source.partialChurn;
+        expandedRestarts = source.expandedRestarts;
+        sourceOpsDigest = source.sourceOpsDigest;
+        maxBurstSize = size;
+        windowEnds = new int[events.length];
+        final var hash = hash();
+        hash.update(HexFormat.of().parseHex(source.digest));
+        hash.update(BURST_VERSION.getBytes(StandardCharsets.UTF_8));
+        final var buffer = ByteBuffer.allocate(Long.BYTES);
+        update(hash, buffer, size);
+        for (int start = 0; start < events.length;) {
+            int end = start + 1;
+            final int group = events[start] > 0 ? service(requests[events[start] - 1]) : 0;
+            while (group != 0 && end < events.length && end - start < size && events[end] > 0
+                    && Arrays.binarySearch(checkpoints, end) < 0 && service(requests[events[end] - 1]) == group) {
+                end++;
+            }
+            windowEnds[start] = end;
+            update(hash, buffer, end);
+            start = end;
+        }
+        digest = HexFormat.of().formatHex(hash.digest());
+    }
+
+    public Scenario withServiceBursts(int size) {
+        if (size < 1 || size > 100 || maxBurstSize != 1) {
+            throw new IllegalArgumentException("Service bursts require an unwindowed scenario and size 1..100");
+        }
+        return size == 1 ? this : new Scenario(this, size);
+    }
+
+    public int windowEnd(int start) {
+        if (start < 0 || start >= events.length || windowEnds.length != 0 && windowEnds[start] == 0) {
+            throw new IllegalArgumentException("Not an announcement boundary");
+        }
+        return windowEnds.length == 0 ? start + 1 : windowEnds[start];
+    }
+
+    private int service(Request request) {
+        int group = 0;
+        int pods = 0;
+        for (int index = 0; index < request.size(); index++) {
+            final int profile = model.constraints[request.resource(index)];
+            if (model.rules.kind[profile] == POD_VALUE) {
+                pods++;
+                group = model.rules.group[profile];
+            }
+        }
+        return pods == 1 ? group : 0;
     }
 
     public static Scenario from(Dataset dataset) {

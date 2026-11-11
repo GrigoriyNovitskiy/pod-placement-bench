@@ -1,6 +1,7 @@
 package one.cloud.benchmark.engine;
 
 import java.util.Objects;
+import java.util.Map;
 import java.util.SplittableRandom;
 
 import one.cloud.benchmark.model.Assignment;
@@ -26,6 +27,14 @@ public abstract class SchedulingAlgorithm implements AutoCloseable {
     /** Candidate planner calls, or -1 when this algorithm does not report them. */
     public long plannerCalls() {
         return -1;
+    }
+
+    public Map<String, String> parameters() {
+        return Map.of();
+    }
+
+    public Map<String, Long> counters() {
+        return Map.of();
     }
 
     public void placed(Assignment placement) {
