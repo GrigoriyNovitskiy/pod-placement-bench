@@ -3,6 +3,8 @@ package one.cloud.benchmark.algorithms.fitcount;
 import java.util.Arrays;
 import java.util.SplittableRandom;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.engine.GreedyPlanner;
@@ -26,6 +28,32 @@ public final class FitCount extends SchedulingAlgorithm {
     private Assignment[][] alternativePlans;
     private int[] alternativeHosts;
     private int planCount;
+
+    public static AlgorithmDefinition definition() {
+        return new AlgorithmDefinition(
+                "fitcount",
+                "FitCount",
+                AlgorithmParameters.FIT_COUNT,
+                (context, catalogue, parameters) -> new FitCount(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue,
+                        parameters.get("fitCap").getAsInt(),
+                        parameters.get("cacheRows").getAsInt()));
+    }
+
+    public static AlgorithmDefinition weightedDefinition() {
+        return new AlgorithmDefinition(
+                "mean-fitcount",
+                "Mean FitCount",
+                AlgorithmParameters.FIT_COUNT,
+                (context, catalogue, parameters) -> weighted(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue,
+                        parameters.get("fitCap").getAsInt(),
+                        parameters.get("cacheRows").getAsInt()));
+    }
 
     public FitCount(SchedulingContext context, long seed, Request[] catalogue) {
         this(context, seed, catalogue, 10, 256);

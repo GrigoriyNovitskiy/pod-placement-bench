@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ru">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Placement Lab — симулятор</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/app.js"></script>
+</head>
+<body>
+    <header class="topbar">
+        <div class="brand"><span class="brand-icon">p</span>Placement Lab
+            <span class="brand-section">/ Симулятор</span>
+        </div>
+        <div class="toolbar">
+            <span class="engine-badge">JAVA ENGINE</span>
+            <button id="load">Открыть сценарий</button>
+            <button id="save">Сохранить JSON</button>
+        </div>
+    </header>
+
+    <section class="heading">
+        <div>
+            <h1>Один поток. Разные решения.</h1>
+            <p>Реальное размещение, независимые копии облака и общая очередь запросов.</p>
+        </div>
+        <div class="heading-note" id="source-note">Подключаем Java-движок…</div>
+    </section>
+
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="error" class="error-banner" role="alert" hidden></div>
+
+    <main class="workspace">
+        <aside class="sidebar">
+            <section class="panel">
+                <div class="panel-heading"><h2>Сценарий</h2><span id="source-badge" class="subtle"></span></div>
+                <div class="panel-body">
+                    <div class="stack">
+                        <button id="add-host">▤ Добавить хост</button>
+                        <button id="add-request" class="primary">+ Создать запрос</button>
+                    </div>
+                    <div id="scenario-summary" class="summary-grid"></div>
+                </div>
+                <details>
+                    <summary>Параметры сценария</summary>
+                    <div id="scenario-details" class="details-content"></div>
+                </details>
+            </section>
+
+            <section class="panel">
+                <div class="panel-heading"><h2>Поток событий</h2><span id="event-count" class="subtle"></span></div>
+                <div id="events" class="events"></div>
+                <div class="panel-footer pagination">
+                    <button id="events-prev" aria-label="Предыдущие события">←</button>
+                    <span id="events-page"></span>
+                    <button id="events-next" aria-label="Следующие события">→</button>
+                </div>
+            </section>
+        </aside>
+
+        <section class="center">
+            <div class="comparison-toolbar">
+                <div id="algorithm-chips" class="algorithm-chips"></div>
+                <button id="add-algorithm">+ Добавить алгоритм</button>
+            </div>
+            <div class="map-toolbar">
+                <div class="toolbar">
+                    <button id="zoom-out" title="Уменьшить">−</button>
+                    <span id="zoom-level" class="mono">100%</span>
+                    <button id="zoom-in" title="Увеличить">+</button>
+                    <button id="fit-map">Вместить</button>
+                </div>
+                <span class="hint">Пустое место — перемещение карты · заголовок узла — перетаскивание</span>
+            </div>
+            <div id="clusters" class="clusters"></div>
+            <div class="host-pagination pagination">
+                <button id="hosts-prev">← Хосты</button>
+                <span id="hosts-page"></span>
+                <button id="hosts-next">Хосты →</button>
+            </div>
+
+            <section class="panel">
+                <div class="panel-heading"><h2>Качество размещения</h2><span class="subtle">накопительно и сейчас</span></div>
+                <div class="table-scroll"><table id="quality-table"></table></div>
+            </section>
+            <section class="panel">
+                <div class="panel-heading"><h2>Ресурсы облака</h2><span class="subtle">занято / всего · %</span></div>
+                <div class="table-scroll"><table id="resource-table"></table></div>
+                <div class="panel-footer hint">
+                    Дисковые устройства и NUMA учитывает Java-движок. Ёмкости разных измерений не складываются.
+                </div>
+            </section>
+            <section class="panel">
+                <div class="panel-heading"><h2>Время обработки</h2><span class="subtle">мс · диагностические замеры</span></div>
+                <div class="table-scroll"><table id="latency-table"></table></div>
+                <div class="panel-footer hint">
+                    Замеряется вызов движка. Отрисовка и паузы в него не входят.
+                    При пересборке сессии история времени измеряется заново.
+                    Это интерактивная диагностика без прогрева и повторов, а не контролируемый бенчмарк.
+                </div>
+            </section>
+            <section class="panel">
+                <div class="panel-heading">
+                    <h2>Фрагментация: FitCount-пробы</h2>
+                    <button id="probe">Рассчитать сейчас</button>
+                </div>
+                <div id="probes" class="panel-body hint">
+                    Сколько копий типовых запросов помещается в текущее облако.
+                    Расчёт запускается отдельно и может занять время; максимум 16 профилей, с ограничением копий на хост.
+                </div>
+            </section>
+        </section>
+
+        <aside class="inspector-column">
+            <section class="panel">
+                <div class="panel-heading"><h2 id="current-title">Текущее событие</h2><span id="current-index" class="mono subtle"></span></div>
+                <div id="current-event" class="panel-body"></div>
+            </section>
+            <section class="panel inspector-panel">
+                <div class="panel-heading"><h2>Инспектор</h2><span id="inspector-kind" class="subtle">объект</span></div>
+                <div id="inspector" class="panel-body hint">Выберите хост или pod на карте.</div>
+            </section>
+            <section class="panel">
+                <details>
+                    <summary>Модель GPU и ограничения</summary>
+                    <div class="details-content hint">
+                        <p>NVIDIA и Intel — разные ресурсные категории. Названий моделей GPU в формате нет.</p>
+                        <p>В режиме devices20 устройства синтетические, по 20 долей. Дробный запрос меньше 1 GPU
+                            размещается на одном устройстве; запрос ≥1 требует целое число свободных устройств.</p>
+                        <p>Фактические правила задаёт Java-движок. Экспорт не сохраняет исходную топологию MIG
+                            или схему совместного использования GPU.</p>
+                        <p>При отказе UI сообщает, что алгоритм не разместил запрос. Без отдельной диагностики
+                            он не приписывает отказ конкретному ресурсу.</p>
+                    </div>
+                </details>
+            </section>
+        </aside>
+    </main>
+
+    <footer class="transport">
+        <button id="next" class="primary">Следующий запрос →</button>
+        <button id="play">▶ Авто</button>
+        <select id="speed" aria-label="Задержка между шагами">
+            <option value="1200">1×</option><option value="500">2×</option><option value="0">Без пауз</option>
+        </select>
+        <button id="batch">+10 событий</button>
+        <div class="progress"><div class="progress-label"><span id="processing">Общий поток событий</span><span id="progress-text"></span></div><div class="bar"><i id="progress-fill"></i></div></div>
+        <button id="reset">↺ Сначала</button>
+    </footer>
+
+    <dialog id="dialog">
+        <div class="dialog-heading"><h2 id="dialog-title"></h2><button id="dialog-close" aria-label="Закрыть">×</button></div>
+        <p id="dialog-description" class="hint"></p>
+        <form id="dialog-form"><div id="dialog-content"></div><p id="dialog-error" class="form-error" role="alert"></p><div class="dialog-actions"><button type="button" id="dialog-cancel">Отмена</button><button class="primary" type="submit" id="dialog-submit">Добавить</button></div></form>
+    </dialog>
+    <input id="json-file" type="file" accept="application/json,.json" hidden>
+</body>
+</html>

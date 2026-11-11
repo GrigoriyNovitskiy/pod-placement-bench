@@ -4,7 +4,7 @@ Run with the default synthetic GPU device model:
 
 ```sh
 ./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm fgd'
+  --args='run --dataset /path/to/sc --algorithm fgd'
 ```
 
 The Java entry point is `new Fgd(context, seed, catalogue)`. The catalogue is the

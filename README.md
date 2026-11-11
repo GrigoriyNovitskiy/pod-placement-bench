@@ -1,41 +1,187 @@
-# pod-placement-bench
-A reproducible benchmark for cloud workload placement algorithms, comparing scheduling speed, resource fragmentation, and placement success across diverse cluster states and workload patterns.
+# Placement Bench
 
-The Java 25 scheduler API, fit-count baseline and protobuf dataset decoder live in
-[one-cloud-schedulers-benchmark](one-cloud-schedulers-benchmark/README.md).
+Симулятор размещения pod и shard по хостам облака. Можно собрать небольшое облако
+вручную или загрузить датасет, пошагово воспроизводить создания и удаления,
+сравнивать алгоритмы и смотреть размещения, ресурсы и время обработки.
 
-Build and test from this directory:
+Веб-интерфейс и CLI используют один Java-движок и общий реестр алгоритмов:
+FitCount, Geometric Best Fit, FGD, Kubernetes scoring, CatBoost и RandomN.
+Движок проверяет ресурсы, ограничения, NUMA, диски, связи и GPU. Размещённые pod
+не мигрируют между хостами.
 
-```sh
-./gradlew :one-cloud-schedulers-benchmark:build
-```
+Это стенд для исследования алгоритмов. Время обработки в интерактивном режиме —
+диагностика; полноценный контролируемый бенчмарк остаётся отдельной задачей.
 
-Read a dataset:
+## Собрать один раз
 
-```sh
-./gradlew :one-cloud-schedulers-benchmark:runPlacementDatasetRead \
-  --args='/path/to/snapshot.pb /path/to/operations.pb'
-```
+Нужен **JDK 25**. Если установлено несколько Java, укажите нужную через `JAVA_HOME`.
+Gradle для сборки использует toolchain, а готовое приложение — `JAVA_HOME` или Java
+из `PATH`. Python, Node.js и отдельная установка Gradle не нужны.
 
-The only runtime dependency is public `protobuf-java`; no internal cloud checkout
-is needed. See the module README for API usage and the current baseline scope.
-
-Replay a dataset with the fit-count baseline:
+Из корня репозитория:
 
 ```sh
-./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
+./gradlew build installDist
 ```
 
-Omit the limits to replay the complete normalized workload with the full catalogue.
-See the module README for JSON output, lifecycle normalization and measurement scope.
+Команда запускает тесты и собирает приложение вместе с зависимостями и моделями.
+После этого запускайте его через `./placement-bench`: Gradle при каждом запуске
+не вызывается. После изменения кода или моделей повторите сборку.
 
-The default `devices20` model uses synthetic individual GPUs with 20 shares per
-device. Select `--gpu-model aggregate` for legacy pooled GPU accounting. The device
-model preserves fractional-request boundaries for every algorithm without changing
-the protobuf files; its assumptions and input validation are documented in the
-module README.
+Команды ниже рассчитаны на macOS/Linux. Если `JAVA_HOME` ещё не настроен:
 
-Use `--algorithm fgd` for the GPU fragmentation gradient descent baseline. It uses
-the default device model and the declared workload catalogue; see
-[FGD](one-cloud-schedulers-benchmark/FGD.md) for the scoring rule and atomic-request adaptation.
+```sh
+export JAVA_HOME=/path/to/jdk-25
+```
+
+## Запустить симулятор
+
+```sh
+./placement-bench simulator
+```
+
+Откроется браузер: **http://127.0.0.1:8765**. В начальном примере есть восемь хостов
+и запросы с pod, volume и GPU. Своего датасета для первого запуска не требуется.
+
+В интерфейсе можно:
+
+- Добавлять хосты и запросы, планировать атомарное удаление pod вместе с volume.
+- Выбирать несколько алгоритмов и обрабатывать одинаковые события во всех копиях облака.
+- Выполнять один шаг, десять событий или включать автовоспроизведение.
+- Смотреть ресурсы, размещения, ограничения, GPU-доли, метрики и FitCount-пробы.
+- Сохранять ручной сценарий в JSON или загружать JSON / protobuf-датасет.
+
+Другой порт и запуск без открытия браузера:
+
+```sh
+./placement-bench simulator --port 9000 --no-open
+```
+
+Остановка — `Ctrl+C`. Состояние хранится в памяти; ручной сценарий можно сохранить
+перед остановкой. Подробнее: [руководство симулятора](one-cloud-schedulers-benchmark/docs/simulator.md).
+
+## Использовать CLI
+
+```sh
+./placement-bench --help
+./placement-bench simulator --help
+./placement-bench algorithms
+./placement-bench algorithms catboost-topn-fitcount
+```
+
+`algorithms` выводит доступные алгоритмы, типы аргументов, defaults, допустимые
+границы и примеры команд. Список формируется из того же реестра, что интерфейс.
+
+Для запуска на датасете нужна папка с `snapshot.pb` и `operations.pb`:
+
+```sh
+./placement-bench run \
+  --dataset /path/to/dataset \
+  --algorithm catboost-topn-fitcount \
+  --param topN=20 \
+  --param seed=44 \
+  --catalogue-limit 32 \
+  --max-operations 200
+```
+
+Уберите `--max-operations`, чтобы воспроизвести весь поток. Без `--catalogue-limit`
+используется полный каталог. Каждый `--param key=value` должен быть объявлен
+выбранным алгоритмом; например, CatBoost Top-1 не требует параметров.
+JSON результата выводится в stdout, ошибки — в stderr. `--probe-cap` отдельно
+задаёт ограничение копий для диагностических проб.
+
+Датасеты не включены в репозиторий. Импорт использует штатную нормализацию
+атомарных pod/shard-запросов и начинает с пустого облака, а не восстанавливает
+занятость snapshot. GPU по умолчанию моделируются как синтетические устройства
+NVIDIA/Intel с 20 долями; это не восстановленная топология физических GPU.
+
+## Добавить алгоритм
+
+Нужны **реализация и обязательное описание параметров**. Базовый класс —
+[`SchedulingAlgorithm`](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/engine/SchedulingAlgorithm.java).
+Общее планирование и проверку ограничений предоставляет `GreedyPlanner`.
+
+Например, создайте
+`one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/algorithms/firstfit/FirstFit.java`:
+
+```java
+package one.cloud.benchmark.algorithms.firstfit;
+
+import java.util.List;
+
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.engine.SchedulingAlgorithm;
+import one.cloud.benchmark.engine.SchedulingContext;
+import one.cloud.benchmark.model.Request;
+
+public final class FirstFit extends SchedulingAlgorithm {
+    private final GreedyPlanner planner;
+
+    public FirstFit(SchedulingContext context) {
+        super(context, 0);
+        planner = new GreedyPlanner(context);
+    }
+
+    public static AlgorithmDefinition definition() {
+        return new AlgorithmDefinition(
+                "first-fit",
+                "First Fit",
+                List.of(),
+                (context, catalogue, parameters) -> new FirstFit(context));
+    }
+
+    @Override
+    public void schedule(Request request) {
+        for (int host = 1; host <= context.model().hostCount; host++) {
+            for (int numa : planner.numaNodes(host)) {
+                final var placement = planner.plan(request, host, numa);
+                if (placement != null) {
+                    context.place(request, placement);
+                    return;
+                }
+            }
+        }
+    }
+
+    @Override
+    public long plannerCalls() {
+        return planner.planCalls();
+    }
+}
+```
+
+Откройте короткий файл
+[`Algorithms.java`](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/algorithms/Algorithms.java).
+Добавьте импорт своего класса и одну регистрацию в метод `registerAll()`:
+
+```java
+register(FirstFit.definition());
+```
+
+Это единый список всех алгоритмов проекта, без деления на встроенные и пользовательские.
+Параметры и фабрика живут в `definition()` рядом с реализацией.
+`List.of()` явно означает отсутствие параметров. Для настраиваемых алгоритмов
+схема содержит `Parameter.integer`, `number`, `bool` или `text`; фабрика передаёт
+проверенные значения в конструктор. Для каждого параметра обязательны короткое
+описание и значение по умолчанию; числовые параметры также задают границы.
+Описание видно при наведении в UI и в CLI-справке.
+[Пример с параметрами](one-cloud-schedulers-benchmark/docs/simulator.md#algorithms).
+
+На этом подключение закончено: служебный реестр, валидацию, UI и CLI менять или
+читать для добавления алгоритма не требуется.
+
+Повторите `./gradlew build installDist`. Алгоритм появится в UI и CLI автоматически:
+
+```sh
+./placement-bench algorithms first-fit
+./placement-bench run --dataset /path/to/dataset --algorithm first-fit
+```
+
+## Где что находится
+
+- [Java-модуль и формат данных](one-cloud-schedulers-benchmark/README.md).
+- [Реализации алгоритмов](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/algorithms).
+- [Движок и учёт ресурсов](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/engine).
+- [Симулятор и HTTP API](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/simulator).
+- [Нормализация и воспроизведение датасетов](one-cloud-schedulers-benchmark/docs/runner/README.md).

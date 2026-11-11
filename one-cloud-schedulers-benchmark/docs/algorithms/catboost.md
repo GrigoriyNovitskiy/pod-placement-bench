@@ -11,7 +11,7 @@ All five algorithms implement `SchedulingAlgorithm` and use the common
 | `catboost-rollout-topn-fitcount` | `CatBoostRolloutTopNFitCount` | Top N rollout scores, then FitCount |
 | `randomn-fitcount` | `RandomNFitCount` | Uniform N candidates without replacement, then FitCount |
 
-`--top-n` defaults to 20 for the three N variants. Top1 always keeps one candidate.
+`--param topN=20` sets the shortlist size for the three N variants. Top1 always keeps one candidate.
 When there are at most N feasible candidates, all are passed to FitCount without
 inference. RandomN has a separate seeded RNG and does not load CatBoost models.
 Shortlists preserve the planner's order; equal model scores prefer the first
@@ -43,9 +43,10 @@ for training, even when the input header uses a different extent size.
 authoritative. `models.json` records model hashes, preprocessing, training settings
 and label semantics; the selected feature names are stored in the CBMs themselves.
 
-`--model FILE` overrides the packaged CBM for a CatBoost algorithm. Feature names
-and types must match the supported schema; loading or inference errors fail the
-run. CLI output records the SHA-256 of the loaded bytes and the requested N.
+The shared registry uses the packaged CBMs. Java constructors still accept a
+`Path` for a custom model; its feature names and types must match the supported
+schema. Loading or inference errors fail the run. CLI output records the SHA-256
+and shortlist size from the actual CatBoost instance, including custom factories.
 Each algorithm loads its model once and releases the native handle on close.
 
 ## Atomic requests and GPUs
@@ -73,9 +74,9 @@ Run through Gradle with the configured JDK 25 toolchain:
 
 ```sh
 ./gradlew --quiet :one-cloud-schedulers-benchmark:run --args="\
---dataset /path/to/dataset \
---algorithm catboost-topn-fitcount --top-n 20 \
---seed 44 --fit-cap 10 --cache-rows 64 --catalogue-limit 32 \
+run --dataset /path/to/dataset \
+--algorithm catboost-topn-fitcount --param topN=20 \
+--param seed=44 --param fitCap=10 --param cacheRows=64 --catalogue-limit 32 \
 --gpu-model aggregate --max-operations 200"
 ```
 

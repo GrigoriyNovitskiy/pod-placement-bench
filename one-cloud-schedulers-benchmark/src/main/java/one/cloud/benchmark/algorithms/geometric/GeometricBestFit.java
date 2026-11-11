@@ -2,6 +2,8 @@ package one.cloud.benchmark.algorithms.geometric;
 
 import java.util.function.ToDoubleFunction;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
@@ -11,6 +13,16 @@ import one.cloud.benchmark.model.Request;
 public final class GeometricBestFit extends SchedulingAlgorithm {
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
+
+    public static AlgorithmDefinition definition() {
+        return new AlgorithmDefinition(
+                "geometric-best-fit",
+                "Geometric Best Fit",
+                AlgorithmParameters.SEED_ONLY,
+                (context, catalogue, parameters) -> new GeometricBestFit(
+                        context,
+                        parameters.get("seed").getAsLong()));
+    }
 
     public GeometricBestFit(SchedulingContext context, long seed) {
         super(context, seed);

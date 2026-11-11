@@ -4,6 +4,8 @@ import java.util.ArrayList;
 import java.util.Map;
 import java.util.TreeMap;
 
+import one.cloud.benchmark.algorithms.AlgorithmDefinition;
+import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
@@ -26,6 +28,32 @@ public final class BulkFitCount extends SchedulingAlgorithm {
     private final long[] reasons = new long[REASONS.length];
     private long decisions, delegations, certified, wins, retained, trialCalls, operations, transitions, workspacePeak;
     private long orderChecksum = 0xcbf29ce484222325L;
+
+    public static AlgorithmDefinition definition() {
+        return new AlgorithmDefinition(
+                "bulk-fitcount",
+                "Bulk FitCount",
+                AlgorithmParameters.BULK,
+                (context, catalogue, parameters) -> new BulkFitCount(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue,
+                        parameters.get("fitCap").getAsInt(),
+                        parameters.get("cacheRows").getAsInt()));
+    }
+
+    public static AlgorithmDefinition dynamicProgrammingDefinition() {
+        return new AlgorithmDefinition(
+                "dp",
+                "DP + FitCount",
+                AlgorithmParameters.BULK,
+                (context, catalogue, parameters) -> dynamicProgramming(
+                        context,
+                        parameters.get("seed").getAsLong(),
+                        catalogue,
+                        parameters.get("fitCap").getAsInt(),
+                        parameters.get("cacheRows").getAsInt()));
+    }
 
     public BulkFitCount(SchedulingContext context, long seed, Request[] catalogue) {
         this(context, seed, catalogue, 128, 256);

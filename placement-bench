@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+
+project_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+launcher="$project_dir/one-cloud-schedulers-benchmark/build/install/one-cloud-schedulers-benchmark/bin/one-cloud-schedulers-benchmark"
+
+if [ ! -x "$launcher" ]; then
+    printf '%s\n' \
+        'Сборка приложения не найдена.' \
+        'В корне репозитория выполните:' \
+        '  ./gradlew build installDist' >&2
+    exit 1
+fi
+
+exec "$launcher" "$@"

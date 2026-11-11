@@ -2,7 +2,7 @@
 
 This module contains the public protobuf schema, primitive Java model, streaming
 decoder and algorithm API. Runtime dependencies are `protobuf-java` and CatBoost's
-native Java predictor; it does not depend on other one-cloud modules. Private control-state extraction stays in
+native Java predictor, and Gson for the local simulator; it does not depend on other one-cloud modules. Private control-state extraction stays in
 `one-cloud-master`.
 
 The `one.cloud.benchmark` namespace separates the model, engine and run tooling.
@@ -30,6 +30,22 @@ wrapper downloads Gradle 9.3 from the public distribution service and verifies i
 SHA-256. The subproject and generated artifact are named
 `one-cloud-schedulers-benchmark`.
 
+## Interactive simulator
+
+```sh
+./gradlew build installDist
+./placement-bench simulator
+```
+
+Open `http://127.0.0.1:8765`. The simulator uses the Java engine and registered
+algorithms for manual scenarios, protobuf uploads, synchronized comparisons and
+resource inspection. It requires no frontend build or Node installation.
+The root launcher runs the installed distribution without Gradle; rebuild after
+source changes. `./placement-bench --help` lists all commands. For development,
+`:one-cloud-schedulers-benchmark:runSimulator` remains available as a Gradle task.
+See [the simulator guide](docs/simulator.md) for inputs, metrics and extending the
+algorithm registry. Interactive timings are diagnostic, not a controlled benchmark.
+
 ## Run a dataset
 
 A dataset directory contains `snapshot.pb` and `operations.pb`. Run the CLI from
@@ -37,14 +53,22 @@ the repository root:
 
 ```sh
 ./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm fitcount --seed 42'
+  --args='run --dataset /path/to/sc --algorithm fitcount --param seed=44'
+```
+
+Algorithm discovery uses the same registry as the simulator. List every algorithm,
+or inspect one algorithm's types, defaults, bounds and example command:
+
+```sh
+./gradlew --quiet :one-cloud-schedulers-benchmark:run --args='algorithms'
+./gradlew --quiet :one-cloud-schedulers-benchmark:run --args='algorithms catboost-topn-fitcount'
 ```
 
 For an explicit short smoke run:
 
 ```sh
 ./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
+  --args='run --dataset /path/to/sc --algorithm fitcount --max-operations 200 --catalogue-limit 32'
 ```
 
 Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`,
@@ -52,8 +76,18 @@ Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`
 The five [CatBoost and RandomN variants](docs/algorithms/catboost.md) use packaged
 models and the same runner: `catboost-top1`, `catboost-topn-fitcount`,
 `catboost-rollout-top1`, `catboost-rollout-topn-fitcount`, and `randomn-fitcount`.
-Their shortlist size is set with `--top-n`; CatBoost accepts an optional `--model`.
-`--fit-cap` defaults to 10 and `--cache-rows` to 256. The default catalogue contains
+Pass declared algorithm settings with repeated `--param key=value`, for example
+`--param topN=20 --param seed=44`. Defaults are shared with the simulator: seed 44,
+copy cap 10 and cache rows 64 for the original profiles. The new `bulk-fitcount`,
+`dp` and `rollout` profiles retain seed 42, copy cap 128 and cache rows 256.
+CatBoost Top-1 and
+Rollout Top-1 accept no parameters. Unknown or repeated keys are rejected before
+reading the dataset. Numeric and boolean values follow their declared types;
+strings remain literal text, including embedded `=`. Quote the entire `key=value`
+argument when it contains spaces or shell metacharacters.
+
+Runner settings stay separate: `--probe-cap` controls quality probes (default 10),
+independently of an algorithm's `fitCap`. The default catalogue contains
 all initial atomic units; a positive `--catalogue-limit` selects a deterministic,
 reported sample. `--max-operations` truncates normalized atomic events, without
 changing the catalogue or the static cluster. `--help` lists the options.
@@ -63,7 +97,7 @@ legacy pooled host accounting. A normal run uses synthetic individual devices:
 
 ```sh
 ./gradlew --quiet :one-cloud-schedulers-benchmark:run \
-  --args='--dataset /path/to/sc --algorithm fitcount'
+  --args='run --dataset /path/to/sc --algorithm fitcount'
 ```
 
 In `devices20`, each host's integer NVIDIA/Intel GPU capacity becomes that many
@@ -91,6 +125,9 @@ aggregate-mode digests, and the history checksum includes selected GPU IDs.
 Bulk fitcount, count/tree DP and strict online rollout are available as
 `bulk-fitcount`, `dp` and `rollout`. Bulk/DP need an explicitly announced service
 burst (`--bulk-size 100`); rollout needs a `--rollout-prior` protobuf manifest.
+Rollout's numerical options use `--param candidates=...`, `--param scenarios=...`
+and `--param horizon=...`; `algorithms rollout` lists the complete schema. The
+prior is a CLI file input and is not accepted as a path through the web API.
 Their default physical copy cap is 128. See the
 [implementation and usage](docs/algorithms/IMPLEMENTATION.md) for gates, exact
 trial isolation, prior construction, limits and reporting.
@@ -102,26 +139,26 @@ uses `JAVA_HOME` or `PATH`, so select a Java 25 runtime before launching it; Gra
 ```sh
 ./gradlew :one-cloud-schedulers-benchmark:installDist
 one-cloud-schedulers-benchmark/build/install/one-cloud-schedulers-benchmark/bin/one-cloud-schedulers-benchmark \
-  --dataset /path/to/sc --algorithm fitcount
+  run --dataset /path/to/sc --algorithm fitcount
 ```
 
 Mean FitCount (`--algorithm mean-fitcount`) shares the original FitCount planner
 and cache. It minimizes the mean loss of copies across catalogue entries, with
-each shape weighted by its frequency. Both variants honor `--fit-cap` and
-`--cache-rows`. See [FITCOUNT.md](FITCOUNT.md#mean-fitcount) for the scoring rule
+each shape weighted by its frequency. Both variants honor `--param fitCap=10` and
+`--param cacheRows=64`. See [FITCOUNT.md](FITCOUNT.md#mean-fitcount) for the scoring rule
 and its cost.
 
 Geometric best-fit uses normalized residual L2 squared with fixed family weights.
 It shares planner geometry and hard constraints with fitcount and streams candidates
-while retaining only the winner. The copy cap still controls common quality probes;
-the cache-row option only affects the two FitCount variants.
+while retaining only the winner. `--probe-cap` controls common quality probes;
+FitCount-specific parameters are not accepted by geometric best-fit.
 
 FGD is available with `--algorithm fgd` and requires the `devices20` GPU model.
 It minimizes the frequency-weighted change in unusable GPU shares for the declared
 CPU/GPU workload, including the choice of a physical card for fractional requests.
 CPU-only clusters and empty catalogues use seeded tie-breaking. Its catalogue uses
-the same declared input as fitcount; the copy cap controls common quality probes,
-and the cache-row option has no effect on FGD. See [FGD.md](FGD.md) for its metric,
+the same declared input as fitcount; `--probe-cap` controls common quality probes,
+and FGD exposes only its seed. See [FGD.md](FGD.md) for its metric,
 source references and the bounded search used for compound atomic requests.
 
 CPU/RAM FGD (`--algorithm cpu-ram-fgd`) minimizes the change in CPU and memory
@@ -129,6 +166,10 @@ left unmatched by the proportions of the catalogue profiles. It scores whole-hos
 balances and works with either GPU model. See [FGD.md](FGD.md#cpu-and-ram-variant).
 
 The CLI writes one JSON result on stdout; errors go to stderr with a nonzero exit.
+Result format version 2 records canonical typed `algorithm_parameters`, including
+resolved defaults. It does not report fictitious seed/cache settings for algorithms
+that do not declare them. CatBoost metadata comes from the actual instance and
+includes the loaded model SHA-256.
 It reports source/scenario identity, limits, admissions and declines, schedule and
 removal percentiles, sampled heap use, planner calls and a history checksum.
 Heap samples are taken before initialization, at occupied checkpoints and at replay
@@ -142,6 +183,19 @@ expands to complete atomic units and their dependency closure. The same units,
 order, catalogue and delete IDs are used for every algorithm; a declined unit's
 delete is a no-op. Snapshot occupancy is not imported. See the
 [runner design](docs/runner/README.md) for normalization and measurement contracts.
+
+### CLI migration
+
+The command syntax intentionally changed: prefix executions with `run`, and replace
+`--seed`, `--top-n`, `--fit-cap` and `--cache-rows` with declared `--param seed=...`,
+`--param topN=...`, `--param fitCap=...` and `--param cacheRows=...` respectively.
+The old implicit defaults (seed 42 / cache 256) are now the shared registry defaults
+(seed 44 / cache 64). `--probe-cap` controls probes separately from algorithm scoring.
+
+The old `--model PATH` flag is removed. Registered built-ins use packaged models;
+custom Java factories can still call the existing CatBoost constructors with a
+`Path`. The shared schema does not expose arbitrary server-side model paths to the
+browser. No dataset, engine or placement constraints changed with this CLI update.
 
 `src/main/proto/placement_dataset.proto` defines the version-2 wire format.
 Existing datasets remain compatible: the protobuf package and field numbers are
