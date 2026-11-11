@@ -11,6 +11,7 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.HexFormat;
 
+import one.cloud.benchmark.algorithms.fgd.Fgd;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
@@ -22,12 +23,13 @@ import one.cloud.benchmark.runner.Scenario;
 public final class RunnerCli {
     private static final String USAGE = """
             Usage: pod-placement-bench --dataset DIR --algorithm NAME [options]
-              Algorithms: fitcount, geometric-best-fit, k8s-least-allocated, k8s-most-allocated,
-                          k8s-requested-to-capacity-ratio, k8s-balanced-allocation.
+              Algorithms: fitcount, mean-fitcount, geometric-best-fit, fgd, cpu-ram-fgd,
+                          k8s-least-allocated, k8s-most-allocated, k8s-requested-to-capacity-ratio,
+                          k8s-balanced-allocation.
               DIR contains snapshot.pb and operations.pb.
               --seed N              Algorithm seed (default: 42)
-              --fit-cap N           Copy cap for fitcount and quality probes (default: 10)
-              --cache-rows N        Resident fitcount rows (default: 256)
+              --fit-cap N           Copy cap for both fit-count variants and quality probes (default: 10)
+              --cache-rows N        Resident rows for both fit-count variants (default: 256)
               --max-operations N    Positive normalized-event prefix; omitted runs the full scenario
               --catalogue-limit N   Positive evenly sampled initial-unit limit; omitted uses all units
               --gpu-model MODEL     devices20 (default, synthetic GPU devices) or aggregate
@@ -56,7 +58,11 @@ public final class RunnerCli {
             factory = switch (options.algorithm) {
                 case "fitcount" -> (context, seed, catalogue) -> new FitCount(context, seed, catalogue,
                         options.fitCap, options.cacheRows);
+                case "mean-fitcount" -> (context, seed, catalogue) -> FitCount.weighted(context, seed, catalogue,
+                        options.fitCap, options.cacheRows);
                 case "geometric-best-fit" -> (context, seed, catalogue) -> new GeometricBestFit(context, seed);
+                case "fgd" -> Fgd::new;
+                case "cpu-ram-fgd" -> Fgd::cpuRam;
                 case "k8s-least-allocated" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
                         context, seed, KubernetesResourceScoring.Strategy.LEAST_ALLOCATED);
                 case "k8s-most-allocated" -> (context, seed, catalogue) -> new KubernetesResourceScoring(

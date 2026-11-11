@@ -178,6 +178,66 @@ class FitCountTest {
     }
 
     @Test
+    void weightedLossTradesRareCapacityForCommonCapacity() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 4, 5), alloc(2, new int[]{1, 2}, 3, 4),
+                alloc(3, new int[]{1}, 4), alloc(4, new int[]{2}, 2),
+                alloc(5, new int[]{1, 2}, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 2), resource(5, 5, 2));
+        final var cpu = new Request(3);
+        final var ram = new Request(4);
+        final var demand = new Request(5);
+        final var ramHeavy = new Request[]{cpu, ram, ram};
+        final var cpuHeavy = new Request[]{cpu, cpu, ram};
+        final var baseline = new Engine(model);
+        try (final var scheduler = new FitCount(baseline, 42, ramHeavy)) {
+            baseline.schedule(scheduler, demand);
+            assertEquals(2, baseline.placement(5).host());
+        }
+        // Host 1 loses one CPU copy, host 2 loses one RAM copy. At cap 1 the RAM loss disappears.
+        for (final int cached : new int[]{1, 16}) {
+            for (final int cap : new int[]{1, 10}) {
+                for (final var catalogue : new Request[][]{ramHeavy, cpuHeavy}) {
+                    final var state = new Engine(model);
+                    final int expected = cap == 10 && catalogue == ramHeavy ? 1 : 2;
+                    try (final var scheduler = FitCount.weighted(state, 42, catalogue, cap, cached)) {
+                        state.schedule(scheduler, demand);
+                        assertEquals(expected, state.placement(5).host());
+                        state.remove(demand);
+                        state.schedule(scheduler, demand);
+                        assertEquals(expected, state.placement(5).host());
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void weightedLossPreservesGainsFromGreedyNumaPacking() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 7, 2), alloc(2, new int[]{1, 2}, 4, 1),
+                alloc(3, new int[]{1, 2}, 3, 1), alloc(4, new int[]{1, 2}, 2, 1),
+                alloc(5, new int[]{1}, 4), alloc(6, new int[]{2}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
+                resource(4, 4, 4), resource(5, 5, 4), resource(6, 6, 4));
+        final var state = new Engine(model);
+        final var sample = new Request(4, 5);
+        final var demand = new Request(6);
+        // Filling RAM on NUMA 2 (resource ID) sends the first sample member to NUMA 3,
+        // leaving all four CPUs on NUMA 2 for the second member. Seed 0 breaks a tie toward NUMA 3.
+        try (final var scheduler = FitCount.weighted(state, 0, new Request[]{sample}, 10, 16)) {
+            state.schedule(scheduler, demand);
+            assertEquals(2, state.placement(6).numa());
+        }
+    }
+
+    @Test
     void physicalCacheIgnoresReplicaLimitsAndRefreshesAfterPlacementAndRemoval() throws Exception {
         final var model = model(
                 alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 2),

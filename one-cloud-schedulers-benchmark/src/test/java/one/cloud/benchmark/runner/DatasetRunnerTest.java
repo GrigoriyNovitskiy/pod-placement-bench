@@ -7,6 +7,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.Test;
 
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
+import one.cloud.benchmark.algorithms.fgd.Fgd;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
@@ -28,6 +29,32 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatasetRunnerTest {
+    @Test
+    void fgdReplayIsRepeatableAcrossGpuChurnAndFullDrain() throws Exception {
+        final var scenario = Scenario.from(trace(new Record[]{
+                alloc(1, new int[]{1, 11}, 10, 2),
+                alloc(2, new int[]{1, 11}, 1, .3), alloc(3, new int[]{1, 11}, 1, .5),
+                alloc(4, new int[]{1, 11}, 1, .7),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2), resource(4, 4, 2)},
+                2, 3, 4, -3, 3, -4, -3, -2));
+        final var options = new DatasetRunner.Options(17, 0, 0, 10);
+        final var first = DatasetRunner.run(scenario, options, Fgd::new);
+        final var second = DatasetRunner.run(scenario, options, Fgd::new);
+        assertEquals(first.checksum(), second.checksum());
+        assertEquals(first.catalogueChecksum(), second.catalogueChecksum());
+        assertEquals(8, first.processedOperations());
+        assertEquals(4, first.placedUnits());
+        assertEquals(4, first.removedUnits());
+        assertEquals(0, first.skippedRemovals());
+        assertEquals(first.checkpoints().size(), second.checkpoints().size());
+        for (int index = 0; index < first.checkpoints().size(); index++) {
+            assertArrayEquals(first.checkpoints().get(index).fitCounts(), second.checkpoints().get(index).fitCounts());
+        }
+        assertTrue(first.plannerCalls() > 0);
+    }
+
     @Test
     void countsDeclinesAndDeleteNoopsWithoutProbingTheEmptyFinalDrain() throws Exception {
         final var scenario = Scenario.from(trace(scalar(2, 2, 2), 2, 3, -3, -2));

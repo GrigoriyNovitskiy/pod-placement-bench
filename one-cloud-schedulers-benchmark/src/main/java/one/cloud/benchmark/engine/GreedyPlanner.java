@@ -81,12 +81,22 @@ public final class GreedyPlanner {
 
     /**
      * Scores feasible same-host plans. The cell function receives remaining and total capacity.
-     * The combiner receives borrowed family means, with NaN for absent families and null before
+     * The combiner receives read-only family means, with NaN for absent families and null before
      * means unless requested. Host CPU and RAM are included when present.
      */
     public ToDoubleFunction<Assignment[]> resourceFamilyScorer(DoubleBinaryOperator cellScore,
             ToDoubleBiFunction<double[], double[]> combine, boolean compareBefore) {
         return capacity.resourceFamilyScorer(context, inventory, true, compareBefore, cellScore, combine);
+    }
+
+    /** Scores the change in frequency-weighted GPU fragmentation shares; use only on its owner thread. */
+    public ToDoubleFunction<Assignment[]> gpuFragmentationScorer(Request[] catalogue) {
+        return capacity.gpuFragmentationScorer(context, inventory, catalogue);
+    }
+
+    /** Scores the change in frequency-weighted host CPU/RAM fragmentation on the planner's owner thread. */
+    public ToDoubleFunction<Assignment[]> cpuRamFragmentationScorer(Request[] catalogue) {
+        return capacity.cpuRamFragmentationScorer(context, inventory, catalogue);
     }
 
     public long planCalls() {

@@ -76,6 +76,21 @@ Use seeded tie-breaking over the declared host/NUMA order. Fit-count produced by
 a greedy disk planner can be nonmonotonic after an allocation; preserve and test
 that behavior rather than silently replacing it with an exact packing optimum.
 
+### Mean FitCount
+
+`mean-fitcount` uses the same candidates, shape keys, copy cap and cache.
+For each candidate, minimize the mean fit-count loss across catalogue entries.
+With identical shapes grouped, the mean is
+`sum(frequency * (copiesBefore - copiesAfter)) / sum(frequency)`.
+The denominator is the same for every candidate, so the implementation compares
+only the numerators.
+Keep negative losses from greedy packing and use the same seeded tie-breaking.
+
+This rule scores all shapes when there is more than one candidate. It traverses
+the catalogue by shape and uses each cached row for all candidates before moving
+on. With a catalogue larger than the row limit, rows may be recomputed at each
+decision. Compare the variants with the same seed, copy cap, catalogue and row limit.
+
 ## Cache
 
 Keep the useful part of `FitCountCache`: multiplicity by shape and host, totals,
