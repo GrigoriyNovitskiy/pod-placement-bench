@@ -1,6 +1,7 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 
 import org.junit.jupiter.api.Test;
 
@@ -27,6 +28,88 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FitCountTest {
+    @Test
+    void randomShortlistOfOneCanChooseEitherHostDespiteFitCountPreference() throws Exception {
+        final var model = scalarModel(8, 6);
+        final var demand = new Request(3);
+        final var catalogue = new Request[]{new Request(5)};
+        final var chosenHosts = new HashSet<Integer>();
+        for (int seed = 0; seed < 32; seed++) {
+            final var state = new Engine(model);
+            try (final var scheduler = new RandomNFitCount(state, seed, catalogue, 1)) {
+                state.schedule(scheduler, demand);
+                chosenHosts.add(state.placement(3).host());
+            }
+        }
+        assertEquals(2, chosenHosts.size());
+    }
+
+    @Test
+    void selectedPlansKeepTheirHostDuringFitCountScoring() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 8), alloc(2, new int[]{1}, 5),
+                alloc(3, new int[]{1}, 4), alloc(4, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 1),
+                resource(4, 3, 2), resource(5, 4, 2));
+        final var state = new Engine(model);
+        try (final var scheduler = new FitCount(state, 0, new Request[]{new Request(4)}, 10, 1,
+                (request, plans, count) -> new int[]{1, 2})) {
+            state.schedule(scheduler, new Request(5));
+            assertEquals(2, state.placement(5).host());
+        }
+    }
+
+    @Test
+    void selectorCanChooseTheLastCandidateAndRejectsInvalidIndices() throws Exception {
+        final var model = scalarModel(8, 8);
+        final var demand = new Request(3);
+        final var state = new Engine(model);
+        try (final var scheduler = new FitCount(state, 42, new Request[]{demand}, 10, 1,
+                (request, plans, count) -> new int[]{count - 1})) {
+            state.schedule(scheduler, demand);
+            assertEquals(2, state.placement(3).host());
+            state.remove(demand);
+            state.schedule(scheduler, demand);
+            assertEquals(2, state.placement(3).host());
+        }
+        for (final var indices : new int[][]{{}, {-1}, {2}, {1, 0}, {0, 0}}) {
+            final var invalidState = new Engine(model);
+            try (final var scheduler = new FitCount(invalidState, 42, new Request[]{demand}, 10, 1,
+                    (request, plans, count) -> indices)) {
+                assertThrows(IllegalArgumentException.class, () -> invalidState.schedule(scheduler, demand));
+                assertNull(invalidState.placement(3));
+            }
+        }
+    }
+
+    @Test
+    void randomShortlistKeepingAllCandidatesMatchesFitCountThroughRemoval() throws Exception {
+        final var model = scalarModel(8, 6);
+        final var units = new Request[]{new Request(3), new Request(4), new Request(5)};
+        final var baseline = new Engine(model);
+        final var shortlisted = new Engine(model);
+        try (final var fitcount = new FitCount(baseline, 42, units, 10, 1);
+                final var random = new RandomNFitCount(shortlisted, 42, units, 20, 10, 1)) {
+            for (int pass = 0; pass < 2; pass++) {
+                for (final var request : units) {
+                    baseline.schedule(fitcount, request);
+                    shortlisted.schedule(random, request);
+                    assertEquals(baseline.placement(request.resource(0)).host(),
+                            shortlisted.placement(request.resource(0)).host());
+                }
+                for (final var request : units) {
+                    baseline.remove(request);
+                    shortlisted.remove(request);
+                }
+            }
+            assertEquals(fitcount.plannerCalls(), random.plannerCalls());
+        }
+        assertThrows(IllegalArgumentException.class,
+                () -> new RandomNFitCount(shortlisted, 42, units, 0));
+    }
+
     @Test
     void deviceModeMergesFloatExportAndCanonicalGpuShapes() throws Exception {
         for (final var mode : ClusterSpec.GpuMode.values()) {

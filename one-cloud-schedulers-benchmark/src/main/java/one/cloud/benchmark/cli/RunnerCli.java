@@ -11,12 +11,20 @@ import java.security.NoSuchAlgorithmException;
 import java.util.HashSet;
 import java.util.HexFormat;
 
+import one.cloud.benchmark.algorithms.catboost.CatBoostAlgorithm;
+import one.cloud.benchmark.algorithms.catboost.CatBoostRolloutTop1;
+import one.cloud.benchmark.algorithms.catboost.CatBoostRolloutTopNFitCount;
+import one.cloud.benchmark.algorithms.catboost.CatBoostTop1;
+import one.cloud.benchmark.algorithms.catboost.CatBoostTopNFitCount;
 import one.cloud.benchmark.algorithms.fgd.Fgd;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
+import one.cloud.benchmark.algorithms.fitcount.RandomNFitCount;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.dataset.Dataset;
+import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.model.Request;
 import one.cloud.benchmark.runner.DatasetRunner;
 import one.cloud.benchmark.runner.Scenario;
 
@@ -25,7 +33,8 @@ public final class RunnerCli {
             Usage: pod-placement-bench --dataset DIR --algorithm NAME [options]
               Algorithms: fitcount, mean-fitcount, geometric-best-fit, fgd, cpu-ram-fgd,
                           k8s-least-allocated, k8s-most-allocated, k8s-requested-to-capacity-ratio,
-                          k8s-balanced-allocation.
+                          k8s-balanced-allocation, catboost-top1, catboost-topn-fitcount,
+                          catboost-rollout-top1, catboost-rollout-topn-fitcount, randomn-fitcount.
               DIR contains snapshot.pb and operations.pb.
               --seed N              Algorithm seed (default: 42)
               --fit-cap N           Copy cap for both fit-count variants and quality probes (default: 10)
@@ -33,6 +42,8 @@ public final class RunnerCli {
               --max-operations N    Positive normalized-event prefix; omitted runs the full scenario
               --catalogue-limit N   Positive evenly sampled initial-unit limit; omitted uses all units
               --gpu-model MODEL     devices20 (default, synthetic GPU devices) or aggregate
+              --top-n N             Shortlist size for top-N and RandomN (default: 20)
+              --model FILE          External CatBoost model; otherwise use the packaged model
               --help                Show this help
             """;
 
@@ -53,6 +64,7 @@ public final class RunnerCli {
         }
         final Arguments options;
         final DatasetRunner.Factory factory;
+        final String[] loadedModelHash = new String[1];
         try {
             options = parse(arguments);
             factory = switch (options.algorithm) {
@@ -63,6 +75,14 @@ public final class RunnerCli {
                 case "geometric-best-fit" -> (context, seed, catalogue) -> new GeometricBestFit(context, seed);
                 case "fgd" -> Fgd::new;
                 case "cpu-ram-fgd" -> Fgd::cpuRam;
+                case "catboost-top1", "catboost-topn-fitcount", "catboost-rollout-top1",
+                        "catboost-rollout-topn-fitcount" -> (context, seed, catalogue) -> {
+                    final var algorithm = catBoost(options, context, seed, catalogue);
+                    loadedModelHash[0] = algorithm.modelSha256();
+                    return algorithm;
+                };
+                case "randomn-fitcount" -> (context, seed, catalogue) -> new RandomNFitCount(
+                        context, seed, catalogue, options.topN, options.fitCap, options.cacheRows);
                 case "k8s-least-allocated" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
                         context, seed, KubernetesResourceScoring.Strategy.LEAST_ALLOCATED);
                 case "k8s-most-allocated" -> (context, seed, catalogue) -> new KubernetesResourceScoring(
@@ -97,12 +117,27 @@ public final class RunnerCli {
                     options.maxOperations, options.catalogueLimit, options.fitCap), factory);
             final long completed = System.nanoTime();
             output.println(json(options, scenario, result, snapshotHash, operationsHash,
-                    hashed - start, loaded - hashed, prepared - loaded, completed - start));
+                    hashed - start, loaded - hashed, prepared - loaded, completed - start, loadedModelHash[0]));
             return 0;
         } catch (Exception failure) {
             errors.println("Run failed: " + failure.getMessage());
             return 1;
         }
+    }
+
+    private static CatBoostAlgorithm catBoost(Arguments options, SchedulingContext context,
+            long seed, Request[] catalogue) throws Exception {
+        return switch (options.algorithm) {
+            case "catboost-top1" -> new CatBoostTop1(context, seed, catalogue,
+                    options.fitCap, options.cacheRows, options.model);
+            case "catboost-topn-fitcount" -> new CatBoostTopNFitCount(context, seed, catalogue,
+                    options.topN, options.fitCap, options.cacheRows, options.model);
+            case "catboost-rollout-top1" -> new CatBoostRolloutTop1(context, seed, catalogue,
+                    options.fitCap, options.cacheRows, options.model);
+            case "catboost-rollout-topn-fitcount" -> new CatBoostRolloutTopNFitCount(context, seed, catalogue,
+                    options.topN, options.fitCap, options.cacheRows, options.model);
+            default -> throw new IllegalArgumentException("Unknown CatBoost algorithm: " + options.algorithm);
+        };
     }
 
     private static Arguments parse(String[] arguments) {
@@ -113,6 +148,8 @@ public final class RunnerCli {
         int cacheRows = 256;
         int maxOperations = 0;
         int catalogueLimit = 0;
+        int topN = 20;
+        Path model = null;
         var gpuMode = ClusterSpec.GpuMode.DEVICES_20;
         final var seen = new HashSet<String>();
         for (int index = 0; index < arguments.length; index += 2) {
@@ -138,6 +175,8 @@ public final class RunnerCli {
                 case "--cache-rows" -> cacheRows = positive(flag, value);
                 case "--max-operations" -> maxOperations = positive(flag, value);
                 case "--catalogue-limit" -> catalogueLimit = positive(flag, value);
+                case "--top-n" -> topN = positive(flag, value);
+                case "--model" -> model = Path.of(value);
                 case "--gpu-model" -> gpuMode = switch (value) {
                     case "aggregate" -> ClusterSpec.GpuMode.AGGREGATE;
                     case "devices20" -> ClusterSpec.GpuMode.DEVICES_20;
@@ -149,7 +188,16 @@ public final class RunnerCli {
         if (dataset == null || algorithm == null) {
             throw new IllegalArgumentException("--dataset and --algorithm are required");
         }
-        return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit, gpuMode);
+        final boolean topNAlgorithm = algorithm.equals("catboost-topn-fitcount")
+                || algorithm.equals("catboost-rollout-topn-fitcount") || algorithm.equals("randomn-fitcount");
+        if (seen.contains("--top-n") && !topNAlgorithm) {
+            throw new IllegalArgumentException("--top-n is only supported by top-N and RandomN algorithms");
+        }
+        if (model != null && !algorithm.startsWith("catboost-")) {
+            throw new IllegalArgumentException("--model is only supported by CatBoost algorithms");
+        }
+        return new Arguments(dataset, algorithm, seed, fitCap, cacheRows, maxOperations, catalogueLimit,
+                gpuMode, topN, model);
     }
 
     private static int positive(String flag, String value) {
@@ -173,12 +221,21 @@ public final class RunnerCli {
     }
 
     private static String json(Arguments options, Scenario scenario, DatasetRunner.Result result,
-            String snapshotHash, String operationsHash, long hashNanos, long loadNanos, long prepareNanos, long totalNanos) {
+            String snapshotHash, String operationsHash, long hashNanos, long loadNanos, long prepareNanos,
+            long totalNanos, String modelHash) {
         final var out = new StringBuilder(4096);
         out.append("{\n  \"format_version\":1,\n  \"measurement\":\"single-process diagnostic replay\",")
                 .append("\n  \"algorithm\":\"").append(options.algorithm).append("\",")
-                .append("\n  \"algorithm_class\":\"").append(result.algorithmClass()).append("\",")
-                .append("\n  \"gpu_model\":\"").append(options.gpuMode == ClusterSpec.GpuMode.AGGREGATE
+                .append("\n  \"algorithm_class\":\"").append(result.algorithmClass()).append("\",");
+        if (modelHash != null) {
+            out.append("\n  \"model_sha256\":\"").append(modelHash).append("\",")
+                    .append("\n  \"model_source\":\"").append(options.model == null ? "builtin" : "external").append("\",")
+                    .append("\n  \"model_feature_schema\":\"legacy-v2-member-score-sum\",");
+        }
+        if (modelHash != null || options.algorithm.equals("randomn-fitcount")) {
+            out.append("\n  \"top_n\":").append(options.algorithm.endsWith("top1") ? 1 : options.topN).append(',');
+        }
+        out.append("\n  \"gpu_model\":\"").append(options.gpuMode == ClusterSpec.GpuMode.AGGREGATE
                         ? "aggregate" : "devices20").append("\",")
                 .append("\n  \"dataset_id\":\"").append(Long.toUnsignedString(scenario.model.id)).append("\",")
                 .append("\n  \"snapshot_sha256\":\"").append(snapshotHash).append("\",")
@@ -285,6 +342,6 @@ public final class RunnerCli {
     }
 
     private record Arguments(Path dataset, String algorithm, long seed, int fitCap,
-            int cacheRows, int maxOperations, int catalogueLimit, ClusterSpec.GpuMode gpuMode) {
+            int cacheRows, int maxOperations, int catalogueLimit, ClusterSpec.GpuMode gpuMode, int topN, Path model) {
     }
 }

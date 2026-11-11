@@ -1,0 +1,187 @@
+{
+  "protocol": "legacy-singleton-aggregate",
+  "source_engine_base": "72c8d406d55b611e44f21478aabae239f989e12a",
+  "datasets": {
+    "08": {
+      "input_sha256": {
+        "snapshot.pb": "7ebe4a51ff842295887ecd9f0b97ee637be8b905c3e0d3a9b129fad75001b981",
+        "operations.pb": "29eea282be44d806c78fc6f7097a4b051e650f31c4c00c59a13092f80db1e0c8"
+      },
+      "order_sha256": "474c8c316e62e311fc0d2d11665d0f61222766e7b10ce60983ec3e96d77467d1",
+      "creates": 20392,
+      "deletes": 20392,
+      "events": 40784,
+      "config": {
+        "catalogue_seed": 42,
+        "max_fit": 10,
+        "cache_rows": 64,
+        "top_k": 20,
+        "policy_seed": 44,
+        "catalogue_size": 32
+      },
+      "catalogue_resource_ids": [
+        3947,
+        4219,
+        4339,
+        4445,
+        4467,
+        4599,
+        4807,
+        5196,
+        5336,
+        6533,
+        6967,
+        7334,
+        7615,
+        7713,
+        7758,
+        7925,
+        7964,
+        8354,
+        10227,
+        10375,
+        10384,
+        10627,
+        10647,
+        10801,
+        12426,
+        12875,
+        13118,
+        13556,
+        14059,
+        14350,
+        14527,
+        14647
+      ],
+      "warmups": 1,
+      "repeats": 2
+    },
+    "01": {
+      "input_sha256": {
+        "snapshot.pb": "2c67a3051ee44932e545483e2389446c0cefb36f226517e0b824fb264427edba",
+        "operations.pb": "2f86db28ce88b050d4b29f790c487f2583f23b2125c07cdcc9b08eca769c873e"
+      },
+      "order_sha256": "3b712143c9ac4cba5520c354abfc1cb30285aff1d121ed7c13c3960ec0a53a82",
+      "creates": 178290,
+      "deletes": 178290,
+      "events": 356580,
+      "config": {
+        "catalogue_seed": 42,
+        "max_fit": 10,
+        "cache_rows": 64,
+        "top_k": 20,
+        "policy_seed": 44,
+        "catalogue_size": 32
+      },
+      "catalogue_resource_ids": [
+        27151,
+        30442,
+        30648,
+        37331,
+        43400,
+        44274,
+        56813,
+        57467,
+        63194,
+        69936,
+        73047,
+        77587,
+        79323,
+        80325,
+        80831,
+        88087,
+        90477,
+        92646,
+        94234,
+        97028,
+        97692,
+        98558,
+        102374,
+        105926,
+        106908,
+        108061,
+        109344,
+        115798,
+        118545,
+        122476,
+        126191,
+        126828
+      ],
+      "warmups": 1,
+      "repeats": 2
+    },
+    "10": {
+      "input_sha256": {
+        "operations.pb": "9705e68b993a3da56d074f576785c8ad45c2d41fe26b655e6bb39005d83818b7",
+        "snapshot.pb": "2c7b4933b2920bffab6e201c8bcc8ce2ef04a0022d3aa09cfaf93b7dd572d231"
+      },
+      "order_sha256": "e5f09ff7ff49b1a08c2cad1f14efb5d57a0b774f32e138d5924510d4e1e5211e",
+      "creates": 182206,
+      "deletes": 182206,
+      "events": 364412,
+      "config": {
+        "top_k": 20,
+        "cache_rows": 64,
+        "max_fit": 10,
+        "catalogue_seed": 42,
+        "catalogue_size": 32,
+        "policy_seed": 44
+      },
+      "catalogue_resource_ids": [
+        30352,
+        33643,
+        33849,
+        40532,
+        46601,
+        47475,
+        60014,
+        60668,
+        66395,
+        73137,
+        76248,
+        80788,
+        82524,
+        84032,
+        91288,
+        93678,
+        95847,
+        97435,
+        100229,
+        100893,
+        101759,
+        105575,
+        109127,
+        111262,
+        112545,
+        118999,
+        125677,
+        129392,
+        130029,
+        132255,
+        133131,
+        133613
+      ],
+      "warmups": 0,
+      "repeats": 1
+    }
+  },
+  "models": {
+    "fitcount": "38da593f67c7531c963c0d09ea62eab0e1bc5ced168a0cf52a8e5e1b5ecac417",
+    "rollout": "33187df07d340b52c60e635b78396bd0369845651684eee2bef3a079e7880174"
+  },
+  "notes": [
+    "Historical measurements before the SchedulingAlgorithm/Scenario refactor.",
+    "01/08: one whole-trajectory warmup and two measured repeats. 10: no warmup, one measured pass.",
+    "These are not measurements of the new atomic member-score-sum implementation."
+  ],
+  "table_sha256": {
+    "comparison": "b2a87372ca81b0ddf2c51e4a8fe56021e66c0edda5fb513d3472a342e3a46181",
+    "resources": "761eeb6b77bf5057cccb2cfbfe742fb119d64f362893cb6a1ece972001f9516f",
+    "latency": "b2e87fa2a837df20bd5e7b10044dafba6585bb9ef5ff47291a897228405f6572"
+  },
+  "latency_units": {
+    "comparison.csv": "milliseconds",
+    "latency.csv": "nanoseconds"
+  },
+  "utilization": "fractions sampled at event indices; not time-weighted"
+}

@@ -1,5 +1,8 @@
 # Algorithm implementation plans
 
+Implemented CatBoost and RandomN shortlist algorithms are described in the
+[CatBoost guide](catboost.md), including packaged models and historical measurements.
+
 These are implementation plans, not implemented backends. Numerical settings are
 explicit starting configurations agreed for the first experiments; none has been
 selected empirically on the ten clouds. Utilization takes priority over latency.
