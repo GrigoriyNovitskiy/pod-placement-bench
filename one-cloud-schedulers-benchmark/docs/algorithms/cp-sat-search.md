@@ -1,6 +1,7 @@
 # CP-SAT, bounded search and an SMT reference
 
-Status: planned. Use the [shared contract](README.md). For B=1 the primary gain is
+Status: CP-SAT and general physical search are planned. The bounded CPU/RAM SMT
+reference is implemented as `smt`; see below. Use the [shared contract](README.md). For B=1 the primary gain is
 finding alternative feasible NUMA/device geometry. An admission solver alone does
 not predict future requests. Bulk and other announced windows are separate series.
 
@@ -82,12 +83,63 @@ report geometry-search gain separately from host ranking and window information.
 
 ## SMT reference
 
-Optional Z3 **4.15.4**, with matching Java/native artifacts and a separate Java 25
-compatibility check. Limit the first reference to **8 units, 128 plans total** and
-integer miniature instances (`QF_LIA`, no quantifiers). Set `rlimit=1,000,000`,
-lexicographic objectives, and an external 30-second failure watchdog. Resource-limit
-UNKNOWN is not infeasibility. Use the same pool, objective and prefix oracle as CP.
-Exact rational arithmetic is not automatically Java double-plus-tolerance semantics.
-Compare tiny cases with exhaustive enumeration before considering a larger backend.
-[Z3 parameters](https://github.com/Z3Prover/z3/blob/z3-4.15.4/src/opt/opt_params.pyg),
+The `smt` algorithm runs Z3 as an optional executable on `PATH`, using SMT-LIB2
+and a separate process for each supported scheduling window. The backend was
+verified with **Z3 4.15.2** on Java 25. Its actual version is included in runtime
+parameters. A missing executable uses the saved FitCount result and increments
+`fallback_solver_unavailable`. Install Z3 before comparing this algorithm:
+
+```sh
+z3 -version
+./placement-bench algorithms smt
+./placement-bench run --dataset /path/to/dataset --algorithm smt
+./placement-bench run --dataset /path/to/dataset --algorithm smt --bulk-size 8
+```
+
+This first reference supports at most **8 units, 128 total members and 128 complete
+plans**. Requests may consume CPU and RAM and have no disk requirements. CPU/RAM
+amounts in the entire model, including inventory and unused catalogue profiles,
+must be nonnegative integers at most 2^48. Current residual capacity and summed
+window demand are checked against the same range. This conservative gate makes
+integer capacity rows agree with the ledger's double arithmetic and four-ULP
+tolerance. Other models or exhausted candidate budgets retain sequential FitCount
+and report their fallback reason.
+
+Candidate generation visits host/NUMA choices for each member in stable order,
+retains masks and pins, and includes every saved incumbent plan. A compound request
+can use different hosts or NUMA nodes. Complete plans use the ledger's physical
+CPU/RAM projection. Group limits, colocation, readiness and other policy conditions
+are evaluated by input-order replay in an isolated engine trial. Generating physical
+plans before policy checks allows an earlier unit to enable a later dependency.
+Committed placements stay fixed throughout this algorithm.
+
+Z3 selects at most one plan per unit and maximizes admitted units using QF_LIA.
+Each complete decision, including skipped units, is blocked after evaluation.
+Valid solutions are compared using frozen catalogue order and physical FitCount
+on the combined residual state. The saved incumbent wins ties. Resource-limit
+exhaustion retains the original incumbent. Reaching the solution-count budget
+keeps the best validated solution encountered. A `pool_optima` count means all
+remaining decisions with at least the winning admission were exhausted. This
+claim covers the generated pool and its objective.
+
+The default budgets are **100,000 candidate search nodes**, **64 checked solutions**
+and **rlimit=1,000,000 across all solver checks in a window**. CLI parameters
+`searchNodes`, `solutions` and `rlimit` expose these budgets. The physical copy cap
+is 128, cache rows 256 and seed 42. A decision-local FitCount trial uses the next
+seed from the algorithm's seeded random source. Runtime counters report candidate
+work, optimizer calls, rejected solutions, improvements, exhausted budgets and
+fallback reasons. The runner includes runtime counters in quality-enabled runs.
+
+A 30-second absolute watchdog terminates the solver process and fails the operation.
+Malformed output, unexpected UNKNOWN reasons and solver failures also fail the run.
+Responses are size-bounded and every solver process is closed after its window.
+Candidate generation, baseline trials, scoring, process startup, solving, validation
+and commit are included in operation timing. Startup cost and bounded exhaustive
+comparison make this a small-instance reference implementation.
+
+Tests compare miniature admission results with exhaustive enumeration and exercise
+multi-host atomic units, NUMA/RAM geometry, pinned requests, positive dependencies,
+crossing domain limits, combined FitCount scoring and numerical/budget fallbacks.
+Tests requiring the optional executable are skipped when Z3 is absent.
+[Z3 SMT-LIB interface](https://microsoft.github.io/z3guide/docs/logic/basiccommands/),
 [objective order](https://microsoft.github.io/z3guide/docs/optimization/combiningobjectives/).
