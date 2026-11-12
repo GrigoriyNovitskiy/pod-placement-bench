@@ -151,6 +151,12 @@ one-cloud-schedulers-benchmark/build/install/one-cloud-schedulers-benchmark/bin/
   run --dataset /path/to/sc --algorithm fitcount
 ```
 
+The optional `smt` algorithm jointly selects CPU/RAM host and NUMA plans for small
+integer instances. It requires a `z3` executable on `PATH` and supports up to eight
+announced units and 128 complete plans. Unsupported models or a missing executable
+use FitCount and report a fallback reason. See the [SMT reference](docs/algorithms/cp-sat-search.md#smt-reference)
+for supported geometry, budgets and validation. `algorithms smt` lists its parameters.
+
 Mean FitCount (`--algorithm mean-fitcount`) shares the original FitCount planner
 and cache. It minimizes the mean loss of copies across catalogue entries, with
 each shape weighted by its frequency. Both variants honor `--param fitCap=10` and

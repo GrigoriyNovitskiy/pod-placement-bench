@@ -26,7 +26,7 @@ selected empirically on the ten clouds. Utilization takes priority over latency.
 | --- | --- |
 | [Bulk fitcount](bulk-fitcount.md) | Up to 100 announced replicas of one service; frozen-order greedy |
 | [Rollout](rollout.md) | Strict online B=1; sampled mixed-demand continuation |
-| [CP-SAT/search and SMT](cp-sat-search.md) | Alternative geometry for B=1; joint optimization only in declared windows |
+| [CP-SAT/search and SMT](cp-sat-search.md) | Implemented bounded CPU/RAM SMT reference; general CP-SAT/search planned |
 | [Dynamic programming](dynamic-programming.md) | Separable bulk options; optional 32-unit/64-host local hybrid |
 | [DCM](dcm.md) | SQL-generated encoding experiment, using a matching direct-CP control |
 | [Min-cost flow](min-cost-flow.md) | Certified one-replica-per-host bulk with laminar domain limits |
@@ -138,6 +138,7 @@ modes):
 | `bulk-fitcount` | `BulkFitCount`, frozen-order greedy selection |
 | `dp` | `BulkFitCount.dynamicProgramming`, count/tree selection |
 | `rollout` | `Rollout`, explicit prior and common isolated continuation paths |
+| `smt` | `SmtFitCount`, bounded integer CPU/RAM plans with optional Z3 subprocess |
 | `catboost-top1` / `catboost-topn-fitcount` | `CatBoostTop1` / `CatBoostTopNFitCount`, imitation model |
 | `catboost-rollout-top1` / `catboost-rollout-topn-fitcount` | `CatBoostRolloutTop1` / `CatBoostRolloutTopNFitCount`, trained rollout model |
 | `randomn-fitcount` | `RandomNFitCount`, seeded shortlist then FitCount |
