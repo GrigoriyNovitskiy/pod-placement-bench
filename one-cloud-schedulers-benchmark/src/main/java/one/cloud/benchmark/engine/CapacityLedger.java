@@ -1,6 +1,8 @@
 package one.cloud.benchmark.engine;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 import java.util.function.DoubleBinaryOperator;
 import java.util.function.IntToDoubleFunction;
 import java.util.function.ToDoubleBiFunction;
@@ -167,7 +169,7 @@ final class CapacityLedger {
             for (int dimension = 1; dimension <= model.dimensionCount; dimension++) {
                 final double value = context.available(resource, dimension);
                 capacity[index * stride + dimension] = value;
-                empty &= value == supply(resource, dimension);
+                empty = empty && value == supply(resource, dimension);
             }
             final double alternative = model.rules.alternativeMedia[profile] == 0 ? 0
                     : context.available(resource, 19, model.rules.alternativeMedia[profile]);
@@ -459,6 +461,22 @@ final class CapacityLedger {
 
     Debit prepare(Assignment... plans) {
         return prepare(plans, new Debit());
+    }
+
+    List<Engine.ScalarDebit> cpuRamDebits(Assignment[] plans) {
+        final var debit = prepare(plans);
+        if (debit == null) {
+            throw new IllegalArgumentException("Cannot project an infeasible plan");
+        }
+        final var rows = new ArrayList<Engine.ScalarDebit>();
+        for (int index = 0; index < debit.size; index++) {
+            final int offset = debit.index[index];
+            final int dimension = offset % stride;
+            if (dimension == VCORES_VALUE || dimension == MEM_MIB_VALUE) {
+                rows.add(new Engine.ScalarDebit(inventory[offset / stride], dimension, debit.amount[index]));
+            }
+        }
+        return rows;
     }
 
     Debit prepare(Assignment[] plans, Debit target) {

@@ -43,6 +43,30 @@ class SimulatorSessionTest {
     }
 
     @Test
+    void reactiveIlpUpdatesHostMembersAfterRelocationsAndDeletes() throws Exception {
+        final var scenario = Scenario.from(trace(new Record[]{
+                alloc(1, new int[]{1, 2}, 8, 8), alloc(2, new int[]{1, 2}, 7, 10),
+                alloc(3, new int[]{1, 2}, 2, 3), alloc(4, new int[]{1, 2}, 8, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 3, 2), resource(5, 4, 2)},
+                3, 4, 5, -5, -4, -3));
+        final var settings = new AlgorithmRegistry.Settings("reactive-ilp", Map.of("timeoutMs", new JsonPrimitive(5000)));
+        try (var session = new SimulatorSession(ScenarioInput.from(scenario), List.of(settings))) {
+            session.step(2);
+            assertEquals(2, session.inspect(0, 1).get("activeResources").getAsInt());
+            assertEquals(0, session.inspect(0, 2).get("activeResources").getAsInt());
+            session.step(1);
+            assertEquals(3, counters(session).get("placedUnits").getAsInt());
+            assertArrayEquals(new int[]{5}, memberIds(session.inspect(0, 1)));
+            assertArrayEquals(new int[]{3, 4}, memberIds(session.inspect(0, 2)));
+            session.step(3);
+            assertEquals(3, counters(session).get("removedUnits").getAsInt());
+            assertEquals(0, counters(session).get("usedHosts").getAsInt());
+        }
+    }
+
+    @Test
     void addingAlgorithmReplaysTheSamePrefix() throws Exception {
         try (var session = new SimulatorSession(input(), List.of(AlgorithmRegistry.defaults("fitcount")))) {
             session.step(2);
@@ -243,6 +267,11 @@ class SimulatorSessionTest {
             after.step(1);
             assertEquals(13, after.cursor());
         }
+    }
+
+    private static int[] memberIds(JsonObject host) {
+        return host.getAsJsonArray("members").asList().stream()
+                .mapToInt(member -> member.getAsJsonObject().get("id").getAsInt()).sorted().toArray();
     }
 
     private static int[] integers(JsonObject value, String field) {

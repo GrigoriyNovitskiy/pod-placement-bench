@@ -3,6 +3,7 @@ package one.cloud.benchmark.engine;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.IdentityHashMap;
+import java.util.List;
 import java.util.Objects;
 import java.util.TreeSet;
 
@@ -27,6 +28,7 @@ public final class Engine implements SchedulingContext {
     private final long[] hostRevisions, domains;
     private final Counts counts = new Counts(), tentativeCounts = new Counts(), incoming = new Counts();
     private final CapacityLedger.Debit trial = new CapacityLedger.Debit();
+    private ArrayList<Assignment> relocations;
     private SchedulingAlgorithm algorithm;
     private IdentityHashMap<Request, Integer> pending;
     private long revision;
@@ -189,20 +191,14 @@ public final class Engine implements SchedulingContext {
         if (trialSource != null && resource < trialSource.units.length && unit == trialSource.units[resource]) {
             throw new IllegalStateException("A trial cannot remove a previously committed unit");
         }
-        for (final var plan : unit.plans) {
-            update(plan, 1, tentativeGroups, tentativeCounts);
+        if (!removable(unit)) {
+            throw new IllegalStateException("A live placement depends on this unit");
         }
-        try {
-            for (final var plan : unit.plans) {
-                if (!removable(unit, plan)) {
-                    throw new IllegalStateException("A live placement depends on this unit");
-                }
-            }
-        } finally {
-            for (final var plan : unit.plans) {
-                update(plan, -1, tentativeGroups, tentativeCounts);
-            }
-        }
+        detach(unit);
+        notify(unit.plans, false);
+    }
+
+    private void detach(Unit unit) {
         capacity.release(unit.debit);
         for (final long link : unit.outgoing) {
             incoming.add(link, -1);
@@ -213,7 +209,132 @@ public final class Engine implements SchedulingContext {
             update(plan, -1, groupCounts, counts);
         }
         changed(unit);
-        notify(unit.plans, false);
+    }
+
+    public Request committedRequest(int resource) {
+        checkThread();
+        checkResource(resource);
+        final var unit = units[resource];
+        return unit == null ? null : unit.request;
+    }
+
+    public boolean canRelocate(Request request) {
+        checkMutable();
+        final int resource = request.resource(0);
+        checkResource(resource);
+        final var unit = units[resource];
+        return unit != null && unit.request == request && removable(unit);
+    }
+
+    /** A disposable snapshot for generating plans with the given placements lifted. */
+    public Engine relocationPreview(List<Request> lifted) {
+        checkMutable();
+        final var preview = new Engine(this, model);
+        for (final var request : lifted) {
+            if (!preview.canRelocate(request)) {
+                return null;
+            }
+            preview.detach(preview.units[request.resource(0)]);
+        }
+        return preview;
+    }
+
+    public record Relocation(Request request, Assignment[] plans) {
+    }
+
+    public record ScalarDebit(int resource, int dimension, double amount) {
+    }
+
+    /** CPU and RAM rows of a complete plan on the current capacity state. */
+    public List<ScalarDebit> cpuRamDebits(Assignment[] plans) {
+        checkThread();
+        return capacity.cpuRamDebits(plans);
+    }
+
+    /**
+     * Validates the ordered relocations and admission in isolation, then commits the complete change.
+     * A rejected plan leaves the scheduling window and live state untouched.
+     */
+    public boolean relocateAndPlace(Request request, Assignment[] plans, List<Relocation> moves) throws Exception {
+        checkMutable();
+        final var index = pending == null ? null : pending.get(request);
+        if (index == null || index < nextRequest) {
+            throw new IllegalArgumentException("Request is not pending");
+        }
+        final var preview = new Engine(this, model);
+        final var placement = new CheckedPlacement(preview);
+        final var previous = new Unit[moves.size()];
+        final var replacements = new Unit[moves.size()];
+        final var seenRequests = new IdentityHashMap<Request, Boolean>();
+        for (int move = 0; move < moves.size(); move++) {
+            final var relocation = moves.get(move);
+            final var victim = relocation.request;
+            if (seenRequests.put(victim, true) != null || !preview.canRelocate(victim)) {
+                return false;
+            }
+            final int resource = victim.resource(0);
+            previous[move] = preview.units[resource];
+            preview.detach(previous[move]);
+            if (!placement.tryPlace(victim, relocation.plans)) {
+                return false;
+            }
+            replacements[move] = preview.units[resource];
+        }
+        if (!placement.tryPlace(request, plans)) {
+            return false;
+        }
+        for (int move = 0; move < previous.length; move++) {
+            detach(previous[move]);
+            attach(replacements[move]);
+        }
+        final var admitted = preview.units[request.resource(0)];
+        attach(admitted);
+        nextRequest = index + 1;
+        if (previous.length != 0 && relocations == null) {
+            relocations = new ArrayList<>();
+        }
+        for (int move = 0; move < previous.length; move++) {
+            for (final var plan : replacements[move].plans) {
+                relocations.add(plan.copy());
+            }
+            notify(previous[move].plans, false);
+            notify(replacements[move].plans, true);
+        }
+        notify(admitted.plans, true);
+        return true;
+    }
+
+    public List<Assignment> drainRelocations() {
+        checkThread();
+        if (relocations == null || relocations.isEmpty()) {
+            return List.of();
+        }
+        final var result = List.copyOf(relocations);
+        relocations.clear();
+        return result;
+    }
+
+    private static final class CheckedPlacement extends SchedulingAlgorithm {
+        private final Engine engine;
+        private Assignment[] plans;
+
+        private CheckedPlacement(Engine engine) {
+            super(engine, 0);
+            this.engine = engine;
+        }
+
+        private boolean tryPlace(Request request, Assignment[] plans) throws Exception {
+            this.plans = plans;
+            engine.schedule(this, request);
+            return engine.placement(request.resource(0)) != null;
+        }
+
+        @Override
+        public void schedule(Request request) {
+            if (context.canPlace(request, plans)) {
+                context.place(request, plans);
+            }
+        }
     }
 
     @Override
@@ -306,6 +427,12 @@ public final class Engine implements SchedulingContext {
         } finally {
             clearTentative(plans);
         }
+        attach(unit);
+        nextRequest = pending.get(request) + 1;
+        notify(unit.plans, true);
+    }
+
+    private void attach(Unit unit) {
         capacity.allocate(unit.debit);
         for (final long link : unit.outgoing) {
             incoming.add(link, 1);
@@ -315,12 +442,10 @@ public final class Engine implements SchedulingContext {
             units[plan.resource()] = unit;
             update(plan, 1, groupCounts, counts);
         }
-        nextRequest = pending.get(request) + 1;
         changed(unit);
         if (trialUnits != null) {
             trialUnits.add(unit);
         }
-        notify(unit.plans, true);
     }
 
     private CapacityLedger.Debit prepare(Request request, Assignment[] plans, CapacityLedger.Debit trial) {
@@ -390,6 +515,24 @@ public final class Engine implements SchedulingContext {
             }
         }
         return true;
+    }
+
+    private boolean removable(Unit unit) {
+        for (final var plan : unit.plans) {
+            update(plan, 1, tentativeGroups, tentativeCounts);
+        }
+        try {
+            for (final var plan : unit.plans) {
+                if (!removable(unit, plan)) {
+                    return false;
+                }
+            }
+            return true;
+        } finally {
+            for (final var plan : unit.plans) {
+                update(plan, -1, tentativeGroups, tentativeCounts);
+            }
+        }
     }
 
     private boolean removable(Unit unit, Assignment plan) {

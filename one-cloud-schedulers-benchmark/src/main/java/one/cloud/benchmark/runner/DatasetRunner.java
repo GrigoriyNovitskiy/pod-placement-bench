@@ -201,11 +201,29 @@ public final class DatasetRunner {
             final long elapsed = System.nanoTime() - start;
             scheduleTimes[scheduleCount++] = elapsed;
             scheduleNanos = Math.addExact(scheduleNanos, elapsed);
+            for (final var plan : engine.drainRelocations()) {
+                relocated(plan);
+            }
             for (int index = first; index < end; index++) {
                 final int event = scenario.events[index];
                 checksum = mix(mix(checksum, index), event);
                 created(event - 1, window[index - first]);
             }
+        }
+
+        private void relocated(Assignment plan) {
+            final int resource = plan.resource();
+            final int oldHost = hostByResource[resource];
+            if (oldHost != 0 && oldHost != plan.host()) {
+                if (--hostUse[oldHost] == 0) {
+                    usedHosts--;
+                }
+                if (hostUse[plan.host()]++ == 0) {
+                    usedHosts++;
+                }
+                hostByResource[resource] = plan.host();
+            }
+            checksum = assignmentChecksum(mix(checksum, -1), plan);
         }
 
         private void created(int unit, Request request) {
