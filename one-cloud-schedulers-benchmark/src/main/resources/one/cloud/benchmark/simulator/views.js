@@ -4,6 +4,8 @@ export const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, chara
 })[character]);
 
 const colors = Array.from({ length: 6 }, (_, index) => `var(--algorithm-${index + 1})`);
+const eventPlural = new Intl.PluralRules("ru-RU");
+const eventForms = { one: "событие", few: "события", many: "событий", other: "событий" };
 const labels = {
     VCORES: "CPU", MEM_MIB: "RAM", LAN_OUT_MBIT: "Network out", LAN_IN_MBIT: "Network in",
     NVME_GIB: "NVMe", NVME_SPINDLES: "NVMe spindles", SSD_GIB: "SSD", SSD_SPINDLES: "SSD spindles",
@@ -103,9 +105,32 @@ export function renderState(state, view) {
     renderEvent(current);
     $("progress-text").textContent = `${state.cursor} / ${state.totalEvents} событий`;
     $("progress-fill").style.width = `${percentage(state.cursor, state.totalEvents)}%`;
-    $("next").disabled = $("batch").disabled = state.failed || state.cursor >= state.totalEvents;
-    $("play").disabled = state.failed || (!view.playing && state.cursor >= state.totalEvents);
-    $("play").textContent = view.playing ? "Ⅱ Пауза" : "▶ Авто";
+    renderRunControls(state, view);
+}
+
+export function renderRunControls(state, view) {
+    const event = $("profile-event");
+    if (!state?.profileAvailable) event.value = "";
+    event.disabled = view.busy || !state?.profileAvailable;
+    $("profile-unavailable").hidden = !state || state.profileAvailable;
+    const profiled = event.value !== "";
+    const active = $("profile-active");
+    active.hidden = !profiled;
+    active.textContent = profiled ? "· " + event.selectedOptions[0].textContent : "";
+    $("profile-format-field").hidden = !profiled;
+    $("profile-format").disabled = view.busy;
+    $("profile-html").disabled = !state?.flameGraphAvailable;
+    if (state?.profileAvailable && !state.flameGraphAvailable) $("profile-format").value = "jfr";
+    const mode = $("run-mode");
+    $("run-auto").hidden = $("run-auto").disabled = profiled;
+    if (profiled && mode.value === "auto") mode.value = "all";
+    $("speed").hidden = mode.value !== "auto";
+    const remaining = state ? state.totalEvents - state.cursor : 0;
+    const finished = !state || state.failed || remaining === 0;
+    $("run-all").textContent = remaining === 0 ? "Нет событий"
+        : `${number(remaining)} ${eventForms[eventPlural.select(remaining)]} (все)`;
+    $("play").disabled = finished || (view.busy && !view.playing);
+    $("play").textContent = view.playing ? "Ⅱ Пауза" : "▶ Выполнить";
 }
 
 function renderEvents(state, view) {

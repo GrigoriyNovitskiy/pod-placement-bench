@@ -25,8 +25,12 @@ same server; save a manual scenario before stopping if you want to retain it.
 
 The initial example contains eight hosts and 24 atomic requests, including
 pod+volume and fractional GPU requests. Select multiple algorithms with
-**Добавить алгоритм**, then use **Следующий запрос**, **+10 событий** or **Авто**.
-Pausing stops subsequent steps; an in-flight Java operation finishes first.
+**Добавить алгоритм**, choose a run mode (**1 событие**, **10 событий**,
+**N событий (все)** or **Авто**), and press **Выполнить**.
+**Все** processes every remaining event in one request and updates the UI when it
+finishes, with or without profiling. It is not capped at 10,000 events.
+**Авто** advances and redraws one event at a time, with a configurable delay.
+Pausing Auto stops subsequent steps; an in-flight Java operation finishes first.
 
 Host headers can be dragged; empty canvas space pans the map. These actions,
 zooming and pagination never migrate resources. Clicking a pod/shard reveals its
@@ -165,6 +169,16 @@ diagnostic history; those timings should not be interpreted as controlled speedu
 The separate probe button evaluates up to 16 catalogue requests against all hosts,
 with the same cap of 10 copies per host for every lane. This diagnostic cap is
 independent of each algorithm's parameters.
+
+Set `ASYNC_PROFILER_HOME` to an extracted async-profiler release before starting
+the simulator. Open **Профилирование** to choose CPU, allocations or wall-clock
+and a file format. With profiling enabled, choose one event, ten events or
+**N событий (все)**. The last option always processes the entire remaining stream. **Выполнить** runs the selected algorithms on the same
+events and downloads one profile for the whole run. Auto is available without profiling.
+CPU and wall-clock capture use a 1 ms sampling interval. Allocation capture samples at a 64 KiB interval.
+HTML graphs include stacks from the replay step. JFR contains the JVM
+recording. If no matching samples were captured, the UI reports the outcome
+and shows the updated cursor.
 
 ## Design and implementation plan
 

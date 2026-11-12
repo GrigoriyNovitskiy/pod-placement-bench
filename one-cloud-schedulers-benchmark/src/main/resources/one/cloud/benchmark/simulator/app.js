@@ -1,5 +1,5 @@
 import {
-    $, escapeHtml, label, number, algorithmName, renderState, renderInspector,
+    $, escapeHtml, label, number, algorithmName, renderState, renderRunControls, renderInspector,
     renderEvent, renderProbes, applyMapTransform, drawLinks, layoutMaps
 } from "/views.js";
 
@@ -26,11 +26,15 @@ let inspectorRequest = 0;
 let dialogHandler = null;
 let suppressClick = false;
 
-async function api(path, options = {}) {
-    const response = await fetch(path, {
+function request(path, options = {}) {
+    return fetch(path, {
         ...options,
         headers: { "X-Placement-UI": "1", ...options.headers }
     });
+}
+
+async function api(path, options) {
+    const response = await request(path, options);
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || `HTTP ${response.status}`);
     return body;
@@ -63,6 +67,7 @@ function updateBusy() {
             delete control.dataset.wasDisabled;
         }
     });
+    renderRunControls(view.state, view);
     $("processing").textContent = view.busy ? "Java обрабатывает запрос…" : "Общий поток событий";
 }
 
@@ -159,10 +164,16 @@ async function replaceManual(config, cursor) {
 function pause() {
     view.playing = false;
     clearTimeout(timer);
-    $("play").textContent = "▶ Авто";
+    renderRunControls(view.state, view);
 }
 
-async function advance(count) {
+function selectedProfile() {
+    const event = $("profile-event").value;
+    return event ? { event, format: $("profile-format").value } : null;
+}
+
+async function advance(count, profile = null) {
+    notify("");
     view.event = null;
     if (view.state.cursor === 0 && view.config?.catalogue?.length === 0 && view.config.requests.length) {
         const config = structuredClone(view.config);
@@ -170,10 +181,46 @@ async function advance(count) {
         await post("/api/manual", { config, cursor: 0, algorithms: settings() });
         view.config = config;
     }
-    const result = await post("/api/step", { count });
-    if (view.followEvents) view.eventOffset = Math.max(0, result.cursor - 4);
+    const run = count === "all" ? { all: true } : { count };
+    let cursor;
+    try {
+        cursor = profile === null ? (await post("/api/step", run)).cursor : await profileStep(run, profile);
+    } catch (error) {
+        try {
+            await refresh();
+        } finally {
+            throw error;
+        }
+    }
+    if (view.followEvents) view.eventOffset = Math.max(0, cursor - 4);
     await refresh();
     if (view.state.cursor >= view.state.totalEvents) pause();
+}
+
+async function profileStep(run, profile) {
+    const response = await request("/api/profile", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...run, ...profile })
+    });
+    if (!response.ok) {
+        const body = await response.json();
+        if (response.status === 422) {
+            notify(body.error);
+            return body.cursor;
+        }
+        throw new Error(body.error || `HTTP ${response.status}`);
+    }
+    download(await response.blob(), `placement-${profile.event}.${profile.format}`);
+    return Number(response.headers.get("X-Placement-Cursor"));
+}
+
+function download(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function sampledCatalogue(config) {
@@ -559,14 +606,43 @@ function bindMap() {
 }
 
 function bindControls() {
-    $("next").onclick = () => { pause(); perform(() => advance(1)); };
-    $("batch").onclick = () => { pause(); perform(() => advance(10)); };
+    const profileSettings = $("profile-settings");
+    const profileTrigger = $("profile-trigger");
+    profileTrigger.onclick = () => {
+        if (!profileSettings.open && view.playing) pause();
+    };
+    profileSettings.onkeydown = event => {
+        if (event.key === "Escape" && profileSettings.open) {
+            event.preventDefault();
+            profileSettings.open = false;
+            profileTrigger.focus();
+        }
+    };
+    document.addEventListener("click", event => {
+        if (profileSettings.open && !profileSettings.contains(event.target)) {
+            profileSettings.open = false;
+        }
+    }, true);
+    $("run-mode").onchange = pause;
+    $("profile-event").onchange = pause;
     $("play").onclick = () => {
-        if (view.playing) pause();
-        else { view.playing = true; $("play").textContent = "Ⅱ Пауза"; autoStep(); }
+        if (view.playing) {
+            pause();
+            return;
+        }
+        const mode = $("run-mode").value;
+        const profile = selectedProfile();
+        if (mode === "auto" && !profile) {
+            view.playing = true;
+            autoStep();
+            return;
+        }
+        const events = mode === "all" ? "all" : Number(mode);
+        perform(() => advance(events, profile));
     };
     $("reset").onclick = () => { pause(); perform(async () => {
         await post("/api/reset", {});
+        notify("");
         view.event = null;
         view.eventOffset = 0;
         await refresh();
@@ -654,12 +730,8 @@ function bindControls() {
     };
     $("save").onclick = () => {
         if (!view.config) return;
-        const url = URL.createObjectURL(new Blob([JSON.stringify(view.config, null, 2)], { type: "application/json" }));
-        const link = document.createElement("a");
-        link.href = url;
-        link.download = "placement-scenario.json";
-        link.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        download(new Blob([JSON.stringify(view.config, null, 2)], { type: "application/json" }),
+            "placement-scenario.json");
     };
     $("json-file").onchange = () => perform(async () => {
         const file = $("json-file").files[0];
