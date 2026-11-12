@@ -7,8 +7,18 @@ algorithms, packaged models and historical measurements are described in the
 [CatBoost guide](catboost.md).
 The [RL guide](rl.md) describes the packaged PPO policy, `rl-top1` and
 `rl-topn-fitcount`, their parameters and training split.
+The implemented modes also have explicit maintenance/reproduction contracts:
+[CatBoost](catboost.md#implementation-and-reproduction-contract) and
+[RL](rl.md#тз-поведения-и-воспроизведения). These are separate from the planned hybrids.
 
-Numerical settings below are
+The [three planned classical hybrids](hybrids.md) are independent of ML:
+portfolio shortlist, static-mask scarcity, and a bounded announced-window policy
+portfolio. [Two additional ML hybrids](ml-hybrids.md) reuse the packaged PPO with
+bounded proposal scoring, with physical or masked refinement. Their starting
+profile is cap 10 / cache rows 64 / seed 44. All five are planned CLI modes;
+resource tradeoffs are evaluated per scenario.
+
+Numerical settings in the original plans below are
 explicit starting configurations agreed for the first experiments; none has been
 selected empirically on the ten clouds. Utilization takes priority over latency.
 
@@ -20,6 +30,16 @@ selected empirically on the ten clouds. Utilization takes priority over latency.
 | [Dynamic programming](dynamic-programming.md) | Separable bulk options; optional 32-unit/64-host local hybrid |
 | [DCM](dcm.md) | SQL-generated encoding experiment, using a matching direct-CP control |
 | [Min-cost flow](min-cost-flow.md) | Certified one-replica-per-host bulk with laminar domain limits |
+| [Portfolio FitCount](hybrids.md#portfolio-fitcount) | Random20 ∪ fragmentation4 ∪ LeastAllocated4, unchanged FitCount |
+| [Masked FitCount](hybrids.md#masked-fitcount) | Random20 with separate static-mask/pin scarcity over shared physical rows |
+| [Window portfolio FitCount](hybrids.md#window-portfolio-fitcount) | Two complete announced-window trajectories; strict admitted-set-superset guard |
+
+Additional ML hypotheses (separate from the three classical choices):
+
+| Plan | Primary experiment |
+| --- | --- |
+| [RL pool FitCount](ml-hybrids.md#rl-pool-fitcount) | Random20 plus 8 PPO proposals from a pool of at most 64 plans; physical refiner |
+| [RL masked FitCount](ml-hybrids.md#rl-masked-fitcount) | The same bounded PPO pool with static-mask scarcity refinement |
 
 Bulk fitcount defines a scoring strategy; DP and flow are selectors for restricted
 models. DCM generates a solver encoding. These names do not imply six unrelated
@@ -56,11 +76,15 @@ pending request: it is neither a physical-only forecast oracle nor a complete
 candidate generator for later dependent units. These capabilities are implemented by `Engine.Trial` and `FitCount.select`;
 the common physical kernel remains authoritative.
 
-The common comparison profile uses the full declared catalogue, physical copy
-cap **128**, cache rows **256**, seed **42** and one worker. This does not change
+For the original bulk/search plans, the comparison profile uses the full declared
+catalogue, physical copy cap **128**, cache rows **256**, seed **42** and one worker. This does not change
 FitCount's existing default cap 10. Compare cap 64/128/512 separately: copy cap
 changes scores; cache-row eviction should change time only. Record every limit,
 ordering rule, dataset/scenario digest, backend version and parameter digest.
+
+The five planned hybrids use cap **10**, cache rows **64**, and seed **44**,
+as defined in the [classical](hybrids.md#границы-и-общий-профиль) and
+[ML](ml-hybrids.md) specifications.
 
 For bulk, declare the service burst in the scenario and version its transformation.
 For current exporter v2, the nonzero POD group identifies an anonymized service
