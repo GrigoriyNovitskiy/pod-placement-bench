@@ -1,0 +1,317 @@
+{
+  "formatVersion": 1,
+  "algorithmIds": [
+    "rl-top1",
+    "rl-topn-fitcount"
+  ],
+  "artifact": "policy.json",
+  "modelSha256": "3ad2c2f63dedeef22e76f815770c7400b108a8b244b90245bbe216b45630c482",
+  "architecture": {
+    "features": 115,
+    "hidden": 32,
+    "activation": "tanh",
+    "memberAggregation": "sum"
+  },
+  "preprocessing": "signed_log1p_then_train_only_standardization",
+  "training": {
+    "method": "FitCount behavior cloning followed by on-policy PPO",
+    "imitationEpochs": 20,
+    "ppoEpochs": 12,
+    "selectedPpoEpoch": 1,
+    "selection": "highest admitted POD total on validation among PPO epochs 1..12; earliest tie",
+    "reward": "one per admitted POD member across creates including recreations",
+    "gamma": 1,
+    "lambda": 1,
+    "seed": 42,
+    "teacherDecisions": 8470,
+    "catalogueLimit": 32,
+    "fitCap": 10,
+    "cacheRows": 64,
+    "gpuModel": "devices20",
+    "trainingSeconds": 220.66238845799998,
+    "software": {
+      "python": "3.9.6",
+      "torch": "2.8.0",
+      "numpy": "2.0.2"
+    }
+  },
+  "data": {
+    "projection": "native-hosts-v1",
+    "operations": "source synthetic operations; times, generations and create/delete preserved",
+    "hostSampling": "32 source hosts per subset; GPU stratum up to one quarter",
+    "requests": "whole units with all snapshot placements in selected inventory and closed dependencies",
+    "trainClouds": [
+      "02",
+      "05",
+      "07",
+      "09"
+    ],
+    "validationClouds": [
+      "04",
+      "06"
+    ],
+    "testClouds": [
+      "01",
+      "08",
+      "10"
+    ],
+    "inputs": [
+      {
+        "split": "train",
+        "subset": "train-02-100",
+        "sourceDatasetId": "4256134084839298768",
+        "sourceSnapshotSha256": "c5c6ceca56d485b7f601962f386efdfea57440ebd5c97a794c3d91abbd571208",
+        "sourceOperationsSha256": "6aaa483ada6bfada20c4aa18f66bf112342fc5a4c27b87b73f4c9b82de957545",
+        "seed": 100,
+        "hosts": 32,
+        "requests": 467,
+        "snapshotSha256": "951c109f5bf7f3c60a72d8cafd053c108e2c61c53ce0dcfbafedb92248888796",
+        "operationsSha256": "7fd1f40aa8d0150c9d16e2360ec671b0e07f51a823d661c53b644f6cf7407276",
+        "scenarioDigest": "ad17413039105583ff00064e40d4d398d2ef6f835ae633041b42ff22634bf034"
+      },
+      {
+        "split": "train",
+        "subset": "train-02-101",
+        "sourceDatasetId": "4256134084839298768",
+        "sourceSnapshotSha256": "c5c6ceca56d485b7f601962f386efdfea57440ebd5c97a794c3d91abbd571208",
+        "sourceOperationsSha256": "6aaa483ada6bfada20c4aa18f66bf112342fc5a4c27b87b73f4c9b82de957545",
+        "seed": 101,
+        "hosts": 32,
+        "requests": 534,
+        "snapshotSha256": "dd7a5acb592ad7255e48396c2ba26c34ec67ea9f002cb16cb88817847c3628cb",
+        "operationsSha256": "2f276406f5f960ce3a9117435a6568ea8c0e138c306a1746874638538802a4fa",
+        "scenarioDigest": "a336d8b8c82f2afb9032ff516fef927fe12e726473ca91ca55f481309cf3869d"
+      },
+      {
+        "split": "train",
+        "subset": "train-05-100",
+        "sourceDatasetId": "4286106012088586183",
+        "sourceSnapshotSha256": "f140ab1a17a1b5be37cccfc85bf092bd40298a89e7c95324a5506b2fc5c8c8b6",
+        "sourceOperationsSha256": "75aed23c87a1d915d37856d015906c2c7317807a43639c7881b90a0b33728509",
+        "seed": 100,
+        "hosts": 32,
+        "requests": 744,
+        "snapshotSha256": "cf79e61a1116407c1c76da481d4340e13165083410a13c356b984e1edb3f38d4",
+        "operationsSha256": "d14ce2037a3237d9f45596b0dcaf46b044721594e806e41f5ca6a0ad2807bb52",
+        "scenarioDigest": "3d6f5cea025414a73d3e48a5699b3a809407d07bac62ae56c184bb17952335da"
+      },
+      {
+        "split": "train",
+        "subset": "train-05-101",
+        "sourceDatasetId": "4286106012088586183",
+        "sourceSnapshotSha256": "f140ab1a17a1b5be37cccfc85bf092bd40298a89e7c95324a5506b2fc5c8c8b6",
+        "sourceOperationsSha256": "75aed23c87a1d915d37856d015906c2c7317807a43639c7881b90a0b33728509",
+        "seed": 101,
+        "hosts": 32,
+        "requests": 856,
+        "snapshotSha256": "25f9f3ea8a9c7b52ff8587b16f77b187b73431bc7a4526fdefca08b53db4e70e",
+        "operationsSha256": "963c1aacca5345b0dcc3448ce59a54e98c7abf90a6b3d9f745887d495b1797bc",
+        "scenarioDigest": "7014d0b0ed8dd13282f724a3b949cf5ee10ac9a2ab4d127402f4a2e1225266db"
+      },
+      {
+        "split": "train",
+        "subset": "train-07-100",
+        "sourceDatasetId": "12995699248591030168",
+        "sourceSnapshotSha256": "342d8617b2a3d804f3ef6c4d824f2ca96abd8065ca2ac66fc0a8b081014f81a9",
+        "sourceOperationsSha256": "62b7aa55db69f95e13ee9e8afa6c370af3de91525c16ea0f10dce98ddaafc889",
+        "seed": 100,
+        "hosts": 32,
+        "requests": 735,
+        "snapshotSha256": "5379032cc6147b42890f6ad84fa9e31c288235f662de0707fe7772bfc9121f6e",
+        "operationsSha256": "0c3d3fd36fdc630359e564e9269630d264bd2af560ae360c939eaee843e6d180",
+        "scenarioDigest": "dd394ec2e703b2f826a0d1a7ce8120282cc14b94f875d514964e17b87069d42d"
+      },
+      {
+        "split": "train",
+        "subset": "train-07-101",
+        "sourceDatasetId": "12995699248591030168",
+        "sourceSnapshotSha256": "342d8617b2a3d804f3ef6c4d824f2ca96abd8065ca2ac66fc0a8b081014f81a9",
+        "sourceOperationsSha256": "62b7aa55db69f95e13ee9e8afa6c370af3de91525c16ea0f10dce98ddaafc889",
+        "seed": 101,
+        "hosts": 32,
+        "requests": 794,
+        "snapshotSha256": "4c3b29da5664e9466f5ae69daaa555b809efa63c0de0653063fc49e798a0a71d",
+        "operationsSha256": "19aec740df24c52b506aa15d8f8a41cc29865844344fe58b449845b0b65ecc14",
+        "scenarioDigest": "d5ffeaa7ddeeea6353e75d5ea63fb7d4e7d842fefa46fa7921aa286ed2299034"
+      },
+      {
+        "split": "train",
+        "subset": "train-09-100",
+        "sourceDatasetId": "5409983569244039846",
+        "sourceSnapshotSha256": "363e67c12d44ec060ff5c7e3347e5faf0676f6f170f74fbb53c7f86ebddaa862",
+        "sourceOperationsSha256": "dd8db7b3a0eb14065e5e69806db634e4c983b6f7b862570a37ae307dbc8812ed",
+        "seed": 100,
+        "hosts": 32,
+        "requests": 355,
+        "snapshotSha256": "1a09a00f592e1f87b275d3f9920692111405970f01d1300ee3d5922c3e6f2660",
+        "operationsSha256": "ead97f7870502ab100285cc87db7fe802169b00dea0a9855bcf014970a90a797",
+        "scenarioDigest": "9e376860093c5a55ed7fc4ba932114be6fd06ae12d201a4f9df1e68633ce5908"
+      },
+      {
+        "split": "train",
+        "subset": "train-09-101",
+        "sourceDatasetId": "5409983569244039846",
+        "sourceSnapshotSha256": "363e67c12d44ec060ff5c7e3347e5faf0676f6f170f74fbb53c7f86ebddaa862",
+        "sourceOperationsSha256": "dd8db7b3a0eb14065e5e69806db634e4c983b6f7b862570a37ae307dbc8812ed",
+        "seed": 101,
+        "hosts": 32,
+        "requests": 321,
+        "snapshotSha256": "d9ddbb22a620b3112d8807da8d6eb4507f08ed18d060e20a853009b3983784cf",
+        "operationsSha256": "cf2a7cc6aca0030d454ca0535701713134c461cdafc3faf36e3ac44b10abbbf1",
+        "scenarioDigest": "c465d1b2e231d9e2e5879e791dbaf8cbdd4142f2f0bff8f214b1ec8b85f6ef32"
+      },
+      {
+        "split": "validation",
+        "subset": "validation-04-200",
+        "sourceDatasetId": "17298935810264369100",
+        "sourceSnapshotSha256": "7dbf658ad0f138c638ae06500b29a48c84e2b9dc265d47375e74d07146692009",
+        "sourceOperationsSha256": "80a0786a735e8cfc588cd97cdd794650eb275b8e80c45c8d64cb10371d7a6f6f",
+        "seed": 200,
+        "hosts": 32,
+        "requests": 563,
+        "snapshotSha256": "940ea51169bc1003f2ddc026eaff8bc1b9109ee62c422f938bd40edefe3b61fd",
+        "operationsSha256": "ea322ce9e3d9ba76421769e6a13f042d59e967b89bad23eff30a417a2ccc4e1a",
+        "scenarioDigest": "2f93a9ac68bc6b4deb55276f2b62c18346b0ec053da66efd1d90976f2e204e8b"
+      },
+      {
+        "split": "validation",
+        "subset": "validation-04-201",
+        "sourceDatasetId": "17298935810264369100",
+        "sourceSnapshotSha256": "7dbf658ad0f138c638ae06500b29a48c84e2b9dc265d47375e74d07146692009",
+        "sourceOperationsSha256": "80a0786a735e8cfc588cd97cdd794650eb275b8e80c45c8d64cb10371d7a6f6f",
+        "seed": 201,
+        "hosts": 32,
+        "requests": 597,
+        "snapshotSha256": "0a2fce5ee724193960517da3429c3c107a72593c036f38e89e8a6d715e297db1",
+        "operationsSha256": "023f7ac45099aea9343986a2017536e4d0ff28673e83e8af7fd515d8db6fb773",
+        "scenarioDigest": "66575333a7da0b929918a504c690584412f5e786592cdaa63ffdb5532486c87d"
+      },
+      {
+        "split": "validation",
+        "subset": "validation-06-200",
+        "sourceDatasetId": "17171038414986853311",
+        "sourceSnapshotSha256": "e0d7a8f12b610d47fd22d8d3f0ecdcb62d69da1b335d6815f121248ed2ceec73",
+        "sourceOperationsSha256": "ce5c1fbd144802c04d973aae76e754835f7b77b6229660e4070ec65b8dd8fd54",
+        "seed": 200,
+        "hosts": 32,
+        "requests": 536,
+        "snapshotSha256": "ec6b000f78842a8ad53c7d024afa7ceec6f7222ce9449f8b85e08457d09fe1a1",
+        "operationsSha256": "ba34d6d47116ebbe4cdf2d0974afbd52c2bbb4a2954120ad51303418236af3a6",
+        "scenarioDigest": "143edb10a9e80adedcc9199f30f5d7e36de55361c99e6e054e330096a9ea5776"
+      },
+      {
+        "split": "validation",
+        "subset": "validation-06-201",
+        "sourceDatasetId": "17171038414986853311",
+        "sourceSnapshotSha256": "e0d7a8f12b610d47fd22d8d3f0ecdcb62d69da1b335d6815f121248ed2ceec73",
+        "sourceOperationsSha256": "ce5c1fbd144802c04d973aae76e754835f7b77b6229660e4070ec65b8dd8fd54",
+        "seed": 201,
+        "hosts": 32,
+        "requests": 574,
+        "snapshotSha256": "cf5472b0c7b2706217444ccfd9ce2332de95014660c7ec2e972eac400ffdd135",
+        "operationsSha256": "7ecfd79d426765130bc30b69170176a5282127bc10920ede888d432509bd3f90",
+        "scenarioDigest": "2f4eb81ed253702472cddf314aacff386e24f6f68566af24156bc52c73ff7aa5"
+      },
+      {
+        "split": "test",
+        "subset": "test-01-300",
+        "sourceDatasetId": "6421882564165549",
+        "sourceSnapshotSha256": "2c67a3051ee44932e545483e2389446c0cefb36f226517e0b824fb264427edba",
+        "sourceOperationsSha256": "2f86db28ce88b050d4b29f790c487f2583f23b2125c07cdcc9b08eca769c873e",
+        "seed": 300,
+        "hosts": 32,
+        "requests": 647,
+        "snapshotSha256": "de1cf72db64ae5f9bd66772b4363ee87dd871741e4790805a008f8eb2660b572",
+        "operationsSha256": "2e75e1fc3d18fdf425b8217f9bff179018afced4368d8a79fc751828942b50b3",
+        "scenarioDigest": "51274cb666c17382dcdd6574c211ae5999af9de5a2cb071d30e5c2db2c599d3f"
+      },
+      {
+        "split": "test",
+        "subset": "test-08-300",
+        "sourceDatasetId": "12321823541128615844",
+        "sourceSnapshotSha256": "7ebe4a51ff842295887ecd9f0b97ee637be8b905c3e0d3a9b129fad75001b981",
+        "sourceOperationsSha256": "29eea282be44d806c78fc6f7097a4b051e650f31c4c00c59a13092f80db1e0c8",
+        "seed": 300,
+        "hosts": 32,
+        "requests": 506,
+        "snapshotSha256": "354adc4e807bcaf0cfd128ba1b595a5a5ccfa3078193bbf174cfffd4937513ac",
+        "operationsSha256": "50704094aa089245725d53c77f24a7a6da4c3cb1a3ccef9b1e9d78dca2d6d1f9",
+        "scenarioDigest": "577a60c818de7e9d21f48dc97bd92f109f8477025343f3bed51effa0aaadffa7"
+      },
+      {
+        "split": "test",
+        "subset": "test-10-300",
+        "sourceDatasetId": "6192995112852362346",
+        "sourceSnapshotSha256": "2c7b4933b2920bffab6e201c8bcc8ce2ef04a0022d3aa09cfaf93b7dd572d231",
+        "sourceOperationsSha256": "9705e68b993a3da56d074f576785c8ad45c2d41fe26b655e6bb39005d83818b7",
+        "seed": 300,
+        "hosts": 32,
+        "requests": 411,
+        "snapshotSha256": "a4308fc24024599df14d920e3d1ad21fa42f6d9eeb94438b1196b9388cc20752",
+        "operationsSha256": "c3bdfff26b8aa596099b915d7c905adf776ebba93a20088f60f2e1d3569b8466",
+        "scenarioDigest": "5ad506005d75b8b2016338d008cf8f07a5f6f500f3d7006d1e1ed1856dec0964"
+      }
+    ]
+  },
+  "validation": [
+    {
+      "epoch": 0,
+      "pods": 4268
+    },
+    {
+      "epoch": 1,
+      "pods": 4270
+    },
+    {
+      "epoch": 2,
+      "pods": 4263
+    },
+    {
+      "epoch": 3,
+      "pods": 4262
+    },
+    {
+      "epoch": 4,
+      "pods": 4249
+    },
+    {
+      "epoch": 5,
+      "pods": 4255
+    },
+    {
+      "epoch": 6,
+      "pods": 4261
+    },
+    {
+      "epoch": 7,
+      "pods": 4262
+    },
+    {
+      "epoch": 8,
+      "pods": 4267
+    },
+    {
+      "epoch": 9,
+      "pods": 4257
+    },
+    {
+      "epoch": 10,
+      "pods": 4258
+    },
+    {
+      "epoch": 11,
+      "pods": 4262
+    },
+    {
+      "epoch": 12,
+      "pods": 4267
+    }
+  ],
+  "inferenceParityChecks": 4,
+  "limitations": [
+    "No guarantee of improving FitCount admission.",
+    "GPU devices are synthetic NVIDIA/Intel 20-share devices from the benchmark model.",
+    "Subset sampling excludes requests with external dependencies.",
+    "Full dataset-08 was previously used in research and is an engineering transfer check."
+  ]
+}

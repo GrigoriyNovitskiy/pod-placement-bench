@@ -14,6 +14,8 @@ import one.cloud.benchmark.algorithms.ilp.ProactiveIlp;
 import one.cloud.benchmark.algorithms.ilp.ReactiveIlp;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
+import one.cloud.benchmark.algorithms.rl.RlTop1;
+import one.cloud.benchmark.algorithms.rl.RlTopNFitCount;
 
 import static one.cloud.benchmark.algorithms.AlgorithmRegistry.register;
 
@@ -41,5 +43,7 @@ final class Algorithms {
         register(CatBoostRolloutTop1.definition());
         register(CatBoostRolloutTopNFitCount.definition());
         register(RandomNFitCount.definition());
+        register(RlTop1.definition());
+        register(RlTopNFitCount.definition());
     }
 }
