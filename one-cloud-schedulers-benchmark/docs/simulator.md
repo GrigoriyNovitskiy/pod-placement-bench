@@ -17,8 +17,9 @@ another port or suppress opening:
 ```
 
 The launcher uses `JAVA_HOME` or Java from `PATH`; it needs a Java 25 runtime even
-if Gradle found a separate build toolchain. Run `./gradlew build installDist` again
-after source changes. `./placement-bench simulator --help` shows server options.
+if Gradle found a separate build toolchain. Stop the server before rebuilding with
+`./gradlew build installDist`, then restart it. Replacing JARs while the server is
+running can break resource loading. `./placement-bench simulator --help` shows server options.
 
 Stop the server with Ctrl+C. State is in memory and shared between tabs using the
 same server; save a manual scenario before stopping if you want to retain it.
@@ -80,8 +81,10 @@ it describes the scenario, not algorithm parameters or a resumable engine dump.
 
 All registered algorithms, including CatBoost and RandomN, are available through the
 Java `AlgorithmRegistry`. Each algorithm declares its own parameters, types,
-defaults and bounds. The browser builds the form from this descriptor. Adding or
-changing a lane replays the common prefix on a fresh engine.
+defaults and bounds. The browser builds the form from this descriptor. Adding,
+changing or removing a lane resets playback to step zero on fresh engines.
+Counters, timings, probes and the selected event are cleared. Invalid changes
+leave the current session intact.
 The comparison is limited to six lanes to keep the local UI manageable.
 
 CatBoost Top-1 and Rollout Top-1 have no parameters: their selected candidate is
@@ -149,12 +152,46 @@ The same parameters are accepted by the CLI through repeated `--param key=value`
 Use `algorithms` or `algorithms ID` to print the registered schemas and command
 examples without opening a dataset.
 
-## Metrics
+## Benchmark workspace
+
+The **Бенчмарки** tab at `/benchmarks` runs the existing `placement-bench benchmark`
+command, with serial isolated JVMs, warmups, measurements and separate quality
+replays. Upload one or more native `snapshot.pb` / `operations.pb` pairs, select
+algorithms with their individual parameters, and start the experiment. Manual
+simulator scenarios remain separate. Neither benchmark nor profile jobs move the
+simulator cursor.
+
+The page shows real progress, cancellation, per-dataset and scenario comparisons,
+baseline deltas, raw repeats, checkpoint utilization, GPU dimensions and headroom
+diagnostics. A prefix is not a full-trace admission comparison. Imported JSON must
+be a version 1 `isolated-jvm-full-replay` report. Error reports are supported;
+timeouts are displayed separately from placement refusals.
+
+**Профиль → Собрать профиль** records a separate replay of that single algorithm,
+with the selected case's exact settings. Set `ASYNC_PROFILER_HOME` before launching
+the application. HTML flamegraphs are interactive and sandboxed; HTML and JFR can
+be downloaded. Imported cases require an uploaded dataset with matching SHA256
+hashes and scenario digest. External model paths and prior-file algorithms use the
+CLI; the browser workspace supports bundled models.
+
+One experiment or profile job runs at a time. Cancel waits for its subprocesses
+to stop before allowing another job. Keep the machine idle for timing comparisons.
+Uploads and artifacts live in a temporary workspace until the server stops; save
+reports and profiles before exiting. Exported reports preserve the original CLI
+JSON, including temporary dataset paths. Exported CLI configurations instead use
+relative dataset-directory placeholders: edit those paths before running them.
+
+## Simulator metrics
 
 The UI separates cumulative admissions from active occupancy, pods from shards,
 and GPU-pod subsets from all pods. A unit may contain multiple resources, so a unit
 latency is not a per-pod latency. Rejected creates and deletion no-ops are counted.
 When FitCount is selected, pod admission differences use that lane as baseline.
+
+A trace ending with removals leaves zero active occupancy. Cumulative admissions,
+removals and latency remain visible. If replay fails, the UI retains metrics and
+read-only inspection of the failure-time state; an event may have partly completed
+across lanes. Reset before continuing.
 
 All 20 dimensions are available, including nonprod/hardware dimensions and physical
 disk extents, spindles and IOPS. Aggregate host projections and device dimensions
@@ -205,8 +242,8 @@ and charting dependencies without improving this local browser workflow.
   model and an open-ended event list. Unit members colocate and delete atomically.
 - Manual topology edits restart playback. Appended requests preserve resource IDs
   and the explicit frozen catalogue; replay rebuilds the state at the same cursor.
-- Adding an algorithm creates a fresh engine and replays the same prefix with its
-  seed and the common catalogue. No copying or migration of placements.
+- Adding, editing or removing an algorithm resets every lane to step zero with
+  fresh engines. The scenario and common catalogue stay unchanged.
 - Show cumulative admissions separately from active occupancy, pod/shard/GPU
   counts, creation/removal latency, planner calls and all resource dimensions.
   Initial capacity comes from the engine, including disk projections. Device
