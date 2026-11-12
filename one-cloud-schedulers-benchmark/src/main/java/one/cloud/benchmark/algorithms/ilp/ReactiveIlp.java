@@ -1,8 +1,6 @@
 package one.cloud.benchmark.algorithms.ilp;
 
 import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -12,15 +10,11 @@ import one.cloud.benchmark.algorithms.AlgorithmDefinition;
 import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.algorithms.AlgorithmRegistry.Parameter;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
-import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
-import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
-import one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType;
 import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Assignment;
-import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import org.ojalgo.optimisation.Expression;
@@ -28,19 +22,18 @@ import org.ojalgo.optimisation.ExpressionsBasedModel;
 import org.ojalgo.optimisation.Optimisation;
 import org.ojalgo.optimisation.integer.IntegerStrategy;
 
+import static one.cloud.benchmark.algorithms.ilp.RelocationCandidates.DESTINATION_LIMIT;
+import static one.cloud.benchmark.algorithms.ilp.RelocationCandidates.NUMA_LIMIT;
+import static one.cloud.benchmark.algorithms.ilp.RelocationCandidates.SOURCE_LIMIT;
+import static one.cloud.benchmark.algorithms.ilp.RelocationCandidates.VICTIM_LIMIT;
+
 public final class ReactiveIlp extends SchedulingAlgorithm {
     public static final int DEFAULT_MAX_MOVES = 2;
     public static final int DEFAULT_TIMEOUT_MS = 200;
-    private static final int SOURCE_LIMIT = 6;
-    private static final int VICTIM_LIMIT = 24;
-    private static final int DESTINATION_LIMIT = 8;
-    private static final int NUMA_LIMIT = 2;
     private static final int SOLVE_LIMIT_PER_SOURCE = 3;
-    private static final int CPU = ResourceType.VCORES_VALUE;
-    private static final int RAM = ResourceType.MEM_MIB_VALUE;
 
     private final Engine engine;
-    private final ClusterSpec model;
+    private final RelocationCandidates candidates;
     private final GeometricBestFit greedy;
     private final int maxMoves, timeoutMs;
     private long fallbacks, solves, rescued, movedUnits, rejectedPlans, solveNanos, repairNanos, repairPlannerCalls;
@@ -66,7 +59,7 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
             throw new IllegalArgumentException("Reactive ILP requires 1..2 moves and a positive time budget");
         }
         engine = placementEngine;
-        model = context.model();
+        candidates = new RelocationCandidates(engine);
         greedy = new GeometricBestFit(context, seed);
         this.maxMoves = maxMoves;
         this.timeoutMs = timeoutMs;
@@ -93,15 +86,15 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
     }
 
     private boolean tryRepair(Request request, long deadline) throws Exception {
-        final var hosts = rankedHosts();
-        final var victimsByHost = victims(request);
+        final var hosts = candidates.rankedHosts();
+        final var victimsByHost = candidates.victims(request, null);
         int sources = 0;
         for (final int host : hosts) {
             if (System.nanoTime() >= deadline || sources == SOURCE_LIMIT) {
                 break;
             }
             final var victims = victimsByHost.get(host);
-            if (victims == null || !eligible(request, host)) {
+            if (victims == null || !candidates.eligible(request, host)) {
                 continue;
             }
             sources++;
@@ -110,80 +103,6 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
             }
         }
         return false;
-    }
-
-    private List<Integer> rankedHosts() {
-        final var hosts = new ArrayList<Integer>();
-        final var freeCpu = new double[model.hostCount + 1];
-        final var freeRam = new double[freeCpu.length];
-        for (int host = 1; host <= model.hostCount; host++) {
-            if ((model.rules.flags[model.constraints[host]] & 1) == 0) {
-                hosts.add(host);
-                freeCpu[host] = model.dimensionCount >= CPU ? engine.available(host, CPU) : 0;
-                freeRam[host] = model.dimensionCount >= RAM ? engine.available(host, RAM) : 0;
-            }
-        }
-        hosts.sort(Comparator.<Integer>comparingDouble(host -> freeCpu[host])
-                .thenComparingDouble(host -> freeRam[host]).reversed().thenComparingInt(Integer::intValue));
-        return hosts;
-    }
-
-    private Map<Integer, List<Request>> victims(Request incoming) {
-        final var requiredResources = new HashSet<Integer>();
-        final var requiredGroups = new HashSet<Integer>();
-        for (int member = 0; member < incoming.size(); member++) {
-            final int profile = model.constraints[incoming.resource(member)];
-            for (int link = model.rules.linkOffset[profile]; link < model.rules.linkOffset[profile + 1]; link++) {
-                final var required = model.rules.linkKind[link] == Relation.COLOCATE_VALUE
-                        ? requiredResources : requiredGroups;
-                required.add(model.rules.linkTarget[link]);
-            }
-        }
-        final var byHost = new LinkedHashMap<Integer, List<Request>>();
-        for (int resource = model.hostCount + 1; resource < model.alloc.length; resource++) {
-            final int profile = model.constraints[resource];
-            if (model.rules.kind[profile] != Kind.POD_VALUE || model.rules.pinnedHost[profile] != 0
-                    || model.rules.linkOffset[profile] != model.rules.linkOffset[profile + 1]
-                    || model.rules.diskOffset[profile] != model.rules.diskOffset[profile + 1]
-                    || requiredResources.contains(resource) || requiredGroups.contains(model.rules.group[profile])) {
-                continue;
-            }
-            final var current = engine.placement(resource);
-            if (current == null) {
-                continue;
-            }
-            final var candidates = byHost.computeIfAbsent(current.host(), ignored -> new ArrayList<>());
-            final var request = engine.committedRequest(resource);
-            if (candidates.size() < VICTIM_LIMIT && request.size() == 1 && !usesGpu(resource)
-                    && engine.canRelocate(request)) {
-                candidates.add(request);
-            }
-        }
-        byHost.values().removeIf(List::isEmpty);
-        return byHost;
-    }
-
-    private boolean usesGpu(int resource) {
-        final int allocation = model.alloc[resource];
-        for (int index = model.allocations.offset[allocation]; index < model.allocations.offset[allocation + 1]; index++) {
-            final int type = model.allocations.type[index];
-            if ((type == ResourceType.NVIDIA_GPUS_VALUE || type == ResourceType.INTEL_GPUS_VALUE)
-                    && model.allocations.amount[index] > 0) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean eligible(Request request, int host) {
-        for (int member = 0; member < request.size(); member++) {
-            final int profile = model.constraints[request.resource(member)];
-            final int pinned = model.rules.pinnedHost[profile];
-            if (pinned != 0 && pinned != host || !model.candidates.allows(model.rules.candidates[profile], host)) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private boolean repair(Request incoming, int source, List<Request> victims, List<Integer> hosts, long deadline)
@@ -202,19 +121,15 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
             public void schedule(Request request) {
                 if (request == incoming) {
                     final var options = new ArrayList<Choice>();
-                    addChoices(options, request, source, false, planner);
+                    for (final var plans : RelocationCandidates.plans(request, source, planner)) {
+                        options.add(new Choice(plans, false));
+                    }
                     choices.add(options);
                 } else if (!choices.getFirst().isEmpty() && System.nanoTime() < deadline) {
                     final var options = new ArrayList<Choice>();
                     options.add(new Choice(new Assignment[]{engine.placement(request.resource(0))}, false));
-                    int destinations = 0;
-                    for (final int host : hosts) {
-                        if (host != source && eligible(request, host)) {
-                            addChoices(options, request, host, true, planner);
-                            if (++destinations == DESTINATION_LIMIT) {
-                                break;
-                            }
-                        }
+                    for (final var plans : candidates.destinations(request, source, hosts, planner)) {
+                        options.add(new Choice(plans, true));
                     }
                     choices.add(options);
                 }
@@ -226,19 +141,6 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
             return false;
         }
         return solve(preview, requests, choices, deadline);
-    }
-
-    private static void addChoices(List<Choice> options, Request request, int host, boolean move, GreedyPlanner planner) {
-        int added = 0;
-        for (final int numa : planner.numaNodes(host)) {
-            final var plans = planner.plan(request, host, numa);
-            if (plans != null) {
-                options.add(new Choice(plans, move));
-                if (++added == NUMA_LIMIT) {
-                    break;
-                }
-            }
-        }
     }
 
     private boolean solve(Engine preview, List<Request> requests, List<List<Choice>> groups, long deadline)

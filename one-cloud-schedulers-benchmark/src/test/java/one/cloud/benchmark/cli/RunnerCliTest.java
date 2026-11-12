@@ -87,6 +87,38 @@ class RunnerCliTest {
     }
 
     @Test
+    void proactiveIlpMovesAnActivePodAfterSuccessfulCreateAndMakesRoomForTheNextRequest() throws Exception {
+        writeTrace(temporary, new Record[]{
+                alloc(1, new int[]{1, 2}, 8, 8), alloc(2, new int[]{1, 2}, 10, 2),
+                alloc(3, new int[]{1}, 5), alloc(4, new int[]{1, 2}, 1, 1), alloc(5, new int[]{1, 2}, 4, 4),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 2), resource(5, 5, 2)},
+                3, 4, 5, -5, -4, -3);
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
+                "--algorithm", "geometric-best-fit"), errors.toString(StandardCharsets.UTF_8));
+        final var greedy = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(2, greedy.getAsJsonObject("creates").get("admitted_units").getAsInt());
+
+        output.reset();
+        assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(), "--algorithm", "proactive-ilp",
+                "--param", "every=2", "--param", "probeCpu=4", "--param", "probeRamMiB=4",
+                "--param", "timeoutMs=5000"), errors.toString(StandardCharsets.UTF_8));
+        final var proactive = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(3, proactive.getAsJsonObject("creates").get("admitted_units").getAsInt());
+        assertEquals(3, proactive.getAsJsonObject("deletes").get("committed_units").getAsInt());
+        assertEquals(2, proactive.get("peak_used_hosts").getAsInt());
+        final var counters = proactive.getAsJsonObject("algorithm_counters");
+        assertEquals(1, counters.get("proactive_runs").getAsInt());
+        assertEquals(1, counters.get("proactive_moved_units").getAsInt());
+        assertEquals(1, counters.get("proactive_probe_gain").getAsInt());
+        assertTrue(proactive.getAsJsonObject("algorithm_runtime_parameters").get("solver")
+                .getAsString().toLowerCase(java.util.Locale.ROOT).contains("cbc"));
+    }
+
+    @Test
     void reactiveIlpReportsAdmissionsRelocationsAndOccupiedHosts() throws Exception {
         writeTrace(temporary, new Record[]{
                 alloc(1, new int[]{1, 2}, 8, 8), alloc(2, new int[]{1, 2}, 7, 10),
