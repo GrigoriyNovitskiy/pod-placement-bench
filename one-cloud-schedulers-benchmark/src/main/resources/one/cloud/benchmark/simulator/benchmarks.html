@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="ru">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Placement Lab — бенчмарки</title>
+        <link rel="stylesheet" href="/benchmarks.css" />
+        <script type="module" src="/benchmarks.js"></script>
+    </head>
+    <body>
+        <header>
+            <div class="brand">
+                <span class="logo">p</span>
+                Placement Lab
+            </div>
+            <nav>
+                <a href="/">Симулятор</a>
+                <a class="active" href="/benchmarks">Бенчмарки</a>
+            </nav>
+            <div class="header-end">
+                <span class="badge">JVM BENCHMARK</span>
+                <button id="import-button" class="small">↑ Открыть отчёт JSON</button>
+            </div>
+        </header>
+        <section class="heading">
+            <div>
+                <div class="eyebrow">Experiment workspace</div>
+                <h1>Сравнить алгоритмы.</h1>
+                <p>Одинаковый поток запросов. Скорость, размещаемость и состояние ресурсов.</p>
+            </div>
+            <div class="actions">
+                <button id="export-config">↓ Конфигурация CLI</button>
+                <button id="export-report" disabled>↓ Отчёт JSON</button>
+                <button id="launch-benchmark" class="primary">Запустить бенчмарк →</button>
+            </div>
+        </section>
+        <div class="workspace">
+            <aside>
+                <section class="panel">
+                    <div class="panel-title">
+                        <h2>Эксперимент</h2>
+                        <span class="badge">JVM</span>
+                    </div>
+                    <div class="panel-body">
+                        <div id="input-datasets"><p class="muted">Датасеты ещё не загружены.</p></div>
+                        <button id="upload-dataset" class="dashed">+ Загрузить датасет</button>
+                        <div class="pair">
+                            <div class="field">
+                                <label for="gpu">GPU-модель</label>
+                                <select id="gpu">
+                                    <option>devices20</option>
+                                    <option>aggregate</option>
+                                </select>
+                            </div>
+                            <div class="field">
+                                <label for="bulk">Размер окна</label>
+                                <input id="bulk" type="number" value="1" min="1" max="100" />
+                            </div>
+                        </div>
+                        <div class="pair">
+                            <div class="field">
+                                <label for="forks">JVM forks</label>
+                                <input id="forks" type="number" value="1" min="1" max="20" />
+                            </div>
+                            <div class="field">
+                                <label for="warmups">Прогревов</label>
+                                <input id="warmups" type="number" value="1" min="0" max="100" />
+                            </div>
+                        </div>
+                        <div class="pair">
+                            <div class="field">
+                                <label for="measurements">Повторов</label>
+                                <input id="measurements" type="number" value="2" min="1" max="100" />
+                            </div>
+                            <div class="field">
+                                <label for="timeout">Таймаут, с</label>
+                                <input id="timeout" type="number" value="600" min="1" max="86400" />
+                            </div>
+                        </div>
+                        <details>
+                            <summary class="muted">Каталог и диагностика</summary>
+                            <div class="pair" style="margin-top: 12px">
+                                <div class="field">
+                                    <label for="catalogue">Каталог, 0 = весь</label>
+                                    <input id="catalogue" type="number" min="0" value="32" />
+                                </div>
+                                <div class="field">
+                                    <label for="operations">Событий, 0 = все</label>
+                                    <input id="operations" type="number" min="0" value="0" />
+                                </div>
+                            </div>
+                            <div class="pair">
+                                <div class="field">
+                                    <label for="probe-cap">Probe cap</label>
+                                    <input id="probe-cap" type="number" min="1" value="3" />
+                                </div>
+                                <div class="field">
+                                    <label for="inflation">Доп. заявок</label>
+                                    <input id="inflation" type="number" min="0" value="200" />
+                                </div>
+                            </div>
+                            <div class="field">
+                                <label for="inflation-seed">Seed доп. нагрузки</label>
+                                <input id="inflation-seed" type="number" value="42" />
+                            </div>
+                        </details>
+                    </div>
+                    <p class="aside-note">
+                        Каждый выбранный датасет будет прогнан всеми алгоритмами. Результаты прошлых запусков
+                        можно скачать в JSON.
+                    </p>
+                </section>
+                <section class="panel">
+                    <div class="panel-title">
+                        <h2>Алгоритмы</h2>
+                        <span id="algorithm-count" class="muted"></span>
+                    </div>
+                    <div class="panel-body">
+                        <div id="config-algorithms"></div>
+                        <button id="add-algorithm" class="dashed">+ Добавить алгоритм</button>
+                    </div>
+                    <p class="aside-note">
+                        У каждого алгоритма свои параметры и seed. При запуске — независимый Engine и пустой
+                        кэш.
+                    </p>
+                </section>
+            </aside>
+            <main class="content">
+                <div id="error" class="error-banner" role="alert" hidden></div>
+                <section id="job-panel" class="panel" hidden>
+                    <div class="panel-title">
+                        <h2 id="job-title"></h2>
+                        <button id="cancel-job" class="small">Отменить</button>
+                    </div>
+                    <div class="panel-body">
+                        <p id="job-summary"></p>
+                        <details>
+                            <summary class="muted">Подробности запуска</summary>
+                            <pre id="job-progress" class="job-log"></pre>
+                        </details>
+                    </div>
+                </section>
+                <section id="empty-state" class="panel empty-state">
+                    <div class="eyebrow">Изолированные JVM · существующий CLI</div>
+                    <h2>Начните с датасета.</h2>
+                    <p>
+                        Загрузите snapshot.pb и operations.pb, выберите алгоритмы
+                        <br />
+                        и запустите сравнение. Или откройте сохранённый JSON-отчёт.
+                    </p>
+                    <button id="empty-upload" class="primary">Загрузить датасет</button>
+                </section>
+                <div id="report-content" hidden>
+                    <div class="report-controls">
+                        <div class="control-group">
+                            <span id="report-status" class="badge">ЗАВЕРШЁН</span>
+                            <select id="dataset" aria-label="Датасет и сценарий"></select>
+                        </div>
+                        <div class="control-group">
+                            <label for="baseline">Baseline</label>
+                            <select id="baseline"></select>
+                        </div>
+                    </div>
+                    <div class="kpis" id="kpis"></div>
+                    <section class="charts">
+                        <div class="panel chart">
+                            <h2>Цена ускорения</h2>
+                            <small>Левее — быстрее. Выше — больше принятых заявок.</small>
+                            <div id="tradeoff"></div>
+                        </div>
+                        <div class="panel chart">
+                            <h2>Активные заявки по ходу сценария</h2>
+                            <small>Сохранённые контрольные точки; удаления разрешены.</small>
+                            <div id="timeline"></div>
+                        </div>
+                    </section>
+                    <section class="panel table-panel">
+                        <div class="panel-title">
+                            <h2>Сравнение алгоритмов</h2>
+                            <small id="samples"></small>
+                        </div>
+                        <div class="table-wrap"><table id="results"></table></div>
+                        <div class="table-note">
+                            Размещено — атомарные заявки: pod и связанные shards могут входить в одну заявку.
+                            Время — на окно планирования; p50 / p95 / p99 — медианы перцентилей отдельных
+                            повторов. Ошибки запуска не считаются отказами размещения.
+                        </div>
+                    </section>
+                    <section class="panel">
+                        <div class="tabs">
+                            <button class="active" data-tab="resources">Ресурсы</button>
+                            <button data-tab="headroom">Запас размещения</button>
+                            <button data-tab="method">Условия замера</button>
+                        </div>
+                        <div id="resources-view">
+                            <div class="checkpoint">
+                                <div>
+                                    <h2>Утилизация на одном и том же шаге</h2>
+                                    <small>Занято или недоступно / ёмкость. GPU включены.</small>
+                                </div>
+                                <select id="checkpoint" aria-label="Контрольная точка"></select>
+                            </div>
+                            <div class="table-wrap"><table id="resources"></table></div>
+                            <p class="note">
+                                Все ресурсные измерения показаны отдельно. Host media и device ledger — разные
+                                представления; их нельзя складывать. Пустая ёмкость — «н/д».
+                            </p>
+                        </div>
+                        <div id="headroom-view" hidden></div>
+                        <div id="method-view" class="panel-body" hidden></div>
+                    </section>
+                    <footer class="provenance" id="provenance"></footer>
+                </div>
+            </main>
+        </div>
+
+        <div id="toast" role="status" hidden></div>
+        <input id="report-file" type="file" accept=".json,application/json" hidden />
+        <dialog id="detail">
+            <div class="panel-title">
+                <div>
+                    <div class="eyebrow" id="detail-eyebrow"></div>
+                    <h2 id="detail-title"></h2>
+                </div>
+                <button class="dialog-close" data-close="detail" aria-label="Закрыть">×</button>
+            </div>
+            <div class="tabs">
+                <button id="detail-metrics-tab">Результат и повторы</button>
+                <button id="detail-profile-tab">Профиль алгоритма</button>
+            </div>
+            <div id="detail-body" class="dialog-content"></div>
+        </dialog>
+        <dialog id="upload-dialog">
+            <form id="upload-form">
+                <div class="panel-title">
+                    <h2>Загрузить датасет</h2>
+                    <button
+                        type="button"
+                        class="dialog-close"
+                        data-close="upload-dialog"
+                        aria-label="Закрыть"
+                    >
+                        ×
+                    </button>
+                </div>
+                <div class="dialog-content">
+                    <div class="field">
+                        <label for="upload-name">Название</label>
+                        <input id="upload-name" value="dataset-01" required maxlength="80" />
+                    </div>
+                    <div class="field">
+                        <label for="snapshot-file">snapshot.pb</label>
+                        <input id="snapshot-file" type="file" accept=".pb" required />
+                    </div>
+                    <div class="field">
+                        <label for="operations-file">operations.pb</label>
+                        <input id="operations-file" type="file" accept=".pb" required />
+                    </div>
+                    <p class="muted">
+                        До 128 МиБ на пару. Файлы хранятся временно до остановки приложения; состояние
+                        симулятора не меняется.
+                    </p>
+                    <p id="upload-error" class="bad"></p>
+                    <button id="upload-submit" class="primary" type="submit" style="margin-top: 18px">
+                        Загрузить
+                    </button>
+                </div>
+            </form>
+        </dialog>
+        <dialog id="algorithm-dialog">
+            <div class="panel-title">
+                <h2>Добавить алгоритм</h2>
+                <button class="dialog-close" data-close="algorithm-dialog" aria-label="Закрыть">×</button>
+            </div>
+            <div class="dialog-content">
+                <p class="muted">
+                    Список и аргументы из реестра Java. Добавление меняет только план будущего запуска.
+                </p>
+                <div class="field" style="margin-top: 18px">
+                    <label for="algorithm-choice">Алгоритм</label>
+                    <select id="algorithm-choice"></select>
+                </div>
+                <button id="confirm-add" class="primary">Добавить в эксперимент</button>
+            </div>
+        </dialog>
+    </body>
+</html>

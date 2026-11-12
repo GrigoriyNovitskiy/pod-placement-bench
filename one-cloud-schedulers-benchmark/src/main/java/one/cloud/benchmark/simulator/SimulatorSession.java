@@ -92,11 +92,6 @@ public final class SimulatorSession implements AutoCloseable {
         } catch (Exception | Error failure) {
             failed = true;
             error = failure.getMessage();
-            try {
-                closeLanes();
-            } catch (Exception closing) {
-                failure.addSuppressed(closing);
-            }
             throw failure;
         }
     }
@@ -108,17 +103,17 @@ public final class SimulatorSession implements AutoCloseable {
     }
 
     public void reset() throws Exception {
-        rebuild(settings, 0);
+        rebuild(settings);
     }
 
     public void setAlgorithms(List<AlgorithmRegistry.Settings> settings) throws Exception {
         if (settings == null || settings.isEmpty() || settings.size() > 6) {
             throw new IllegalArgumentException("Choose between one and six algorithms");
         }
-        rebuild(List.copyOf(settings), cursor);
+        rebuild(List.copyOf(settings));
     }
 
-    private void rebuild(List<AlgorithmRegistry.Settings> selected, int position) throws Exception {
+    private void rebuild(List<AlgorithmRegistry.Settings> selected) throws Exception {
         if (closed) {
             throw new IllegalStateException("Session is closed");
         }
@@ -136,13 +131,6 @@ public final class SimulatorSession implements AutoCloseable {
             for (final var setting : selected) {
                 replacements.add(new Lane(setting));
             }
-            for (int index = 0; index < position; index++) {
-                final int event = input.events()[index];
-                final int unit = Math.abs(event) - 1;
-                for (final var lane : replacements) {
-                    lane.process(index, unit, input.requests()[unit], event > 0);
-                }
-            }
         } catch (Exception | Error failure) {
             try {
                 closeLanes(replacements);
@@ -154,7 +142,7 @@ public final class SimulatorSession implements AutoCloseable {
         closeLanes();
         lanes.addAll(replacements);
         settings = selected;
-        cursor = position;
+        cursor = 0;
         failed = false;
         error = null;
     }
@@ -226,7 +214,9 @@ public final class SimulatorSession implements AutoCloseable {
     }
 
     public JsonObject inspect(int lane, int resource) {
-        checkOpen();
+        if (closed) {
+            throw new IllegalStateException("Session is closed");
+        }
         if (lane < 0 || lane >= lanes.size() || resource <= 0 || resource >= input.model().alloc.length) {
             throw new IllegalArgumentException("Unknown lane or resource");
         }

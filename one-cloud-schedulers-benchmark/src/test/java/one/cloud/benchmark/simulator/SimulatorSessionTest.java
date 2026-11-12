@@ -99,24 +99,59 @@ class SimulatorSessionTest {
         try (var session = new SimulatorSession(input, List.of(AlgorithmRegistry.defaults("fitcount")))) {
             assertThrows(IndexOutOfBoundsException.class, session::stepRemaining);
             assertEquals(1, session.cursor());
-            assertTrue(session.state(0, 10, 0, 0).get("failed").getAsBoolean());
+            final var failedState = session.state(0, 10, 0, 0);
+            assertTrue(failedState.get("failed").getAsBoolean());
+            assertEquals(1, failedState.getAsJsonArray("lanes").size());
+            assertEquals(1, failedState.getAsJsonArray("lanes").get(0).getAsJsonObject()
+                    .getAsJsonObject("counters").get("placedUnits").getAsInt());
+            assertEquals(1, failedState.getAsJsonArray("lanes").get(0).getAsJsonObject()
+                    .getAsJsonObject("latency").getAsJsonObject("create").get("count").getAsInt());
+            assertTrue(session.inspect(0, original.requests()[0].resource(0)).has("assignment"));
+            assertThrows(IllegalStateException.class, session::probes);
             assertThrows(IllegalStateException.class, session::stepRemaining);
             assertEquals(1, session.cursor());
+            session.reset();
+            assertFalse(session.state(0, 10, 0, 0).get("failed").getAsBoolean());
+            assertEquals(0, session.state(0, 10, 0, 0).getAsJsonArray("lanes").get(0).getAsJsonObject()
+                    .getAsJsonObject("counters").get("placedUnits").getAsInt());
+            session.step(1);
+            assertEquals(1, session.state(0, 10, 0, 0).getAsJsonArray("lanes").get(0).getAsJsonObject()
+                    .getAsJsonObject("counters").get("placedUnits").getAsInt());
         }
     }
 
     @Test
-    void addingAlgorithmReplaysTheSamePrefix() throws Exception {
+    void addingEditingAndRemovingAlgorithmsResetPlaybackAndMetrics() throws Exception {
         try (var session = new SimulatorSession(input(), List.of(AlgorithmRegistry.defaults("fitcount")))) {
-            session.step(2);
-            session.setAlgorithms(List.of(AlgorithmRegistry.defaults("fitcount"),
-                    AlgorithmRegistry.defaults("geometric-best-fit")));
-            assertEquals(2, session.cursor());
-            final var lanes = session.state(0, 10, 0, 10).getAsJsonArray("lanes");
-            assertEquals(2, lanes.size());
-            assertEquals(lanes.get(0).getAsJsonObject().get("counters"),
-                    lanes.get(1).getAsJsonObject().get("counters"));
-            assertEquals(1, session.inspect(0, 2).getAsJsonObject("assignment").get("host").getAsInt());
+            final var pristine = session.state(0, 10, 0, 10);
+            final var changed = new AlgorithmRegistry.Settings("fitcount", Map.of("seed", new JsonPrimitive(7)));
+            final var bestFit = AlgorithmRegistry.defaults("geometric-best-fit");
+            for (final var selected : List.of(
+                    List.of(AlgorithmRegistry.defaults("fitcount"), bestFit),
+                    List.of(changed, bestFit), List.of(changed))) {
+                session.step(2);
+                session.setAlgorithms(selected);
+                assertEquals(0, session.cursor());
+                final var state = session.state(0, 10, 0, 10);
+                assertEquals(pristine.get("digest"), state.get("digest"));
+                assertEquals(pristine.get("catalogue"), state.get("catalogue"));
+                final var lanes = state.getAsJsonArray("lanes");
+                assertEquals(selected.size(), lanes.size());
+                for (final var value : lanes) {
+                    final var lane = value.getAsJsonObject();
+                    for (final var counter : lane.getAsJsonObject("counters").entrySet()) {
+                        assertEquals(0, counter.getValue().getAsLong(), counter.getKey());
+                    }
+                    assertEquals(0, lane.getAsJsonObject("latency").getAsJsonObject("create").get("count").getAsInt());
+                    assertEquals(0, lane.getAsJsonObject("latency").getAsJsonObject("remove").get("count").getAsInt());
+                    assertEquals(0, lane.getAsJsonObject("lastEvent").size());
+                    assertEquals(pristine.getAsJsonArray("lanes").get(0).getAsJsonObject().get("resources"),
+                            lane.get("resources"));
+                }
+                assertFalse(session.inspect(0, 2).has("assignment"));
+            }
+            session.step(1);
+            assertEquals(1, counters(session).get("placedUnits").getAsInt());
         }
     }
 

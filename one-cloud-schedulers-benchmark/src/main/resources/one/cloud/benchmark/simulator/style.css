@@ -74,6 +74,9 @@ h3 { font-size: 12px; }
 p + p { margin-top: 10px; }
 [hidden] { display: none !important; }
 .mono { font-family: ui-monospace, SFMono-Regular, monospace; }
+.mode-tabs { display: flex; gap: 20px; margin-right: auto; }
+.mode-tabs a { color: var(--muted); text-decoration: none; padding: 10px 0; }
+.mode-tabs a[aria-current] { color: var(--text); border-bottom: 2px solid var(--accent); }
 .hint { font-size: 10px; color: var(--muted); line-height: 1.7; }
 .subtle { font-size: 10px; color: var(--muted); }
 .topbar, .toolbar, .comparison-toolbar, .map-toolbar, .panel-heading,

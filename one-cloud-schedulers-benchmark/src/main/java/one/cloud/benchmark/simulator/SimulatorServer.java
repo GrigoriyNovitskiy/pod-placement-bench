@@ -46,9 +46,12 @@ public final class SimulatorServer implements AutoCloseable {
     private static final long MAX_DATASET_BYTES = 128L * 1024 * 1024;
     private static final Gson JSON = new GsonBuilder().serializeNulls().setStrictness(Strictness.STRICT).create();
     private static final Map<String, String> ASSETS = Map.of(
-            "/", "index.html", "/app.js", "app.js", "/views.js", "views.js", "/style.css", "style.css");
+            "/", "index.html", "/app.js", "app.js", "/views.js", "views.js", "/style.css", "style.css",
+            "/benchmarks", "benchmarks.html", "/benchmarks.js", "benchmarks.js",
+            "/benchmark-views.js", "benchmark-views.js", "/benchmarks.css", "benchmarks.css");
     private final HttpServer server;
     private final AsyncProfiler profiler;
+    private final BenchmarkWorkspace experiments;
     private final ExecutorService owner = Executors.newSingleThreadExecutor();
     private final ExecutorService benchmarkWorker = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().daemon().name("placement-benchmark").factory());
@@ -81,6 +84,7 @@ public final class SimulatorServer implements AutoCloseable {
             throw new IllegalArgumentException("Port must be between 0 and 65535");
         }
         server = HttpServer.create(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), port), 16);
+        experiments = new BenchmarkWorkspace(profiler);
         server.setExecutor(owner);
         server.createContext("/", this::handle);
     }
@@ -149,6 +153,10 @@ public final class SimulatorServer implements AutoCloseable {
                     asset(exchange, ASSETS.get(path));
                     return;
                 }
+                if (path.equals("/api/experiments") || path.startsWith("/api/experiments/")) {
+                    experiment(exchange, path);
+                    return;
+                }
                 if (!path.startsWith("/api/")) {
                     throw new RequestFailure(404, "Not found");
                 }
@@ -177,6 +185,76 @@ public final class SimulatorServer implements AutoCloseable {
                 json(exchange, 500, Map.of("error", message(failure)));
             }
         }
+    }
+
+    private void experiment(HttpExchange exchange, String path) throws Exception {
+        final boolean mutation = switch (path) {
+            case "/api/experiments", "/api/experiments/job", "/api/experiments/artifact" -> false;
+            case "/api/experiments/datasets", "/api/experiments/run", "/api/experiments/profile",
+                    "/api/experiments/cancel" -> true;
+            default -> throw new RequestFailure(404, "Unknown benchmark endpoint");
+        };
+        requireMethod(exchange, mutation ? "POST" : "GET");
+        if (mutation) {
+            validateMutation(exchange);
+        }
+        final var query = query(exchange.getRequestURI());
+        if (path.equals("/api/experiments/artifact")) {
+            experimentArtifact(exchange, query.get("id"));
+            return;
+        }
+        try {
+            final Object result = switch (path) {
+                case "/api/experiments" -> experiments.state();
+                case "/api/experiments/job" -> experiments.status(query.get("id"));
+                case "/api/experiments/datasets" -> experimentDataset(exchange);
+                case "/api/experiments/run" -> experiments.startBenchmark(body(exchange));
+                case "/api/experiments/profile" -> experiments.startProfile(body(exchange));
+                case "/api/experiments/cancel" -> {
+                    final var request = body(exchange);
+                    yield experiments.cancel(profileOption(request, "id", ""));
+                }
+                default -> throw new RequestFailure(404, "Unknown benchmark endpoint");
+            };
+            json(exchange, path.equals("/api/experiments/run") || path.equals("/api/experiments/profile")
+                    ? 202 : 200, result);
+        } catch (IllegalStateException busy) {
+            throw new RequestFailure(409, message(busy));
+        }
+    }
+
+    private JsonObject experimentDataset(HttpExchange exchange) throws Exception {
+        final var directory = experiments.newDatasetDirectory();
+        boolean registered = false;
+        try {
+            readDataset(exchange, directory);
+            final var suppliedName = exchange.getRequestHeaders().getFirst("X-Dataset-Name");
+            final var result = experiments.registerDataset(directory,
+                    suppliedName == null ? "dataset" : URLDecoder.decode(suppliedName, StandardCharsets.UTF_8));
+            registered = true;
+            return result;
+        } finally {
+            if (!registered) {
+                Files.deleteIfExists(directory.resolve("snapshot.pb"));
+                Files.deleteIfExists(directory.resolve("operations.pb"));
+                Files.deleteIfExists(directory);
+            }
+        }
+    }
+
+    private void experimentArtifact(HttpExchange exchange, String id) throws Exception {
+        final var artifact = experiments.artifact(id);
+        final var headers = exchange.getResponseHeaders();
+        final boolean html = artifact.format().equals("html");
+        headers.set("Content-Type", html ? "text/html; charset=utf-8" : "application/octet-stream");
+        headers.set("Content-Disposition", (html ? "inline" : "attachment")
+                + "; filename=\"" + artifact.filename() + "\"");
+        headers.set("Cache-Control", "no-store");
+        headers.set("X-Content-Type-Options", "nosniff");
+        headers.set("Content-Security-Policy", "default-src 'none'; script-src 'unsafe-inline'; "
+                + "style-src 'unsafe-inline'; img-src data:; sandbox allow-scripts allow-modals; frame-ancestors 'self'");
+        exchange.sendResponseHeaders(200, Files.size(artifact.path()));
+        Files.copy(artifact.path(), exchange.getResponseBody());
     }
 
     private Object dispatch(HttpExchange exchange, String path) throws Exception {
@@ -430,30 +508,11 @@ public final class SimulatorServer implements AutoCloseable {
     }
 
     private JsonObject dataset(HttpExchange exchange, Map<String, String> query) throws Exception {
-        final long snapshotLength;
-        try {
-            snapshotLength = Long.parseLong(exchange.getRequestHeaders().getFirst("X-Snapshot-Length"));
-        } catch (RuntimeException failure) {
-            throw new IllegalArgumentException("X-Snapshot-Length is required and must be a positive byte count");
-        }
-        if (snapshotLength <= 0 || snapshotLength >= MAX_DATASET_BYTES) {
-            throw new IllegalArgumentException("Snapshot size is outside the upload limit");
-        }
-        checkLength(exchange, MAX_DATASET_BYTES);
         final Path directory = Files.createTempDirectory("placement-simulator-");
         final Path snapshot = directory.resolve("snapshot.pb");
         final Path operations = directory.resolve("operations.pb");
         try {
-            try (final var output = Files.newOutputStream(snapshot)) {
-                copy(exchange.getRequestBody(), output, snapshotLength, true);
-            }
-            final long operationBytes;
-            try (final var output = Files.newOutputStream(operations)) {
-                operationBytes = copy(exchange.getRequestBody(), output, MAX_DATASET_BYTES - snapshotLength, false);
-            }
-            if (operationBytes == 0) {
-                throw new IllegalArgumentException("Both snapshot.pb and operations.pb are required");
-            }
+            readDataset(exchange, directory);
             final Scenario scenario;
             try {
                 scenario = Scenario.from(Dataset.load(snapshot, operations));
@@ -466,6 +525,31 @@ public final class SimulatorServer implements AutoCloseable {
             Files.deleteIfExists(snapshot);
             Files.deleteIfExists(operations);
             Files.deleteIfExists(directory);
+        }
+    }
+
+    private static void readDataset(HttpExchange exchange, Path directory) throws IOException {
+        final long snapshotLength;
+        try {
+            snapshotLength = Long.parseLong(exchange.getRequestHeaders().getFirst("X-Snapshot-Length"));
+        } catch (RuntimeException failure) {
+            throw new IllegalArgumentException("X-Snapshot-Length is required and must be a positive byte count");
+        }
+        if (snapshotLength <= 0 || snapshotLength >= MAX_DATASET_BYTES) {
+            throw new IllegalArgumentException("Snapshot size is outside the upload limit");
+        }
+        checkLength(exchange, MAX_DATASET_BYTES);
+        final Path snapshot = directory.resolve("snapshot.pb");
+        final Path operations = directory.resolve("operations.pb");
+        try (final var output = Files.newOutputStream(snapshot)) {
+            copy(exchange.getRequestBody(), output, snapshotLength, true);
+        }
+        final long operationBytes;
+        try (final var output = Files.newOutputStream(operations)) {
+            operationBytes = copy(exchange.getRequestBody(), output, MAX_DATASET_BYTES - snapshotLength, false);
+        }
+        if (operationBytes == 0) {
+            throw new IllegalArgumentException("Both snapshot.pb and operations.pb are required");
         }
     }
 
@@ -684,6 +768,7 @@ public final class SimulatorServer implements AutoCloseable {
     @Override
     public void close() throws Exception {
         server.stop(0);
+        experiments.close();
         benchmarkWorker.shutdownNow();
         try {
             owner.submit(() -> {

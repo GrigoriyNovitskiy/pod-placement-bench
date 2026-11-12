@@ -147,6 +147,7 @@ function clearPresentation() {
     view.positions.clear();
     view.pan = { x: 0, y: 0 };
     $("inspector").textContent = "Выберите хост или pod на карте.";
+    $("inspector-kind").textContent = "объект";
     $("probes").textContent = "Показатели ещё не рассчитаны. Нажмите «Рассчитать сейчас».";
 }
 
@@ -390,7 +391,7 @@ function algorithmDialog(laneIndex = null) {
         + `${escapeHtml(algorithm.name)}${algorithm.requiresPrior ? " — нужен prior, доступен через CLI" : ""}`
         + "</option>").join("");
     openDialog(existing ? "Параметры алгоритма" : "Добавить алгоритм к сравнению",
-        "Алгоритм получит независимое облако и воспроизведёт общий поток до текущего шага.",
+        "Изменение алгоритмов или параметров сбросит сценарий и метрики на шаг 0.",
         `<div class="form-grid"><div class="field wide"><label for="algorithm-select">Java-алгоритм</label>
             <select id="algorithm-select" name="algorithm">${options}</select></div></div>
         <div id="algorithm-parameters"></div>
@@ -414,9 +415,8 @@ function algorithmDialog(laneIndex = null) {
             if (laneIndex == null) selected.push(setting);
             else selected[laneIndex] = setting;
             await post("/api/algorithms", { algorithms: selected });
-            inspectorRequest++;
-            view.selection = view.detail = null;
-            view.event = null;
+            clearPresentation();
+            notify("");
             await refresh();
         });
     const render = () => {
@@ -643,8 +643,7 @@ function bindControls() {
     $("reset").onclick = () => { pause(); perform(async () => {
         await post("/api/reset", {});
         notify("");
-        view.event = null;
-        view.eventOffset = 0;
+        clearPresentation();
         await refresh();
     }); };
     $("probe").onclick = () => { pause(); perform(async () => {
@@ -698,8 +697,8 @@ function bindControls() {
                 pause();
                 perform(async () => {
                     await post("/api/algorithms", { algorithms: settings().filter((_, index) => index !== lane) });
-                    inspectorRequest++;
-                    view.selection = view.detail = null;
+                    clearPresentation();
+                    notify("");
                     await refresh();
                 });
                 break;
