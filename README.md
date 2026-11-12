@@ -13,7 +13,7 @@ FitCount, Geometric Best Fit, FGD, Kubernetes scoring, CatBoost и RandomN.
 диагностика. Для контролируемых сравнений есть команда `benchmark` с прогревом
 и отдельными JVM: [запуск и метрики](one-cloud-schedulers-benchmark/docs/runner/README.md).
 
-RL-политика встроена в `rl-top1` и `rl-topn-fitcount`: [запуск и обучение](one-cloud-schedulers-benchmark/docs/algorithms/rl.md).
+RL-политика встроена в `rl-top1` и `rl-topn-fitcount`: [запуск и описание](one-cloud-schedulers-benchmark/docs/algorithms/rl.md).
 Готовые алгоритмы работают на Java без Python и внешнего файла модели.
 
 ## Собрать один раз
