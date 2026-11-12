@@ -10,6 +10,7 @@ import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.fitcount.RandomNFitCount;
 import one.cloud.benchmark.algorithms.fitcount.Rollout;
 import one.cloud.benchmark.algorithms.geometric.GeometricBestFit;
+import one.cloud.benchmark.algorithms.ilp.ProactiveIlp;
 import one.cloud.benchmark.algorithms.ilp.ReactiveIlp;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
@@ -28,6 +29,7 @@ final class Algorithms {
         register(Rollout.definition());
         register(GeometricBestFit.definition());
         register(ReactiveIlp.definition());
+        register(ProactiveIlp.definition());
         register(Fgd.definition());
         register(Fgd.cpuRamDefinition());
         register(KubernetesResourceScoring.definition(Strategy.LEAST_ALLOCATED));

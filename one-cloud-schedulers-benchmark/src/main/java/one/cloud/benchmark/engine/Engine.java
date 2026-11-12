@@ -6,6 +6,7 @@ import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.TreeSet;
+import java.util.function.Predicate;
 
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
@@ -261,6 +262,18 @@ public final class Engine implements SchedulingContext {
         if (index == null || index < nextRequest) {
             throw new IllegalArgumentException("Request is not pending");
         }
+        return commitRelocations(moves, request, plans, index, null);
+    }
+
+    /** Checks ordered moves and evaluates a read-only predicate on a disposable state before committing. */
+    public boolean relocate(List<Relocation> moves, Predicate<SchedulingContext> improves) throws Exception {
+        checkMutable();
+        Objects.requireNonNull(improves);
+        return !moves.isEmpty() && commitRelocations(moves, null, null, -1, improves);
+    }
+
+    private boolean commitRelocations(List<Relocation> moves, Request request, Assignment[] plans,
+            int index, Predicate<SchedulingContext> improves) throws Exception {
         final var preview = new Engine(this, model);
         final var placement = new CheckedPlacement(preview);
         final var previous = new Unit[moves.size()];
@@ -280,16 +293,18 @@ public final class Engine implements SchedulingContext {
             }
             replacements[move] = preview.units[resource];
         }
-        if (!placement.tryPlace(request, plans)) {
+        if (request != null && !placement.tryPlace(request, plans) || improves != null && !improves.test(preview)) {
             return false;
         }
         for (int move = 0; move < previous.length; move++) {
             detach(previous[move]);
             attach(replacements[move]);
         }
-        final var admitted = preview.units[request.resource(0)];
-        attach(admitted);
-        nextRequest = index + 1;
+        final var admitted = request == null ? null : preview.units[request.resource(0)];
+        if (admitted != null) {
+            attach(admitted);
+            nextRequest = index + 1;
+        }
         if (previous.length != 0 && relocations == null) {
             relocations = new ArrayList<>();
         }
@@ -300,7 +315,9 @@ public final class Engine implements SchedulingContext {
             notify(previous[move].plans, false);
             notify(replacements[move].plans, true);
         }
-        notify(admitted.plans, true);
+        if (admitted != null) {
+            notify(admitted.plans, true);
+        }
         return true;
     }
 

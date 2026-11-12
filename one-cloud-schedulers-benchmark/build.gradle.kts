@@ -19,10 +19,11 @@ java {
 }
 
 dependencies {
-    api("com.google.protobuf:protobuf-java:3.25.9")
+    api("com.google.protobuf:protobuf-java:4.33.1")
     implementation("ai.catboost:catboost-prediction:1.2.8")
     api("com.google.code.gson:gson:2.13.2")
     implementation("org.ojalgo:ojalgo:56.2.1")
+    implementation("com.google.ortools:ortools-java:9.15.6755")
     testImplementation("org.junit.jupiter:junit-jupiter-api:5.14.3")
     testRuntimeOnly("org.junit.jupiter:junit-jupiter-engine:5.14.3")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.14.3")

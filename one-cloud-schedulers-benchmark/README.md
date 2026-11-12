@@ -2,7 +2,8 @@
 
 This module contains the public protobuf schema, primitive Java model, streaming
 decoder and algorithm API. Runtime dependencies are `protobuf-java`, CatBoost's
-native Java predictor, Gson for the simulator and ojAlgo for reactive ILP.
+native Java predictor, Gson for the simulator, ojAlgo for reactive ILP and
+OR-Tools with CBC for proactive ILP.
 Private control-state extraction stays in `one-cloud-master`.
 
 The `one.cloud.benchmark` namespace separates the model, engine and run tooling.
@@ -75,6 +76,8 @@ Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`
 `cpu-ram-fgd` and four [Kubernetes resource scoring strategies](docs/algorithms/kubernetes-resource-scoring.md).
 [`reactive-ilp`](docs/algorithms/reactive-ilp.md) searches for a limited set of
 relocations after a decline from `geometric-best-fit`.
+[`proactive-ilp`](docs/algorithms/proactive-ilp.md) periodically moves pods to
+increase room for a reference workload.
 The five [CatBoost and RandomN variants](docs/algorithms/catboost.md) use packaged
 models and the same runner: `catboost-top1`, `catboost-topn-fitcount`,
 `catboost-rollout-top1`, `catboost-rollout-topn-fitcount`, and `randomn-fitcount`.
