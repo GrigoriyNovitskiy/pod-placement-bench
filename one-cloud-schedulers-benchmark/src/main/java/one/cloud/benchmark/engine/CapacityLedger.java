@@ -464,9 +464,17 @@ final class CapacityLedger {
     }
 
     List<Engine.ScalarDebit> cpuRamDebits(Assignment[] plans) {
+        final var rows = tryCpuRamDebits(plans);
+        if (rows == null) {
+            throw new IllegalArgumentException("Cannot project an infeasible plan");
+        }
+        return rows;
+    }
+
+    List<Engine.ScalarDebit> tryCpuRamDebits(Assignment[] plans) {
         final var debit = prepare(plans);
         if (debit == null) {
-            throw new IllegalArgumentException("Cannot project an infeasible plan");
+            return null;
         }
         final var rows = new ArrayList<Engine.ScalarDebit>();
         for (int index = 0; index < debit.size; index++) {

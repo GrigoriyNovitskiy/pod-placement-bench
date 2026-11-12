@@ -36,6 +36,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EngineTest {
     @Test
+    void optionalScalarProjectionDistinguishesPhysicalRejectionFromMalformedPlans() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1}, 1), alloc(2, new int[]{1}, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 1, 2)));
+        assertEquals(List.of(new Engine.ScalarDebit(1, 1, 1)),
+                state.tryCpuRamDebits(new Assignment[]{plan(3, 1)}));
+        assertNull(state.tryCpuRamDebits(new Assignment[]{plan(2, 1)}));
+        assertThrows(IllegalArgumentException.class,
+                () -> state.tryCpuRamDebits(new Assignment[]{plan(3, 2)}));
+        assertEquals(1, state.available(1, 1));
+        assertEquals(0, state.revision());
+    }
+
+    @Test
     void gpuFloatExportDemandConsumesExactSharesAndReleasesWithoutDrift() throws Exception {
         final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
                 alloc(1, new int[]{11}, 1), alloc(2, new int[]{11}, (double) .2f),

@@ -252,6 +252,12 @@ public final class Engine implements SchedulingContext {
         return capacity.cpuRamDebits(plans);
     }
 
+    /** CPU and RAM rows, or null when the complete plan exceeds physical capacity. */
+    public List<ScalarDebit> tryCpuRamDebits(Assignment[] plans) {
+        checkThread();
+        return capacity.tryCpuRamDebits(plans);
+    }
+
     /**
      * Validates the ordered relocations and admission in isolation, then commits the complete change.
      * A rejected plan leaves the scheduling window and live state untouched.
