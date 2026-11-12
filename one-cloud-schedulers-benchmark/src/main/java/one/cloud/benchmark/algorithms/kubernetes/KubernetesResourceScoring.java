@@ -39,9 +39,13 @@ public final class KubernetesResourceScoring extends SchedulingAlgorithm {
 
     public KubernetesResourceScoring(SchedulingContext context, long seed, Strategy strategy) {
         super(context, seed);
-        Objects.requireNonNull(strategy);
         planner = new GreedyPlanner(context);
-        scorer = planner.resourceFamilyScorer((remaining, total) -> resourceScore(strategy, remaining, total),
+        scorer = scorer(planner, strategy);
+    }
+
+    public static ToDoubleFunction<Assignment[]> scorer(GreedyPlanner planner, Strategy strategy) {
+        Objects.requireNonNull(strategy);
+        return planner.resourceFamilyScorer((remaining, total) -> resourceScore(strategy, remaining, total),
                 (before, after) -> combine(strategy, before, after), strategy == Strategy.BALANCED_ALLOCATION);
     }
 

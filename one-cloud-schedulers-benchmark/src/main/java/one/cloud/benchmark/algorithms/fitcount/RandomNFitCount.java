@@ -1,8 +1,5 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
-import java.util.Arrays;
-import java.util.SplittableRandom;
-
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
 import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
@@ -34,24 +31,9 @@ public final class RandomNFitCount extends SchedulingAlgorithm {
         if (n <= 0) {
             throw new IllegalArgumentException("Shortlist size must be positive");
         }
-        final var shortlistRandom = new SplittableRandom(seed ^ 0x6A09E667F3BCC909L);
+        final var sampler = new CandidateSampler(seed);
         delegate = new FitCount(context, seed, catalogue, maxFitCount, maxCachedShapes,
-                (request, plans, count) -> {
-                    final int[] indices = new int[count];
-                    Arrays.setAll(indices, index -> index);
-                    if (count <= n) {
-                        return indices;
-                    }
-                    final int[] selected = new int[n];
-                    int remaining = count;
-                    for (int index = 0; index < n; index++) {
-                        final int chosen = shortlistRandom.nextInt(remaining);
-                        selected[index] = indices[chosen];
-                        indices[chosen] = indices[--remaining];
-                    }
-                    Arrays.sort(selected);
-                    return selected;
-                });
+                (request, plans, count) -> sampler.sample(count, n));
     }
 
     @Override

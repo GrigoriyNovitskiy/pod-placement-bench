@@ -7,6 +7,9 @@ import one.cloud.benchmark.algorithms.catboost.CatBoostTopNFitCount;
 import one.cloud.benchmark.algorithms.fgd.Fgd;
 import one.cloud.benchmark.algorithms.fitcount.BulkFitCount;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
+import one.cloud.benchmark.algorithms.fitcount.MaskedFitCount;
+import one.cloud.benchmark.algorithms.fitcount.PortfolioFitCount;
+import one.cloud.benchmark.algorithms.fitcount.WindowPortfolioFitCount;
 import one.cloud.benchmark.algorithms.fitcount.RandomNFitCount;
 import one.cloud.benchmark.algorithms.fitcount.Rollout;
 import one.cloud.benchmark.algorithms.fitcount.SmtFitCount;
@@ -16,6 +19,8 @@ import one.cloud.benchmark.algorithms.ilp.ReactiveIlp;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
 import one.cloud.benchmark.algorithms.rl.RlTop1;
+import one.cloud.benchmark.algorithms.rl.RlPoolFitCount;
+import one.cloud.benchmark.algorithms.rl.RlMaskedFitCount;
 import one.cloud.benchmark.algorithms.rl.RlTopNFitCount;
 
 import static one.cloud.benchmark.algorithms.AlgorithmRegistry.register;
@@ -45,6 +50,11 @@ final class Algorithms {
         register(CatBoostRolloutTop1.definition());
         register(CatBoostRolloutTopNFitCount.definition());
         register(RandomNFitCount.definition());
+        register(PortfolioFitCount.definition());
+        register(MaskedFitCount.definition());
+        register(WindowPortfolioFitCount.definition());
+        register(RlPoolFitCount.definition());
+        register(RlMaskedFitCount.definition());
         register(RlTop1.definition());
         register(RlTopNFitCount.definition());
     }

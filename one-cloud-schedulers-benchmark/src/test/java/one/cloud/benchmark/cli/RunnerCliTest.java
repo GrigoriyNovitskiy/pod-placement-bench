@@ -76,6 +76,10 @@ class RunnerCliTest {
         final var list = output.toString(StandardCharsets.UTF_8);
         assertTrue(list.contains("fitcount"));
         assertTrue(list.contains("smt"));
+        for (final var id : List.of("portfolio-fitcount", "masked-fitcount", "window-portfolio-fitcount",
+                "rl-pool-fitcount", "rl-masked-fitcount")) {
+            assertTrue(list.contains(id));
+        }
         assertTrue(list.contains("catboost-top1"));
         assertTrue(list.contains("seed"));
         assertTrue(list.contains("--param"));
@@ -450,7 +454,8 @@ class RunnerCliTest {
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2), resource(5, 3, 2)};
         writeTrace(temporary, rows, 2, 3, 4, 5, -5, -4, -3, -2);
         for (final var algorithm : new String[]{"fitcount", "mean-fitcount", "geometric-best-fit", "cpu-ram-fgd",
-                "k8s-least-allocated", "k8s-most-allocated", "k8s-requested-to-capacity-ratio", "k8s-balanced-allocation"}) {
+                "k8s-least-allocated", "k8s-most-allocated", "k8s-requested-to-capacity-ratio", "k8s-balanced-allocation",
+                "portfolio-fitcount", "masked-fitcount", "window-portfolio-fitcount", "rl-pool-fitcount", "rl-masked-fitcount"}) {
             final var output = new ByteArrayOutputStream();
             final var errors = new ByteArrayOutputStream();
             assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(), "--algorithm", algorithm));

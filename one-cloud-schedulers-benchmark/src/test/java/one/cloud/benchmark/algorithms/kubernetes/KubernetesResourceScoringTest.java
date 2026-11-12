@@ -8,6 +8,9 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
 import one.cloud.benchmark.engine.Engine;
+import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.engine.SchedulingAlgorithm;
+import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
@@ -15,9 +18,39 @@ import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class KubernetesResourceScoringTest {
+    @Test
+    void sharedLeastAllocatedScorerPreservesIntegerRoundingAndPlanGeometry() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1, 2, 3}, 100, 100, 10),
+                alloc(2, new int[]{1, 2, 3}, 100, 100, 40), alloc(3, new int[]{3}, 8),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2)));
+        final var planner = new GreedyPlanner(state);
+        final var scorer = KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
+        state.schedule(new SchedulingAlgorithm(state, 44) {
+            @Override
+            public void schedule(Request request) {
+                for (int host = 1; host <= 2; host++) {
+                    final var plans = planner.plan(request, host, 0);
+                    final Assignment before = plans[0].copy();
+                    assertEquals(host == 1 ? 73 : 93, scorer.applyAsDouble(plans));
+                    assertEquals(before.resource(), plans[0].resource());
+                    assertEquals(before.host(), plans[0].host());
+                    assertEquals(before.numa(), plans[0].numa());
+                    assertArrayEquals(before.diskOffsets(), plans[0].diskOffsets());
+                    assertArrayEquals(before.devices(), plans[0].devices());
+                    assertArrayEquals(before.gpus(), plans[0].gpus());
+                }
+                assertEquals(0, state.revision());
+            }
+        }, new Request(3));
+    }
+
     @Test
     void spreadingPackingAndUtilizationCurveSelectDifferentHosts() throws Exception {
         final var model = model(

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.SplittableRandom;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -15,7 +16,10 @@ import one.cloud.benchmark.dataset.Dataset;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
 
+import one.cloud.benchmark.algorithms.fitcount.CandidateSampler;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
+import one.cloud.benchmark.algorithms.fitcount.PortfolioFitCount;
+import one.cloud.benchmark.algorithms.fitcount.RandomNFitCount;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
@@ -36,8 +40,93 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CatBoostTest {
+    @Test
+    void sharedSamplerPreservesBaselineStreamAndSamplesOnlyItsComplement() {
+        final var sampler = new CandidateSampler(44);
+        final var reference = new SplittableRandom(44 ^ 0x6A09E667F3BCC909L);
+        final var auxiliary = new SplittableRandom(991);
+        for (final int count : new int[]{1, 20, 21, 28, 65, 21, 28, 65}) {
+            final int[] pool = new int[count];
+            Arrays.setAll(pool, index -> index);
+            final int[] expected = new int[Math.min(count, 20)];
+            int remaining = count;
+            if (count <= 20) {
+                System.arraycopy(pool, 0, expected, 0, count);
+            } else {
+                for (int index = 0; index < expected.length; index++) {
+                    final int chosen = reference.nextInt(remaining);
+                    expected[index] = pool[chosen];
+                    pool[chosen] = pool[--remaining];
+                }
+                Arrays.sort(expected);
+            }
+            final var selected = sampler.sample(count, 20);
+            assertArrayEquals(expected, selected);
+            final var complement = sampler.sampleRemaining(8, auxiliary);
+            assertEquals(Math.min(8, count - selected.length), complement.length);
+            for (int index = 0; index < complement.length; index++) {
+                assertTrue(Arrays.binarySearch(selected, complement[index]) < 0);
+                assertTrue(index == 0 || complement[index - 1] < complement[index]);
+            }
+        }
+    }
+
+    @Test
+    void randomOnlyPortfolioMatchesRandomNThroughChangingCandidateCountsAndDeletes() throws Exception {
+        final var records = new ArrayList<Record>();
+        records.add(alloc(1, new int[]{1}, 8));
+        records.add(alloc(2, new int[]{1}, 1));
+        records.add(alloc(3, new int[]{1}, 100));
+        records.add(rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)));
+        records.add(rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setCandidates(2)));
+        records.add(rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setCandidates(3)));
+        records.add(rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)));
+        records.add(rules(Constraints.newBuilder().setId(5).setKind(Kind.POD).setPinnedHost(1)));
+        records.add(one.cloud.benchmark.testsupport.TestModel.candidates(2, java.util.stream.IntStream.rangeClosed(1, 21).toArray()));
+        records.add(one.cloud.benchmark.testsupport.TestModel.candidates(3, java.util.stream.IntStream.rangeClosed(1, 28).toArray()));
+        for (int host = 1; host <= 65; host++) {
+            records.add(resource(host, 1, 1));
+        }
+        for (int index = 0; index < 4; index++) {
+            records.add(resource(66 + index, 2, 2 + index));
+        }
+        records.add(resource(70, 3, 4));
+        final var model = model(records.toArray(Record[]::new));
+        final var requests = new Request[]{new Request(66), new Request(67), new Request(68),
+                new Request(69), new Request(70)};
+        final var baseline = new Engine(model);
+        final var state = new Engine(model);
+        try (final var random = new RandomNFitCount(baseline, 44, requests, 20, 10, 1);
+                final var portfolio = new PortfolioFitCount(state, 44, requests, 20, 0, 0, 10, 1)) {
+            for (int pass = 0; pass < 3; pass++) {
+                for (final var request : requests) {
+                    baseline.schedule(random, request);
+                    state.schedule(portfolio, request);
+                    final var expected = baseline.placement(request.resource(0));
+                    final var actual = state.placement(request.resource(0));
+                    if (expected == null) {
+                        assertNull(actual);
+                    } else {
+                        assertEquals(expected.host(), actual.host());
+                        assertEquals(expected.numa(), actual.numa());
+                    }
+                }
+                for (final var request : requests) {
+                    if (baseline.placement(request.resource(0)) != null) {
+                        baseline.remove(request);
+                        state.remove(request);
+                    }
+                }
+            }
+            assertEquals(random.plannerCalls(), portfolio.plannerCalls());
+            assertEquals(0, portfolio.counters().get("fragmentation_scores"));
+            assertEquals(0, portfolio.counters().get("least_scores"));
+        }
+    }
+
     @Test
     void diskExtentFeaturesUseFixedTrainingUnit(@TempDir Path directory) throws Exception {
         final float[][] actual = new float[2][];

@@ -9,13 +9,13 @@ The [RL guide](rl.md) describes the packaged PPO policy, `rl-top1` and
 `rl-topn-fitcount`, their parameters and training split.
 The implemented modes also have explicit maintenance/reproduction contracts:
 [CatBoost](catboost.md#implementation-and-reproduction-contract) and
-[RL](rl.md#тз-поведения-и-воспроизведения). These are separate from the planned hybrids.
+[RL](rl.md#тз-поведения-и-воспроизведения). These also apply alongside the hybrid contracts below.
 
-The [three planned classical hybrids](hybrids.md) are independent of ML:
+The [three classical hybrids](hybrids.md) are independent of ML:
 portfolio shortlist, static-mask scarcity, and a bounded announced-window policy
 portfolio. [Two additional ML hybrids](ml-hybrids.md) reuse the packaged PPO with
 bounded proposal scoring, with physical or masked refinement. Their starting
-profile is cap 10 / cache rows 64 / seed 44. All five are planned CLI modes;
+profile is cap 10 / cache rows 64 / seed 44. All five are implemented CLI modes;
 resource tradeoffs are evaluated per scenario.
 
 Numerical settings in the original plans below are
@@ -82,7 +82,7 @@ FitCount's existing default cap 10. Compare cap 64/128/512 separately: copy cap
 changes scores; cache-row eviction should change time only. Record every limit,
 ordering rule, dataset/scenario digest, backend version and parameter digest.
 
-The five planned hybrids use cap **10**, cache rows **64**, and seed **44**,
+The five hybrids use cap **10**, cache rows **64**, and seed **44**,
 as defined in the [classical](hybrids.md#границы-и-общий-профиль) and
 [ML](ml-hybrids.md) specifications.
 
@@ -142,6 +142,11 @@ modes):
 | `catboost-top1` / `catboost-topn-fitcount` | `CatBoostTop1` / `CatBoostTopNFitCount`, imitation model |
 | `catboost-rollout-top1` / `catboost-rollout-topn-fitcount` | `CatBoostRolloutTop1` / `CatBoostRolloutTopNFitCount`, trained rollout model |
 | `randomn-fitcount` | `RandomNFitCount`, seeded shortlist then FitCount |
+| `portfolio-fitcount` | `PortfolioFitCount`, random + fragmentation + LeastAllocated shortlist |
+| `masked-fitcount` | `MaskedFitCount`, static-mask scarcity over shared physical rows |
+| `window-portfolio-fitcount` | `WindowPortfolioFitCount`, full-window strict admission-set-superset guard |
+| `rl-top1` / `rl-topn-fitcount` | `RlTop1` / `RlTopNFitCount`, packaged/custom PPO actor |
+| `rl-pool-fitcount` / `rl-masked-fitcount` | `RlPoolFitCount` / `RlMaskedFitCount`, bounded sparse PPO proposals |
 
 The runner defaults to B=1 and accepts explicit versioned service-burst windows. `GreedyPlanner` is a
 geometry helper; the runner and engine are infrastructure. The optional local DP hybrid and the CP-SAT/DCM/min-cost-flow backends remain

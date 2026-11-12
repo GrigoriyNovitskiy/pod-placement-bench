@@ -1,6 +1,6 @@
 # Дополнительное ТЗ: два ML-гибрида
 
-Статус: planned. Это **дополнение к трём алгоритмам без ML**, а не замена
+Статус: implemented. Это **дополнение к трём алгоритмам без ML**, а не замена
 одного из них. База: `2051ebb`. Прочитать [основное ТЗ](hybrids.md),
 [правила репозитория](../../../AGENTS.md), [RL-контракт](rl.md).
 
@@ -29,6 +29,7 @@ RandomN sampler, lifecycle и оценка ресурсов заданы в
 | `poolSize` | 64 | 1..4096; не меньше topN |
 | `extraCandidates` | 8 | 0..1000; не больше poolSize−topN |
 | `model` | пустая строка | встроенная PPO; иначе JSON path как в текущем RL |
+| `uniformExtras` (advanced control) | false | true: uniform extras из того же Q вместо PPO |
 
 Переиспользовать `PolicyNetwork`, `RlFeatures` и формат модели без изменения
 feature schema. Для базового checkpoint на `2051ebb` SHA256 `policy.json`:
@@ -213,3 +214,15 @@ ML-only winner frequency, mask-enabled coverage, каждый logical resource v
 отказы и p50/p95/p99. Не приписывать inference fast path или physical fallback
 новому ML/mask качеству. Перед завершением — minimizer, независимый review,
 исправление P0–P2, git diff --check и module build, как в основном ТЗ.
+
+## Запуск
+
+```sh
+./placement-bench run --dataset /path/to/sc --algorithm rl-pool-fitcount --catalogue-limit 32
+./placement-bench run --dataset /path/to/sc --algorithm rl-masked-fitcount --catalogue-limit 32
+./placement-bench run --dataset /path/to/sc --algorithm rl-pool-fitcount --param uniformExtras=true --catalogue-limit 32
+```
+
+`uniformExtras=true` оставляет те же gates и потоки R/Q, использует отдельный
+control RNG и не выполняет inference. Модель всё равно загружается и валидируется.
+Это контроль для сравнения, а не learned policy.

@@ -34,21 +34,55 @@ public final class RlFeatures {
         final var decision = shared.prepare(request, plans, count);
         final var result = new float[decision.rows()][];
         final var gpuByHost = new float[context.model().hostCount + 1][];
-        final int gpuOffset = CandidateFeatures.names().size();
         for (int first = 0; first < result.length;) {
             final int rows = Math.min(CandidateFeatures.Decision.MAX_BATCH_ROWS, result.length - first);
             final var batch = decision.extract(first, rows);
             for (int row = 0; row < rows; row++) {
                 final int index = first + row;
                 final int host = plans[index / request.size()][index % request.size()].host();
-                if (gpuByHost[host] == null) {
-                    gpuByHost[host] = gpuGeometry(host);
-                }
-                result[index] = Arrays.copyOf(batch[row], NAMES.size());
-                System.arraycopy(gpuByHost[host], 0, result[index], gpuOffset, 4);
+                result[index] = appendGpu(batch[row], host, gpuByHost);
             }
             first += rows;
         }
+        return result;
+    }
+
+    public float[][] extract(Request request, Assignment[][] plans, int count, int[] indices) {
+        if (count < 0 || count > plans.length) {
+            throw new IllegalArgumentException("Candidate count is out of bounds");
+        }
+        int previous = -1;
+        for (final int index : indices) {
+            if (index <= previous || index >= count) {
+                throw new IllegalArgumentException("Sparse indices must be increasing and within candidate bounds");
+            }
+            previous = index;
+        }
+        final var decision = shared.prepare(request, plans, count);
+        final var result = new float[Math.multiplyExact(indices.length, request.size())][];
+        final var gpuByHost = new float[context.model().hostCount + 1][];
+        int target = 0;
+        for (final int candidate : indices) {
+            final int firstRow = Math.multiplyExact(candidate, request.size());
+            for (int member = 0; member < request.size();) {
+                final int rows = Math.min(CandidateFeatures.Decision.MAX_BATCH_ROWS, request.size() - member);
+                final var batch = decision.extract(firstRow + member, rows);
+                for (int row = 0; row < rows; row++) {
+                    final int host = plans[candidate][member + row].host();
+                    result[target++] = appendGpu(batch[row], host, gpuByHost);
+                }
+                member += rows;
+            }
+        }
+        return result;
+    }
+
+    private float[] appendGpu(float[] row, int host, float[][] gpuByHost) {
+        if (gpuByHost[host] == null) {
+            gpuByHost[host] = gpuGeometry(host);
+        }
+        final var result = Arrays.copyOf(row, NAMES.size());
+        System.arraycopy(gpuByHost[host], 0, result, CandidateFeatures.names().size(), 4);
         return result;
     }
 

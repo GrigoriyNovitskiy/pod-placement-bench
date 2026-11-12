@@ -1,6 +1,6 @@
 # ТЗ: три гибридных алгоритма без ML
 
-Статус: согласованный план реализации, алгоритмы пока не зарегистрированы.
+Статус: реализовано; алгоритмы зарегистрированы в общей CLI и simulator registry.
 База исходников: `2051ebb`. Прочитать [правила репозитория](../../../AGENTS.md),
 [общий контракт](README.md#shared-contract), [FitCount](../../FITCOUNT.md)
 и соседние реализации. Это **основная тройка без ML**. Два дополнительных
@@ -252,7 +252,7 @@ cache eviction и deletes. Это важнее оптимизации новой
 Не включать одновременно best-fit tie-break или inverse-supply weighted sum.
 
 Счётчики: `logical_profiles`, `physical_families`, `distinct_masks`,
-`empty_mask_profiles`, `masked_row_rebuilds`, `masked_host_deltas`,
+`empty_mask_profiles`, `masked_row_rebuilds`, `masked_host_deltas`, `masked_family_refreshes`,
 `masked_membership_checks`, `masked_workspace_payload_peak_bytes`,
 `masked_profile_limit`, `masked_workspace_limit`; общие candidate counters.
 
@@ -500,3 +500,15 @@ Minimizer по полному diff, затем независимый Java/perfo
 Первые два классических алгоритма не используют trials; третий работает только
 с уже объявленным окном. Полноценный pivot/beam/stochastic rollout отложен.
 ML не является зависимостью ни одного из этих трёх алгоритмов.
+
+## Запуск
+
+```sh
+./placement-bench run --dataset /path/to/sc --algorithm portfolio-fitcount --catalogue-limit 32
+./placement-bench run --dataset /path/to/sc --algorithm masked-fitcount --catalogue-limit 32
+./placement-bench run --dataset /path/to/sc --algorithm window-portfolio-fitcount --bulk-size 100 --catalogue-limit 32
+./placement-bench run --dataset /path/to/sc --algorithm window-portfolio-fitcount --bulk-size 100 --param comparePortfolio=false --catalogue-limit 32
+```
+
+Последняя команда — window-seeded incumbent control. B=1 использует persistent
+Random20, а B>1 заново создаёт trial policy для каждого объявленного окна.

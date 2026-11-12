@@ -1,10 +1,15 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.SplittableRandom;
+import java.util.TreeSet;
 
 import org.junit.jupiter.api.Test;
 
+import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
+import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
@@ -20,6 +25,7 @@ import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
+import static one.cloud.benchmark.testsupport.TestModel.candidates;
 import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
@@ -30,6 +36,281 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class FitCountTest {
+    @Test
+    void allHostMaskedProfilesMatchRandomNThroughEvictionAndRemoval() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 12),
+                alloc(3, new int[]{1}, 14), alloc(4, new int[]{1}, 3),
+                alloc(5, new int[]{1}, 4), alloc(6, new int[]{1}, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 1),
+                resource(4, 4, 2), resource(5, 5, 2), resource(6, 6, 2));
+        final var units = new Request[]{new Request(4), new Request(5), new Request(6)};
+        final var baseline = new Engine(model);
+        final var masked = new Engine(model);
+        try (final var random = new RandomNFitCount(baseline, 44, units, 2, 10, 1);
+                final var scheduler = new MaskedFitCount(masked, 44, units, 2, 10, 1)) {
+            for (int pass = 0; pass < 4; pass++) {
+                for (final var request : units) {
+                    baseline.schedule(random, request);
+                    masked.schedule(scheduler, request);
+                    assertEquals(baseline.placement(request.resource(0)).host(),
+                            masked.placement(request.resource(0)).host());
+                }
+                for (final var request : units) {
+                    baseline.remove(request);
+                    masked.remove(request);
+                }
+            }
+            assertEquals(random.plannerCalls(), scheduler.plannerCalls());
+            assertEquals("true", scheduler.parameters().get("masked_enabled"));
+            assertEquals(12L, scheduler.counters().get("selector_calls"));
+        }
+    }
+
+    @Test
+    void maskedProfilesCanonicalizeIntersectionsAndPinsWithoutMergingGeometry() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 8), alloc(2, new int[]{1}, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setCandidates(2)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setCandidates(3).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.POD).setCandidates(4)),
+                candidates(2, 1), candidates(3, 1, 2), candidates(4, 2),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2),
+                resource(4, 2, 3), resource(5, 2, 4), resource(6, 2, 5));
+        final var catalogue = new Request[]{new Request(3), new Request(4), new Request(5),
+                new Request(3), new Request(3, 6), new Request(3, 4), new Request(6)};
+        final var state = new Engine(model);
+        final var compiler = new MaskedFitCountOrder.Compiler(model, 20);
+        final var cache = new FitCountCache(state, new GreedyPlanner(state), catalogue, 10, 1, compiler);
+        final var order = compiler.finish(cache, 10);
+        cache.attach(order);
+        assertEquals(4L, order.counters().get("logical_profiles"));
+        assertEquals(2L, order.counters().get("physical_families"));
+        assertEquals(3L, order.counters().get("distinct_masks"));
+        assertEquals(1L, order.counters().get("empty_mask_profiles"));
+        order.beginOrder();
+        final var empty = order.next();
+        assertEquals(0L, order.total(empty));
+        assertEquals(4, empty.ordinal);
+        final var frequent = order.next();
+        assertEquals(0, frequent.ordinal);
+        assertEquals(4, frequent.frequency);
+        assertEquals(4L, order.total(frequent));
+    }
+
+    @Test
+    void maskedFamilyRefreshesOncePerGenerationAcrossRepeatedProfileReads() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 8), alloc(2, new int[]{1}, 2),
+                alloc(3, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setPinnedHost(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2),
+                resource(4, 2, 3), resource(5, 3, 4));
+        final var catalogue = new Request[]{new Request(3), new Request(4)};
+        final var state = new Engine(model);
+        final var planner = new GreedyPlanner(state);
+        final var compiler = new MaskedFitCountOrder.Compiler(model, 20);
+        final var cache = new FitCountCache(state, planner, catalogue, 10, 1, compiler);
+        final var order = compiler.finish(cache, 10);
+        cache.attach(order);
+        final var demand = new Request(5);
+        try (final var scheduler = new FitCount(state, 44, catalogue, 10, 1)) {
+            for (int step = 0; step < 3; step++) {
+                if (step == 1) {
+                    state.schedule(scheduler, demand);
+                    cache.changed(state.placement(5).host());
+                } else if (step == 2) {
+                    final int host = state.placement(5).host();
+                    state.remove(demand);
+                    cache.changed(host);
+                }
+                for (int pass = 0; pass < 3; pass++) {
+                    order.beginOrder();
+                    int seen = 0;
+                    for (var profile = order.next(); profile != null; profile = order.next()) {
+                        final int host = profile.ordinal + 1;
+                        final int expected = planner.fitCount(profile.family.request, host, 10);
+                        assertEquals(expected, order.total(profile));
+                        assertEquals(expected, cache.count(profile.family, host));
+                        cache.counts(profile.family);
+                        seen++;
+                    }
+                    assertEquals(2, seen);
+                    assertEquals(step + 1L, order.counters().get("masked_family_refreshes"));
+                }
+            }
+        }
+    }
+
+    @Test
+    void maskedLazyOrderMatchesFreshProjectionAcrossEvictionsAndHostDeltas() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 13), alloc(2, new int[]{1}, 9),
+                alloc(3, new int[]{1}, 2), alloc(4, new int[]{1}, 3), alloc(5, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setPinnedHost(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 4),
+                resource(5, 3, 3), resource(6, 5, 4), resource(7, 4, 2));
+        final var catalogue = new Request[]{new Request(3), new Request(4), new Request(5),
+                new Request(3), new Request(7)};
+        for (final int cacheRows : new int[]{1, 8}) {
+            final var state = new Engine(model);
+            final var planner = new GreedyPlanner(state);
+            final var compiler = new MaskedFitCountOrder.Compiler(model, 20);
+            final var cache = new FitCountCache(state, planner, catalogue, 10, cacheRows, compiler);
+            final var order = compiler.finish(cache, 10);
+            cache.attach(order);
+            final var demand = new Request(6);
+            final var scheduler = new FitCount(state, 44, catalogue, 10, cacheRows);
+            for (int step = 0; step < 5; step++) {
+                if (step > 0) {
+                    if (step % 2 == 1) {
+                        state.schedule(scheduler, demand);
+                        cache.changed(state.placement(6).host());
+                    } else {
+                        final int host = state.placement(6).host();
+                        state.remove(demand);
+                        cache.changed(host);
+                    }
+                }
+                order.beginOrder();
+                double previous = -1;
+                int previousOrdinal = -1;
+                int count = 0;
+                for (var profile = order.next(); profile != null; profile = order.next()) {
+                    long expected = 0;
+                    for (int host = 1; host <= model.hostCount; host++) {
+                        if (order.allows(profile, host)) {
+                            expected += planner.fitCount(profile.family.request, host, 10);
+                        }
+                    }
+                    assertEquals(expected, order.total(profile));
+                    final double weighted = expected / (double) profile.frequency;
+                    assertTrue(weighted > previous || weighted == previous && profile.ordinal > previousOrdinal);
+                    previous = weighted;
+                    previousOrdinal = profile.ordinal;
+                    count++;
+                    assertTrue(cache.cachedShapes() <= cacheRows);
+                }
+                assertEquals(4, count);
+            }
+        }
+    }
+
+    @Test
+    void maskedInterleavedFamiliesRecomputePhysicalLossAfterAnotherFamily() throws Exception {
+        final var model = model(alloc(1, new int[]{1, 2}, 2, 2), alloc(2, new int[]{1, 2}, 3, 2),
+                alloc(3, new int[]{1, 2}, 4, 2), alloc(4, new int[]{1}, 2),
+                alloc(5, new int[]{2}, 2), alloc(6, new int[]{1, 2}, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setCandidates(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                candidates(2, 2, 3), resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 1),
+                resource(4, 4, 2), resource(5, 5, 4), resource(6, 4, 3), resource(7, 6, 4));
+        final var catalogue = new Request[]{new Request(4), new Request(5), new Request(6)};
+        final var probe = new Engine(model);
+        final var compiler = new MaskedFitCountOrder.Compiler(model, 20);
+        final var cache = new FitCountCache(probe, new GreedyPlanner(probe), catalogue, 10, 1, compiler);
+        final var order = compiler.finish(cache, 10);
+        cache.attach(order);
+        order.beginOrder();
+        final var first = order.next();
+        final var middle = order.next();
+        final var last = order.next();
+        assertEquals(0, first.ordinal);
+        assertEquals(1, middle.ordinal);
+        assertEquals(2, last.ordinal);
+        assertEquals(first.family, last.family);
+        for (final int rows : new int[]{1, 8}) {
+            final var state = new Engine(model);
+            try (final var scheduler = new MaskedFitCount(state, 0, catalogue, 20, 10, rows)) {
+                // The middle RAM family ties hosts 2/3; the final CPU profile prefers odd CPU capacity.
+                state.schedule(scheduler, new Request(7));
+                assertEquals(2, state.placement(7).host());
+            }
+        }
+    }
+
+    @Test
+    void maskedZeroSupplyStillPreservesNegativePhysicalLoss() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 7, 2), alloc(2, new int[]{1, 2}, 4, 1),
+                alloc(3, new int[]{1, 2}, 3, 1), alloc(4, new int[]{1, 2}, 2, 1),
+                alloc(5, new int[]{1}, 4), alloc(6, new int[]{2}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 0, 1), resource(3, 2, 2), resource(4, 3, 3),
+                resource(5, 4, 4), resource(6, 5, 4), resource(7, 6, 5));
+        final var state = new Engine(model);
+        final var sample = new Request(5, 6);
+        final var planner = new GreedyPlanner(state);
+        assertEquals(0, planner.fitCount(sample, 1, 10));
+        try (final var scheduler = new MaskedFitCount(state, 0, new Request[]{sample}, 20, 10, 1)) {
+            state.schedule(scheduler, new Request(7));
+            assertEquals(3, state.placement(7).numa());
+            assertEquals(1L, scheduler.counters().get("logical_profiles"));
+        }
+    }
+
+    @Test
+    void maskedProfileLimitFallsBackWithoutTruncatingThePhysicalCatalogue() throws Exception {
+        final var records = new ArrayList<Record>();
+        records.add(alloc(1, new int[]{1}, 10));
+        records.add(rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)));
+        records.add(rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)));
+        records.add(resource(1, 1, 1));
+        final var catalogue = new Request[MaskedFitCountOrder.PROFILE_LIMIT + 1];
+        for (int index = 0; index < catalogue.length; index++) {
+            records.add(alloc(index + 2, new int[]{1}, index + 1));
+            records.add(resource(index + 2, index + 2, 2));
+            catalogue[index] = new Request(index + 2);
+        }
+        final var model = model(records.toArray(Record[]::new));
+        final var state = new Engine(model);
+        final var compiler = new MaskedFitCountOrder.Compiler(model, 20);
+        final var cache = new FitCountCache(state, new GreedyPlanner(state), catalogue, 10, 1, compiler);
+        assertNull(compiler.finish(cache, 10));
+        assertEquals("profile_limit", compiler.disabledReason());
+        assertEquals(catalogue.length, cache.samples().length);
+    }
+
+    @Test
+    void maskedWorkspaceFallbackPreservesTheSuppliedSelectorAndDeclaredWidth() throws Exception {
+        final var model = scalarModel(8, 6);
+        final var state = new Engine(model);
+        final var demand = new Request(3);
+        final int[] calls = {0};
+        try (final var scheduler = new MaskedFitCount(state, 44, new Request[]{demand}, 10, 1,
+                (request, plans, count) -> {
+                    calls[0]++;
+                    return new int[]{count - 1};
+                }, Integer.MAX_VALUE)) {
+            assertEquals("false", scheduler.parameters().get("masked_enabled"));
+            assertEquals("workspace_limit", scheduler.parameters().get("masked_disabled_reason"));
+            state.schedule(scheduler, demand);
+            assertEquals(2, state.placement(3).host());
+            state.remove(demand);
+            state.schedule(scheduler, demand);
+            assertEquals(2, state.placement(3).host());
+            assertEquals(2, calls[0]);
+            assertEquals(1L, scheduler.counters().get("masked_workspace_limit"));
+        }
+        final var tooWide = new Engine(model);
+        try (final var scheduler = new MaskedFitCount(tooWide, 44, new Request[]{demand}, 10, 1,
+                (request, plans, count) -> new int[]{0, 1}, 1)) {
+            assertThrows(IllegalArgumentException.class, () -> tooWide.schedule(scheduler, demand));
+        }
+    }
+
     @Test
     void randomShortlistOfOneCanChooseEitherHostDespiteFitCountPreference() throws Exception {
         final var model = scalarModel(8, 6);
@@ -566,5 +847,223 @@ class FitCountTest {
             records.add(resource(index, index, 2));
         }
         return model(records.toArray(Record[]::new));
+    }
+
+    @Test
+    void enabledPortfolioMatchesIndependentUnionOracleWithoutMutatingAtomicGeometry() throws Exception {
+        final boolean[] overlapWithoutRefill = {false};
+        for (final var mode : ClusterSpec.GpuMode.values()) {
+            final var model = portfolioGeometryModel(mode);
+            for (final int pod : new int[]{17, 21}) {
+                for (final boolean tied : new boolean[]{false, true}) {
+                    final var request = new Request(pod, 18);
+                    final var catalogue = tied ? new Request[0] : new Request[]{new Request(19), new Request(20)};
+                    final var state = new Engine(model);
+                    state.schedule(new SchedulingAlgorithm(state, 44) {
+                        @Override
+                        public void schedule(Request pending) throws Exception {
+                            final var planner = new GreedyPlanner(state);
+                            final var collected = new ArrayList<Assignment[]>();
+                            for (int host = 1; host <= model.hostCount; host++) {
+                                for (final int numa : planner.numaNodes(host)) {
+                                    final var plan = planner.plan(pending, host, numa);
+                                    if (plan != null) {
+                                        collected.add(plan);
+                                    }
+                                }
+                            }
+                            final int count = collected.size();
+                            assertEquals(8, count);
+                            final var plans = collected.toArray(new Assignment[count + 1][]);
+                            final var before = new Assignment[count][];
+                            final var original = new Assignment[count][];
+                            final var fragmentation = model.gpus == null
+                                    ? planner.cpuRamFragmentationScorer(catalogue) : planner.gpuFragmentationScorer(catalogue);
+                            final var least = KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
+                            final double[] fragmentScores = new double[count];
+                            final double[] leastScores = new double[count];
+                            for (int index = 0; index < count; index++) {
+                                original[index] = plans[index].clone();
+                                before[index] = Arrays.stream(plans[index]).map(Assignment::copy).toArray(Assignment[]::new);
+                                assertTrue(plans[index][0].numa() > 0);
+                                assertTrue(plans[index][1].devices().length > 0);
+                                if (mode == ClusterSpec.GpuMode.DEVICES_20 && pod == 17) {
+                                    assertTrue(plans[index][0].gpus().length > 0);
+                                }
+                                fragmentScores[index] = fragmentation.applyAsDouble(plans[index]);
+                                leastScores[index] = least.applyAsDouble(plans[index]);
+                                assertTrue(Double.isFinite(fragmentScores[index]));
+                                assertTrue(Double.isFinite(leastScores[index]));
+                            }
+                            for (final int[] quotas : new int[][]{{2, 4, 4}, {2, 3, 0}, {2, 0, 3}}) {
+                                for (final long seed : new long[]{0, 44, -7}) {
+                                    final var random = new SplittableRandom(seed ^ 0x6A09E667F3BCC909L);
+                                    try (final var portfolio = new PortfolioFitCount(state, seed, catalogue,
+                                            quotas[0], quotas[1], quotas[2], 10, 1)) {
+                                        long totalOverlap = 0;
+                                        long totalRetained = 0;
+                                        for (int decision = 0; decision < 2; decision++) {
+                                            final int[] expected = portfolioOracle(seed, 0, random, quotas,
+                                                    fragmentScores, leastScores);
+                                            final int[] actual = portfolio.select(pending, plans, count);
+                                            assertArrayEquals(expected, actual);
+                                            final int overlap = Arrays.stream(quotas).map(value -> Math.min(value, count)).sum()
+                                                    - expected.length;
+                                            totalOverlap += overlap;
+                                            totalRetained += expected.length;
+                                            overlapWithoutRefill[0] |= overlap > 0 && expected.length
+                                                    < Math.min(count, Arrays.stream(quotas).sum());
+                                        }
+                                        assertEquals(totalOverlap, portfolio.counters().get("shortlist_overlap"));
+                                        assertEquals(totalRetained, portfolio.counters().get("retained_plans"));
+                                        assertEquals(quotas[1] == 0 ? 0L : 2L * count,
+                                                portfolio.counters().get("fragmentation_scores"));
+                                        assertEquals(quotas[2] == 0 ? 0L : 2L * count,
+                                                portfolio.counters().get("least_scores"));
+                                        assertEquals(model.gpus == null && quotas[1] > 0 ? 2L : 0L,
+                                                portfolio.counters().get("fragmentation_cpu_ram_decisions"));
+                                    }
+                                }
+                            }
+                            for (int index = 0; index < count; index++) {
+                                assertTrue(collected.get(index) == plans[index]);
+                                for (int member = 0; member < pending.size(); member++) {
+                                    assertTrue(original[index][member] == plans[index][member]);
+                                    assertPortfolioGeometry(before[index][member], plans[index][member]);
+                                }
+                            }
+                            assertNull(plans[count]);
+                            assertEquals(0, state.revision());
+                        }
+                    }, request);
+                }
+            }
+            final var probe = new Engine(model);
+            final var request = new Request(17, 18);
+            final Assignment[][] expected = new Assignment[1][];
+            probe.schedule(new SchedulingAlgorithm(probe, 44) {
+                @Override
+                public void schedule(Request pending) {
+                    final var planner = new GreedyPlanner(probe);
+                    final var plans = new ArrayList<Assignment[]>();
+                    for (int host = 1; host <= model.hostCount; host++) {
+                        for (final int numa : planner.numaNodes(host)) {
+                            final var plan = planner.plan(pending, host, numa);
+                            if (plan != null) {
+                                plans.add(plan);
+                            }
+                        }
+                    }
+                    final var least = KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
+                    final double[] scores = plans.stream().mapToDouble(least::applyAsDouble).toArray();
+                    final int[] shortlist = portfolioOracle(44, 2,
+                            new SplittableRandom(44 ^ 0x6A09E667F3BCC909L), new int[]{2, 4, 4},
+                            new double[plans.size()], scores);
+                    expected[0] = plans.get(shortlist[new SplittableRandom(44).nextInt(shortlist.length)]);
+                }
+            }, request);
+            final var actual = new Engine(model);
+            try (final var portfolio = new PortfolioFitCount(actual, 44, new Request[0], 2, 4, 4, 10, 1)) {
+                actual.schedule(portfolio, new Request(22));
+                actual.schedule(portfolio, new Request(22));
+                assertNull(actual.placement(22));
+                actual.schedule(portfolio, request);
+                for (int member = 0; member < request.size(); member++) {
+                    assertPortfolioGeometry(expected[0][member], actual.placement(request.resource(member)));
+                }
+            }
+        }
+        assertTrue(overlapWithoutRefill[0], "Overlapping sources must retain fewer plans than the available quota");
+    }
+
+    private static int[] portfolioOracle(long seed, long attempt, SplittableRandom random, int[] quotas,
+            double[] fragmentation, double[] least) {
+        final int count = fragmentation.length;
+        final int[] pool = java.util.stream.IntStream.range(0, count).toArray();
+        final var union = new TreeSet<Integer>();
+        int remaining = count;
+        for (int index = 0; index < Math.min(quotas[0], count); index++) {
+            final int chosen = count <= quotas[0] ? index : random.nextInt(remaining);
+            union.add(pool[chosen]);
+            if (count > quotas[0]) {
+                pool[chosen] = pool[--remaining];
+            }
+        }
+        for (int source = 1; source <= 2; source++) {
+            final boolean descending = source == 2;
+            final double[] scores = descending ? least : fragmentation;
+            final long salt = descending ? 0xA54FF53A5F1D36F1L : 0x3C6EF372FE94F82BL;
+            final Integer[] ranked = java.util.stream.IntStream.range(0, count).boxed().toArray(Integer[]::new);
+            Arrays.sort(ranked, (first, second) -> {
+                final int score = scores[first] < scores[second] ? -1 : scores[first] > scores[second] ? 1 : 0;
+                if (score != 0) {
+                    return descending ? -score : score;
+                }
+                final long firstKey = portfolioMix(seed ^ portfolioMix(attempt) ^ portfolioMix(first) ^ salt);
+                final long secondKey = portfolioMix(seed ^ portfolioMix(attempt) ^ portfolioMix(second) ^ salt);
+                final int key = Long.compareUnsigned(firstKey, secondKey);
+                return key == 0 ? Integer.compare(first, second) : key;
+            });
+            for (int index = 0; index < Math.min(quotas[source], count); index++) {
+                union.add(ranked[index]);
+            }
+        }
+        return union.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static long portfolioMix(long value) {
+        value = (value ^ value >>> 30) * 0xbf58476d1ce4e5b9L;
+        value = (value ^ value >>> 27) * 0x94d049bb133111ebL;
+        return value ^ value >>> 31;
+    }
+
+    private static void assertPortfolioGeometry(Assignment expected, Assignment actual) {
+        assertEquals(expected.resource(), actual.resource());
+        assertEquals(expected.host(), actual.host());
+        assertEquals(expected.numa(), actual.numa());
+        assertArrayEquals(expected.diskOffsets(), actual.diskOffsets());
+        assertArrayEquals(expected.devices(), actual.devices());
+        assertArrayEquals(expected.gpus(), actual.gpus());
+    }
+
+    private static ClusterSpec portfolioGeometryModel(ClusterSpec.GpuMode mode) throws Exception {
+        final var records = new ArrayList<Record>();
+        final int[][] capacity = {{8, 8, 2}, {6, 10, 2}, {10, 6, 1}, {8, 8, 2}};
+        records.add(rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)));
+        for (int host = 1; host <= 4; host++) {
+            final var values = capacity[host - 1];
+            records.add(alloc(host, new int[]{1, 2, 11}, values[0], values[1], values[2]));
+            records.add(alloc(4 + host, new int[]{1, 2}, values[0] / 2.0, values[1] / 2.0));
+            records.add(resource(host, host, 1));
+            for (int ordinal = 1; ordinal <= 2; ordinal++) {
+                final int rule = 2 * host + ordinal - 1;
+                records.add(rules(Constraints.newBuilder().setId(rule).setKind(Kind.NUMA)
+                        .setParent(host).setOrdinal(ordinal)));
+                records.add(resource(rule + 3, 4 + host, rule));
+            }
+            records.add(rules(Constraints.newBuilder().setId(9 + host).setKind(Kind.DISK)
+                    .setParent(host).setMedia(Media.HDD)));
+            records.add(resource(12 + host, 9, 9 + host));
+        }
+        records.add(alloc(9, new int[]{18, 19, 20}, 12, 1, 200));
+        records.add(alloc(10, new int[]{1, 2, 11}, 1, 1, .25));
+        records.add(alloc(11, new int[]{1, 2, 11}, 6, 1, .8));
+        records.add(alloc(12, new int[]{1, 2, 11}, 3, 2, 1));
+        records.add(alloc(13, new int[]{1, 2}, 1, 1));
+        records.add(alloc(14, new int[]{1}, 100));
+        records.add(rules(Constraints.newBuilder().setId(14).setKind(Kind.POD)
+                .addLinks(Link.newBuilder().setTarget(18).setDomain(1))));
+        records.add(rules(Constraints.newBuilder().setId(15).setKind(Kind.SHARD).setGroup(1)
+                .addDisks(DiskPlan.newBuilder().setMedia(Media.HDD).setExtents(2).setSpindles(.1).setIops(20)
+                        .setMinDevices(1).setMaxDevices(1).setMinStripes(1).setMaxStripes(1))));
+        records.add(rules(Constraints.newBuilder().setId(16).setKind(Kind.POD)));
+        records.add(rules(Constraints.newBuilder().setId(17).setKind(Kind.POD)));
+        records.add(resource(17, 10, 14));
+        records.add(resource(18, 0, 15));
+        records.add(resource(19, 11, 16));
+        records.add(resource(20, 12, 16));
+        records.add(resource(21, 13, 14));
+        records.add(resource(22, 14, 17));
+        return model(mode, records.toArray(Record[]::new));
     }
 }

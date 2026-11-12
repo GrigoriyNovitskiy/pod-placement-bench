@@ -1,6 +1,8 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
+import java.util.Map;
+import java.util.LinkedHashMap;
 import java.util.SplittableRandom;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
@@ -25,9 +27,15 @@ public final class FitCount extends SchedulingAlgorithm {
     private final Assignment[][] plans;
     private final long[] weightedLosses;
     private final CandidateSelector selector;
+    private final MaskedFitCountOrder maskedOrder;
+    private final boolean allMasksAllowed;
+    private final String maskDisabledReason;
+    private final long maskedWorkspacePeak;
+    private final int maxRetainedWidth;
     private Assignment[][] alternativePlans;
     private int[] alternativeHosts;
     private int planCount;
+    private long selectorCalls, candidatePlans, candidateHosts, retainedPlans, retainedHosts;
 
     public static AlgorithmDefinition definition() {
         return new AlgorithmDefinition(
@@ -76,9 +84,28 @@ public final class FitCount extends SchedulingAlgorithm {
 
     private FitCount(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes, boolean weighted, CandidateSelector selector) {
+        this(context, seed, catalogue, maxFitCount, maxCachedShapes, weighted, selector, 0);
+    }
+
+    FitCount(SchedulingContext context, long seed, Request[] catalogue,
+            int maxFitCount, int maxCachedShapes, CandidateSelector selector, int maxRetainedWidth) {
+        this(context, seed, catalogue, maxFitCount, maxCachedShapes, false, selector, maxRetainedWidth);
+    }
+
+    private FitCount(SchedulingContext context, long seed, Request[] catalogue,
+            int maxFitCount, int maxCachedShapes, boolean weighted, CandidateSelector selector,
+            int maxRetainedWidth) {
         super(context, seed);
         planner = new GreedyPlanner(context);
-        cache = new FitCountCache(context, planner, catalogue, maxFitCount, maxCachedShapes);
+        final var compiler = maxRetainedWidth == 0 ? null
+                : new MaskedFitCountOrder.Compiler(context.model(), maxRetainedWidth);
+        cache = new FitCountCache(context, planner, catalogue, maxFitCount, maxCachedShapes, compiler);
+        maskedOrder = compiler == null ? null : compiler.finish(cache, maxFitCount);
+        allMasksAllowed = compiler != null && compiler.allAllowed();
+        cache.attach(allMasksAllowed ? null : maskedOrder);
+        maskDisabledReason = compiler == null ? "" : compiler.disabledReason();
+        maskedWorkspacePeak = compiler == null ? 0 : compiler.peak();
+        this.maxRetainedWidth = maxRetainedWidth;
         cap = maxFitCount;
         this.selector = selector;
         int candidates = 0;
@@ -179,7 +206,8 @@ public final class FitCount extends SchedulingAlgorithm {
             candidates = retainSelected(request, candidates);
         }
         if (candidates > 1) {
-            candidates = weightedLosses == null ? retainLexicographicBest(candidates) : retainWeightedBest(candidates);
+            candidates = maskedOrder != null && !allMasksAllowed ? retainMaskedBest(candidates)
+                    : weightedLosses == null ? retainLexicographicBest(candidates) : retainWeightedBest(candidates);
         }
         return plans[candidates == 1 ? 0 : random.nextInt(candidates)];
     }
@@ -201,6 +229,9 @@ public final class FitCount extends SchedulingAlgorithm {
         if (selected == null || selected.length == 0 || selected.length > candidates) {
             throw new IllegalArgumentException("Selector must retain at least one feasible candidate");
         }
+        if (maxRetainedWidth > 0 && selected.length > maxRetainedWidth) {
+            throw new IllegalArgumentException("Selector exceeded its declared maximum retained width");
+        }
         int previous = -1;
         for (final int index : selected) {
             if (index <= previous || index >= candidates) {
@@ -208,12 +239,99 @@ public final class FitCount extends SchedulingAlgorithm {
             }
             previous = index;
         }
+        if (maxRetainedWidth > 0) {
+            selectorCalls++;
+            candidatePlans += candidates;
+            retainedPlans += selected.length;
+            int previousHost = 0;
+            for (int index = 0; index < candidates; index++) {
+                if (hosts[index] != previousHost) {
+                    candidateHosts++;
+                    previousHost = hosts[index];
+                }
+            }
+            previousHost = 0;
+            for (final int index : selected) {
+                if (hosts[index] != previousHost) {
+                    retainedHosts++;
+                    previousHost = hosts[index];
+                }
+            }
+        }
         for (int retained = 0; retained < selected.length; retained++) {
             final int index = selected[retained];
             hosts[retained] = hosts[index];
             plans[retained] = plans[index];
         }
         return selected.length;
+    }
+
+    private int retainMaskedBest(int candidates) {
+        maskedOrder.beginOrder();
+        FitCountCache.Sample lastFamily = null;
+        final int[] losses = maskedOrder.losses;
+        for (var profile = maskedOrder.next(); profile != null; profile = maskedOrder.next()) {
+            if (profile.family != lastFamily) {
+                Arrays.fill(losses, 0, candidates, Integer.MIN_VALUE);
+                lastFamily = profile.family;
+            }
+            final int[] counts = cache.counts(profile.family);
+            int best = Integer.MAX_VALUE;
+            int retained = 0;
+            for (int index = 0; index < candidates; index++) {
+                final int host = hosts[index];
+                int loss = 0;
+                if (maskedOrder.allows(profile, host)) {
+                    if (losses[index] == Integer.MIN_VALUE) {
+                        losses[index] = counts[host] - planner.fitCount(profile.family.request, host, plans[index], cap);
+                    }
+                    loss = losses[index];
+                }
+                if (loss < best) {
+                    retained = 0;
+                    best = loss;
+                }
+                if (loss == best) {
+                    hosts[retained] = host;
+                    plans[retained] = plans[index];
+                    losses[retained++] = losses[index];
+                }
+            }
+            candidates = retained;
+            if (candidates == 1) {
+                break;
+            }
+        }
+        return candidates;
+    }
+
+    Map<String, String> maskedParameters() {
+        return Map.of("masked_enabled", Boolean.toString(maskedOrder != null),
+                "masked_disabled_reason", maskDisabledReason,
+                "masked_profile_limit", Integer.toString(MaskedFitCountOrder.PROFILE_LIMIT),
+                "masked_workspace_limit_bytes", Long.toString(MaskedFitCountOrder.WORKSPACE_LIMIT),
+                "masked_max_retained_width", Integer.toString(maxRetainedWidth));
+    }
+
+    Map<String, Long> maskedCounters() {
+        final var result = new LinkedHashMap<String, Long>();
+        if (maskedOrder != null) {
+            result.putAll(maskedOrder.counters());
+        } else {
+            result.putAll(Map.of("logical_profiles", 0L, "physical_families", (long) cache.samples().length,
+                    "distinct_masks", 0L, "empty_mask_profiles", 0L, "masked_row_rebuilds", 0L,
+                    "masked_host_deltas", 0L, "masked_membership_checks", 0L,
+                    "masked_workspace_payload_peak_bytes", maskedWorkspacePeak,
+                    "masked_profile_limit", "profile_limit".equals(maskDisabledReason) ? 1L : 0L,
+                    "masked_workspace_limit", "workspace_limit".equals(maskDisabledReason) ? 1L : 0L));
+            result.put("masked_family_refreshes", 0L);
+        }
+        result.put("selector_calls", selectorCalls);
+        result.put("candidate_plans", candidatePlans);
+        result.put("candidate_hosts", candidateHosts);
+        result.put("retained_plans", retainedPlans);
+        result.put("retained_hosts", retainedHosts);
+        return Map.copyOf(result);
     }
 
     private int retainLexicographicBest(int candidates) {

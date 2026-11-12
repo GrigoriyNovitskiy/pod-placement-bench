@@ -25,9 +25,15 @@ final class FitCountCache {
     private final long[] hostGeneration, hostRevision;
     private int head, pendingCount;
     private long generation;
+    private MaskedFitCountOrder maskedOrder;
 
     FitCountCache(SchedulingContext context, GreedyPlanner planner, Request[] catalogue,
             int cap, int maxCachedShapes) {
+        this(context, planner, catalogue, cap, maxCachedShapes, null);
+    }
+
+    FitCountCache(SchedulingContext context, GreedyPlanner planner, Request[] catalogue,
+            int cap, int maxCachedShapes, MaskedFitCountOrder.Compiler compiler) {
         if (cap <= 0 || maxCachedShapes <= 0) {
             throw new IllegalArgumentException("Fit-count cap and cached shape limit must be positive");
         }
@@ -36,14 +42,20 @@ final class FitCountCache {
         this.cap = cap;
         this.maxCachedShapes = maxCachedShapes;
         final var unique = new LinkedHashMap<Key, Sample>();
+        int occurrence = 0;
         for (final var request : catalogue) {
             final var key = key(context.model(), request);
-            final var sample = unique.get(key);
+            var sample = unique.get(key);
             if (sample == null) {
-                unique.put(key, new Sample(request, unique.size()));
+                sample = new Sample(request, unique.size());
+                unique.put(key, sample);
             } else {
                 sample.frequency++;
             }
+            if (compiler != null) {
+                compiler.add(request, sample, occurrence);
+            }
+            occurrence++;
         }
         samples = unique.values().toArray(Sample[]::new);
         pending = new Sample[samples.length];
@@ -60,6 +72,14 @@ final class FitCountCache {
             next[host] = host + 1 == size ? 0 : host + 1;
             hostRevision[host] = context.capacityRevision(host);
         }
+    }
+
+    void attach(MaskedFitCountOrder order) {
+        maskedOrder = order;
+    }
+
+    long generation() {
+        return generation;
     }
 
     void changed(int host) {
@@ -133,6 +153,9 @@ final class FitCountCache {
 
     private int[] refresh(Sample sample) {
         var counts = rows.get(sample);
+        if (counts != null && sample.generation == generation) {
+            return counts;
+        }
         if (counts == null) {
             if (rows.size() == maxCachedShapes) {
                 final var iterator = rows.keySet().iterator();
@@ -143,13 +166,22 @@ final class FitCountCache {
             rows.put(sample, counts);
             sample.total = 0;
             sample.generation = -1;
+            if (maskedOrder != null) {
+                maskedOrder.rebuilding(sample);
+            }
         }
         for (int host = head; host != 0 && hostGeneration[host] > sample.generation; host = next[host]) {
             final int count = planner.fitCount(sample.request, host, cap);
             sample.total += count - counts[host];
+            if (maskedOrder != null) {
+                maskedOrder.hostChanged(sample, host, counts[host], count);
+            }
             counts[host] = count;
         }
         sample.generation = generation;
+        if (maskedOrder != null) {
+            maskedOrder.refreshed(sample, generation);
+        }
         return counts;
     }
 

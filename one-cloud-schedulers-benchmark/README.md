@@ -85,6 +85,10 @@ increase room for a reference workload.
 The five [CatBoost and RandomN variants](docs/algorithms/catboost.md) use packaged
 models and the same runner: `catboost-top1`, `catboost-topn-fitcount`,
 `catboost-rollout-top1`, `catboost-rollout-topn-fitcount`, and `randomn-fitcount`.
+The [three non-ML hybrids](docs/algorithms/hybrids.md) are `portfolio-fitcount`,
+`masked-fitcount`, and `window-portfolio-fitcount`. The [two PPO hybrids](docs/algorithms/ml-hybrids.md)
+are `rl-pool-fitcount` and `rl-masked-fitcount`. They use the same common seed/cap/cache
+profile; window search needs `--bulk-size 100` to receive announced windows.
 Pass declared algorithm settings with repeated `--param key=value`, for example
 `--param topN=20 --param seed=44`. Defaults are shared with the simulator: seed 44,
 copy cap 10 and cache rows 64 for the original profiles. The new `bulk-fitcount`,
