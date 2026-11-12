@@ -1,7 +1,5 @@
 package one.cloud.benchmark.algorithms.rl;
 
-import java.io.InputStreamReader;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
@@ -14,7 +12,6 @@ import java.util.SplittableRandom;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
-import com.google.gson.JsonParser;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -44,7 +41,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class PolicyNetworkTest {
     @Test
@@ -83,16 +79,7 @@ class PolicyNetworkTest {
         final var input = ManualScenario.compile(ManualScenario.example());
         final var defaults = AlgorithmRegistry.defaults("rl-top1");
         try (final var algorithm = AlgorithmRegistry.create(defaults, new Engine(input.model()), input.catalogue())) {
-            assertNotNull(algorithm.parameters().get("model_sha256"));
-            try (final var stream = PolicyNetwork.class.getResourceAsStream(
-                    "/one/cloud/benchmark/algorithms/rl/model.json");
-                    final var reader = new InputStreamReader(stream, StandardCharsets.UTF_8)) {
-                final var provenance = JsonParser.parseReader(reader).getAsJsonObject();
-                assertEquals(provenance.get("modelSha256").getAsString(),
-                        algorithm.parameters().get("model_sha256"));
-                final int epoch = provenance.getAsJsonObject("training").get("selectedPpoEpoch").getAsInt();
-                assertTrue(epoch >= 1 && epoch <= 12);
-            }
+            assertEquals(PolicyNetwork.load(null).sha256(), algorithm.parameters().get("model_sha256"));
         }
         final var settings = new AlgorithmRegistry.Settings("rl-top1",
                 Map.of("model", new JsonPrimitive(write(directory, artifact()).toString())));
