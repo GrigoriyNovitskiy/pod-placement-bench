@@ -25,6 +25,7 @@ import one.cloud.benchmark.algorithms.AlgorithmRegistry.Parameter;
 import one.cloud.benchmark.algorithms.catboost.CatBoostAlgorithm;
 import one.cloud.benchmark.dataset.Dataset;
 import one.cloud.benchmark.model.ClusterSpec;
+import one.cloud.benchmark.profiling.AsyncProfiler;
 import one.cloud.benchmark.runner.DatasetRunner;
 import one.cloud.benchmark.runner.Scenario;
 import one.cloud.benchmark.simulator.SimulatorServer;
@@ -47,6 +48,8 @@ public final class RunnerCli {
               --gpu-model MODEL      devices20 (default, synthetic GPU devices) or aggregate
               --bulk-size N          Announce consecutive same-service creates together (1..100; default: 1)
               --rollout-prior FILE   Checksum-verified prior artifact when required by the algorithm schema
+              --profile FILE         Capture replay in .jfr or .html (requires ASYNC_PROFILER_HOME)
+              --profile-event EVENT  cpu (default), alloc or wall
               --help                 Show this help
             """;
 
@@ -99,6 +102,13 @@ public final class RunnerCli {
             return 2;
         }
         try {
+            final var profiler = options.profile == null ? null : AsyncProfiler.configured();
+            if (options.profile != null && (profiler == null || !profiler.supports(options.profileFormat))) {
+                throw new IllegalStateException("Set ASYNC_PROFILER_HOME to an async-profiler distribution for --profile");
+            }
+            if (options.profile != null && Files.exists(options.profile)) {
+                throw new IllegalArgumentException("Profile output already exists: " + options.profile);
+            }
             final String[] loadedModelHash = new String[1];
             final Integer[] modelTopN = new Integer[1];
             final DatasetRunner.Factory factory = (context, seed, catalogue) -> {
@@ -123,8 +133,18 @@ public final class RunnerCli {
                 scenario = Scenario.from(dataset, options.gpuMode).withServiceBursts(options.bulkSize);
             }
             final long prepared = System.nanoTime();
-            final var result = DatasetRunner.run(scenario, new DatasetRunner.Options(44,
-                    options.maxOperations, options.catalogueLimit, options.probeCap), factory);
+            final var replayOptions = new DatasetRunner.Options(44, options.maxOperations,
+                    options.catalogueLimit, options.probeCap);
+            final DatasetRunner.Result result;
+            if (profiler == null) {
+                result = DatasetRunner.run(scenario, replayOptions, factory);
+            } else {
+                try (final var capture = profiler.capture(options.profileEvent, options.profileFormat,
+                        () -> DatasetRunner.run(scenario, replayOptions, factory))) {
+                    Files.copy(capture.file(), options.profile);
+                    result = capture.value();
+                }
+            }
             final long completed = System.nanoTime();
             output.println(json(options, scenario, result, snapshotHash, operationsHash,
                     hashed - start, loaded - hashed, prepared - loaded, completed - start,
@@ -213,6 +233,8 @@ public final class RunnerCli {
         int probeCap = 10;
         int bulkSize = 1;
         Path prior = null;
+        Path profile = null;
+        AsyncProfiler.Event profileEvent = null;
         var gpuMode = ClusterSpec.GpuMode.DEVICES_20;
         final var seen = new HashSet<String>();
         final var rawParameters = new LinkedHashMap<String, String>();
@@ -241,6 +263,8 @@ public final class RunnerCli {
                 case "--probe-cap" -> probeCap = positive(flag, value);
                 case "--bulk-size" -> bulkSize = positive(flag, value);
                 case "--rollout-prior" -> prior = Path.of(value);
+                case "--profile" -> profile = Path.of(value);
+                case "--profile-event" -> profileEvent = AsyncProfiler.Event.parse(value);
                 case "--max-operations" -> maxOperations = positive(flag, value);
                 case "--catalogue-limit" -> catalogueLimit = positive(flag, value);
                 case "--gpu-model" -> gpuMode = switch (value) {
@@ -272,7 +296,12 @@ public final class RunnerCli {
             parameters.put(entry.getKey(), parseValue(parameter, entry.getValue()));
         }
         final var settings = AlgorithmRegistry.normalize(new AlgorithmRegistry.Settings(algorithm, parameters));
-        return new Arguments(dataset, settings, maxOperations, catalogueLimit, gpuMode, probeCap, bulkSize, prior);
+        if (profileEvent != null && profile == null) {
+            throw new IllegalArgumentException("--profile-event requires --profile");
+        }
+        return new Arguments(dataset, settings, maxOperations, catalogueLimit, gpuMode, probeCap, bulkSize, prior,
+                profile, profile == null ? null : AsyncProfiler.Format.forPath(profile),
+                profileEvent == null ? AsyncProfiler.Event.CPU : profileEvent);
     }
 
     private static JsonPrimitive parseValue(Parameter parameter, String raw) {
@@ -486,6 +515,7 @@ public final class RunnerCli {
     }
 
     private record Arguments(Path dataset, AlgorithmRegistry.Settings settings, int maxOperations,
-            int catalogueLimit, ClusterSpec.GpuMode gpuMode, int probeCap, int bulkSize, Path prior) {
+            int catalogueLimit, ClusterSpec.GpuMode gpuMode, int probeCap, int bulkSize, Path prior, Path profile,
+            AsyncProfiler.Format profileFormat, AsyncProfiler.Event profileEvent) {
     }
 }

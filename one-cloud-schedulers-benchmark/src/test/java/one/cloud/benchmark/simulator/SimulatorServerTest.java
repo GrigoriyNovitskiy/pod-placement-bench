@@ -9,6 +9,7 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import com.google.gson.JsonObject;
@@ -20,6 +21,7 @@ import org.junit.jupiter.api.io.TempDir;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.profiling.AsyncProfiler;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
@@ -29,6 +31,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 class SimulatorServerTest {
     @TempDir
@@ -116,6 +119,12 @@ class SimulatorServerTest {
             assertEquals(400, send(base + "/api/step", "POST", "{\"count\":101}", true, null).statusCode());
             assertEquals(400, send(base + "/api/state?hostLimit=1000000", "GET", null, false, null).statusCode());
             assertEquals(400, send(base + "/api/dataset", "POST", "not protobuf", true, null).statusCode());
+            for (final var endpoint : List.of("/api/step", "/api/profile")) {
+                for (final var body : List.of("{\"all\":\"true\"}", "{\"all\":null}", "{\"all\":1}",
+                        "{\"all\":true,\"count\":1}", "{\"all\":false,\"count\":1}")) {
+                    assertEquals(400, send(base + endpoint, "POST", body, true, base).statusCode(), endpoint + body);
+                }
+            }
             final var state = send(base + "/api/state", "GET", null, false, null);
             assertEquals(200, state.statusCode(), state.body());
             assertTrue(state.headers().firstValue("Content-Type").orElse("").contains("application/json"));
@@ -134,6 +143,23 @@ class SimulatorServerTest {
             assertEquals(200, preserved.statusCode(), preserved.body());
             assertTrue(preserved.body().contains("\"cursor\":1"), preserved.body());
             assertEquals(200, send(base + "/api/reset", "POST", "{}", true, base).statusCode());
+        }
+    }
+
+    @Test
+    void runsAllRemainingEventsWithoutProfiling() throws Exception {
+        try (final var server = new SimulatorServer(0, null)) {
+            server.start();
+            final var base = "http://127.0.0.1:" + server.port();
+            assertEquals(200, send(base + "/api/step", "POST", "{\"count\":1}", true, base).statusCode());
+            final var response = send(base + "/api/step?summary=1", "POST", "{\"all\":true}", true, base);
+            assertEquals(200, response.statusCode(), response.body());
+            final var state = JsonParser.parseString(response.body()).getAsJsonObject();
+            assertEquals(30, state.get("cursor").getAsInt());
+            assertEquals(state.get("totalEvents"), state.get("cursor"));
+            final var repeated = send(base + "/api/step?summary=1", "POST", "{\"all\":true}", true, base);
+            assertEquals(200, repeated.statusCode(), repeated.body());
+            assertEquals(state, JsonParser.parseString(repeated.body()));
         }
     }
 
@@ -229,6 +255,129 @@ class SimulatorServerTest {
             assertEquals(200, reset.statusCode(), reset.body());
             assertTrue(reset.body().contains("\"cursor\":0"), reset.body());
             assertFalse(reset.body().contains("\"lanes\""), reset.body());
+        }
+    }
+
+    @Test
+    void disabledProfilingAndUntrustedRequestsLeaveTheCursorAlone() throws Exception {
+        try (final var server = new SimulatorServer(0, null)) {
+            server.start();
+            final var base = "http://127.0.0.1:" + server.port();
+            assertEquals(403, send(base + "/api/profile", "POST", "{}", false, null).statusCode());
+            assertEquals(403, send(base + "/api/profile", "POST", "{}", true, "https://untrusted.example").statusCode());
+            assertEquals(405, send(base + "/api/profile", "GET", null, false, null).statusCode());
+            assertEquals(503, send(base + "/api/profile", "POST", "{}", true, base).statusCode());
+            final var state = send(base + "/api/state", "GET", null, false, null);
+            assertTrue(state.body().contains("\"profileAvailable\":false"), state.body());
+            assertTrue(state.body().contains("\"cursor\":0"), state.body());
+        }
+    }
+
+    @Test
+    void profilesLiveStepsAndStopsBeforeConvertingTheAttachment() throws Exception {
+        assumeTrue(Files.isExecutable(Path.of("/bin/sh")));
+        final var bin = Files.createDirectory(temporary.resolve("bin"));
+        final var asprof = bin.resolve("asprof");
+        Files.writeString(asprof, """
+                #!/bin/sh
+                set -eu
+                directory=$(dirname "$0")
+                printf '%s\\n' "$1" >> "$directory/actions"
+                case "$1" in
+                  start)
+                    case "$3" in
+                      cpu|wall) test "$8 $9" = '-i 1ms' ;;
+                      alloc) test "$8 $9" = '--alloc 64k' ;;
+                    esac
+                    printf 'fake JFR' > "$7"
+                    ;;
+                  stop) if [ -f "$directory/fail-stop" ]; then exit 1; fi ;;
+                  *) exit 2 ;;
+                esac
+                """);
+        final var converter = bin.resolve("jfrconv");
+        Files.writeString(converter, """
+                #!/bin/sh
+                set -eu
+                directory=$(dirname "$0")
+                test "$2" = --include
+                test "$3" = '\\Qone/cloud/benchmark/simulator/SimulatorSession.step\\E'
+                test "$(cat "$4")" = 'fake JFR'
+                case "$1:$5" in
+                  --alloc:*.collapsed)
+                    printf '%s\\n' samples >> "$directory/actions"
+                    printf 'SimulatorSession.step;allocate 1\\n' > "$5"
+                    ;;
+                  --alloc:*.html)
+                    printf '%s\\n' convert >> "$directory/actions"
+                    printf '<html>allocation profile</html>' > "$5"
+                    ;;
+                  --cpu:*.collapsed|--wall:*.collapsed)
+                    printf '%s\\n' samples >> "$directory/actions"
+                    : > "$5"
+                    ;;
+                  *) exit 2 ;;
+                esac
+                """);
+        assertTrue(asprof.toFile().setExecutable(true));
+        assertTrue(converter.toFile().setExecutable(true));
+        try (final var server = new SimulatorServer(0, new AsyncProfiler(temporary))) {
+            server.start();
+            final var base = "http://127.0.0.1:" + server.port();
+            final var state = send(base + "/api/state", "GET", null, false, null);
+            assertTrue(state.body().contains("\"profileAvailable\":true"), state.body());
+            assertEquals(400, send(base + "/api/profile", "POST",
+                    "{\"count\":10001}", true, base).statusCode());
+            assertEquals(400, send(base + "/api/profile", "POST",
+                    "{\"event\":\"invalid\"}", true, base).statusCode());
+            final var html = send(base + "/api/profile", "POST",
+                    "{\"count\":2,\"event\":\"alloc\",\"format\":\"html\"}", true, base);
+            assertEquals(200, html.statusCode(), html.body());
+            assertEquals("attachment; filename=\"placement-alloc.html\"",
+                    html.headers().firstValue("Content-Disposition").orElseThrow());
+            assertEquals("2", html.headers().firstValue("X-Placement-Cursor").orElseThrow());
+            assertEquals("<html>allocation profile</html>", html.body());
+            assertEquals(List.of("start", "stop", "samples", "convert"), Files.readAllLines(bin.resolve("actions")));
+
+            final var empty = send(base + "/api/profile", "POST",
+                    "{\"count\":1,\"event\":\"cpu\",\"format\":\"html\"}", true, base);
+            assertEquals(422, empty.statusCode(), empty.body());
+            assertTrue(empty.body().contains("Сэмплов для графика нет"), empty.body());
+            assertTrue(empty.body().contains("увеличьте число событий за прогон"), empty.body());
+            assertTrue(empty.body().contains("\"cursor\":3"), empty.body());
+            assertTrue(empty.headers().firstValue("Content-Disposition").isEmpty());
+            final var afterEmpty = send(base + "/api/state?summary=1", "GET", null, false, null);
+            assertTrue(afterEmpty.body().contains("\"cursor\":3"), afterEmpty.body());
+
+            Files.createFile(bin.resolve("fail-stop"));
+            final var failed = send(base + "/api/profile", "POST",
+                    "{\"count\":1,\"format\":\"jfr\"}", true, base);
+            assertEquals(500, failed.statusCode(), failed.body());
+            assertTrue(failed.body().contains("asprof exited"), failed.body());
+            final var after = send(base + "/api/state?summary=1", "GET", null, false, null);
+            assertTrue(after.body().contains("\"cursor\":4"), after.body());
+            assertEquals(List.of("start", "stop", "samples", "convert", "start", "stop", "samples", "start", "stop"),
+                    Files.readAllLines(bin.resolve("actions")));
+
+            Files.delete(bin.resolve("fail-stop"));
+            final var exhausted = send(base + "/api/profile", "POST",
+                    "{\"all\":true,\"event\":\"wall\",\"format\":\"html\"}", true, base);
+            assertEquals(422, exhausted.statusCode(), exhausted.body());
+            assertTrue(exhausted.body().contains("\"cursor\":30"), exhausted.body());
+            assertTrue(exhausted.body().contains("26 из 26 оставшихся событий"), exhausted.body());
+            assertTrue(exhausted.body().contains("откройте сценарий с большим числом событий"), exhausted.body());
+            assertFalse(exhausted.body().contains("увеличьте"), exhausted.body());
+
+            assertEquals(200, send(base + "/api/reset", "POST", "{}", true, base).statusCode());
+            assertEquals(200, send(base + "/api/step", "POST", "{\"count\":1}", true, base).statusCode());
+            final int actionsBefore = Files.readAllLines(bin.resolve("actions")).size();
+            final var all = send(base + "/api/profile", "POST",
+                    "{\"all\":true,\"event\":\"alloc\",\"format\":\"html\"}", true, base);
+            assertEquals(200, all.statusCode(), all.body());
+            assertEquals("30", all.headers().firstValue("X-Placement-Cursor").orElseThrow());
+            assertEquals("<html>allocation profile</html>", all.body());
+            final var actions = Files.readAllLines(bin.resolve("actions"));
+            assertEquals(List.of("start", "stop", "samples", "convert"), actions.subList(actionsBefore, actions.size()));
         }
     }
 

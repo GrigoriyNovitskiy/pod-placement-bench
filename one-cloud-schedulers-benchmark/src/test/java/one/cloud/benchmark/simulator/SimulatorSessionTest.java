@@ -67,6 +67,45 @@ class SimulatorSessionTest {
     }
 
     @Test
+    void runsAllRemainingEventsBeyondTheStepLimit() throws Exception {
+        final var original = input();
+        final int[] events = new int[2 * SimulatorSession.MAX_STEP + 4];
+        for (int index = 0; index < events.length; index++) {
+            events[index] = index % 2 == 0 ? 1 : -1;
+        }
+        final var input = new ScenarioInput(original.model(), original.requests(), events, original.names(),
+                original.requestNames(), original.catalogue(), "test", "test", events.length, 0, 0);
+        final var session = new SimulatorSession(input, List.of(AlgorithmRegistry.defaults("fitcount")));
+        try (session) {
+            assertThrows(IllegalArgumentException.class, () -> session.step(SimulatorSession.MAX_STEP + 1));
+            session.step(3);
+            session.stepRemaining();
+            assertEquals(events.length, session.cursor());
+            final var result = counters(session);
+            assertEquals(events.length / 2, result.get("placedUnits").getAsLong());
+            assertEquals(events.length / 2, result.get("removedUnits").getAsLong());
+            assertEquals(0, result.get("activeUnits").getAsLong());
+            session.stepRemaining();
+            assertEquals(result, counters(session));
+        }
+        assertThrows(IllegalStateException.class, session::stepRemaining);
+    }
+
+    @Test
+    void stopsFullRunAtTheFirstFailureAndKeepsTheCompletedCursor() throws Exception {
+        final var original = input();
+        final var input = new ScenarioInput(original.model(), original.requests(), new int[]{1, 3, -1},
+                original.names(), original.requestNames(), original.catalogue(), "test", "test", 3, 0, 0);
+        try (var session = new SimulatorSession(input, List.of(AlgorithmRegistry.defaults("fitcount")))) {
+            assertThrows(IndexOutOfBoundsException.class, session::stepRemaining);
+            assertEquals(1, session.cursor());
+            assertTrue(session.state(0, 10, 0, 0).get("failed").getAsBoolean());
+            assertThrows(IllegalStateException.class, session::stepRemaining);
+            assertEquals(1, session.cursor());
+        }
+    }
+
+    @Test
     void addingAlgorithmReplaysTheSamePrefix() throws Exception {
         try (var session = new SimulatorSession(input(), List.of(AlgorithmRegistry.defaults("fitcount")))) {
             session.step(2);

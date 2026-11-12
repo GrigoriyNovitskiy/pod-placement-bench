@@ -75,6 +75,7 @@ class RunnerCliTest {
         assertEquals(0, invoke(output, errors, "algorithms"));
         final var list = output.toString(StandardCharsets.UTF_8);
         assertTrue(list.contains("fitcount"));
+        assertTrue(list.contains("smt"));
         assertTrue(list.contains("catboost-top1"));
         assertTrue(list.contains("seed"));
         assertTrue(list.contains("--param"));
@@ -84,6 +85,12 @@ class RunnerCliTest {
         assertTrue(detail.contains("No algorithm parameters"));
         assertTrue(detail.contains("run --dataset"));
         assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        output.reset();
+        assertEquals(0, invoke(output, errors, "algorithms", "smt"));
+        final var smt = output.toString(StandardCharsets.UTF_8);
+        assertTrue(smt.contains("searchNodes"));
+        assertTrue(smt.contains("solutions"));
+        assertTrue(smt.contains("rlimit"));
     }
 
     @Test
@@ -510,6 +517,10 @@ class RunnerCliTest {
         assertTrue(output.toString(StandardCharsets.UTF_8).startsWith("Usage:"));
         assertEquals("", errors.toString(StandardCharsets.UTF_8));
         final String[][] invalid = {
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile-event", "alloc"},
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile", "profile.txt"},
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile", "profile.jfr",
+                        "--profile-event", "invalid"},
                 {},
                 {"--dataset", "absent", "--algorithm", "fitcount"},
                 {"run", "--dataset", "absent", "--algorithm", "fitcount", "--seed", "44"},
