@@ -18,6 +18,7 @@ import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class SimulatorSession implements AutoCloseable {
+    static final int MAX_STEP = 10000;
     private static final int DIMENSIONS = 20;
     private static final int PROBE_CAP = 10;
     private final ScenarioInput input;
@@ -73,8 +74,8 @@ public final class SimulatorSession implements AutoCloseable {
     }
 
     public void step(int count) throws Exception {
-        if (count < 0 || count > 10000) {
-            throw new IllegalArgumentException("Step count must be between 0 and 10000");
+        if (count < 0 || count > MAX_STEP) {
+            throw new IllegalArgumentException("Step count must be between 0 and " + MAX_STEP);
         }
         checkOpen();
         final int end = (int) Math.min((long) input.events().length, (long) cursor + count);
@@ -98,6 +99,12 @@ public final class SimulatorSession implements AutoCloseable {
             }
             throw failure;
         }
+    }
+
+    public void stepRemaining() throws Exception {
+        do {
+            step(Math.min(MAX_STEP, input.events().length - cursor));
+        } while (cursor < input.events().length);
     }
 
     public void reset() throws Exception {

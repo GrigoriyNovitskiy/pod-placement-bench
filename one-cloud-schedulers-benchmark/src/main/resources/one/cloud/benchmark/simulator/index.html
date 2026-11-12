@@ -138,12 +138,40 @@
     </main>
 
     <footer class="transport">
-        <button id="next" class="primary">Следующий запрос →</button>
-        <button id="play">▶ Авто</button>
-        <select id="speed" aria-label="Задержка между шагами">
-            <option value="1200">1×</option><option value="500">2×</option><option value="0">Без пауз</option>
-        </select>
-        <button id="batch">+10 событий</button>
+        <div class="run-controls">
+            <select id="run-mode" aria-label="Режим запуска">
+                <option value="1">1 событие</option>
+                <option value="10">10 событий</option>
+                <option id="run-all" value="all">Нет событий</option>
+                <option id="run-auto" value="auto">Авто</option>
+            </select>
+            <select id="speed" aria-label="Задержка между шагами" hidden>
+                <option value="1200">1×</option><option value="500">2×</option><option value="0">Без пауз</option>
+            </select>
+            <button id="play" class="primary">▶ Выполнить</button>
+        </div>
+        <details id="profile-settings" class="profile-settings">
+            <summary id="profile-trigger">Профилирование<span id="profile-active" hidden></span></summary>
+            <div class="profile-fields">
+                <p id="profile-unavailable" class="hint" hidden>Укажите ASYNC_PROFILER_HOME при запуске симулятора.</p>
+                <div class="field">
+                    <label for="profile-event">Тип профиля</label>
+                    <select id="profile-event" disabled>
+                        <option value="">Без профиля</option>
+                        <option value="cpu">CPU</option>
+                        <option value="alloc">Аллокации</option>
+                        <option value="wall">Wall clock</option>
+                    </select>
+                </div>
+                <div id="profile-format-field" class="field" hidden>
+                    <label for="profile-format">Формат</label>
+                    <select id="profile-format">
+                        <option id="profile-html" value="html">HTML</option>
+                        <option value="jfr">JFR</option>
+                    </select>
+                </div>
+            </div>
+        </details>
         <div class="progress"><div class="progress-label"><span id="processing">Общий поток событий</span><span id="progress-text"></span></div><div class="bar"><i id="progress-fill"></i></div></div>
         <button id="reset">↺ Сначала</button>
     </footer>

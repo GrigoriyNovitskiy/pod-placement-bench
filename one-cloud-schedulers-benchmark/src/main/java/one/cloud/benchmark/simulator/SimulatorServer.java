@@ -37,6 +37,7 @@ import com.sun.net.httpserver.HttpServer;
 
 import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.dataset.Dataset;
+import one.cloud.benchmark.profiling.AsyncProfiler;
 import one.cloud.benchmark.runner.BenchmarkExperiment;
 import one.cloud.benchmark.runner.Scenario;
 
@@ -47,6 +48,7 @@ public final class SimulatorServer implements AutoCloseable {
     private static final Map<String, String> ASSETS = Map.of(
             "/", "index.html", "/app.js", "app.js", "/views.js", "views.js", "/style.css", "style.css");
     private final HttpServer server;
+    private final AsyncProfiler profiler;
     private final ExecutorService owner = Executors.newSingleThreadExecutor();
     private final ExecutorService benchmarkWorker = Executors.newSingleThreadExecutor(
             Thread.ofPlatform().daemon().name("placement-benchmark").factory());
@@ -70,6 +72,11 @@ public final class SimulatorServer implements AutoCloseable {
     }
 
     public SimulatorServer(int port) throws IOException {
+        this(port, AsyncProfiler.configured());
+    }
+
+    SimulatorServer(int port, AsyncProfiler profiler) throws IOException {
+        this.profiler = profiler;
         if (port < 0 || port > 65535) {
             throw new IllegalArgumentException("Port must be between 0 and 65535");
         }
@@ -146,7 +153,7 @@ public final class SimulatorServer implements AutoCloseable {
                     throw new RequestFailure(404, "Not found");
                 }
                 final boolean mutation = switch (path) {
-                    case "/api/manual", "/api/dataset", "/api/step", "/api/reset", "/api/probes" -> true;
+                    case "/api/manual", "/api/dataset", "/api/step", "/api/reset", "/api/probes", "/api/profile" -> true;
                     case "/api/algorithms", "/api/benchmark" -> exchange.getRequestMethod().equals("POST");
                     case "/api/state", "/api/inspect", "/api/scenario" -> false;
                     default -> throw new RequestFailure(404, "Unknown API endpoint");
@@ -154,6 +161,10 @@ public final class SimulatorServer implements AutoCloseable {
                 requireMethod(exchange, mutation ? "POST" : "GET");
                 if (mutation) {
                     validateMutation(exchange);
+                }
+                if (path.equals("/api/profile")) {
+                    profile(exchange);
+                    return;
                 }
                 final Object result = dispatch(exchange, path);
                 json(exchange, path.equals("/api/benchmark") && mutation ? 202 : 200, result);
@@ -192,8 +203,12 @@ public final class SimulatorServer implements AutoCloseable {
             case "/api/dataset" -> dataset(exchange, query);
             case "/api/step" -> {
                 final var body = body(exchange);
-                final int count = integer(body, "count", 1, 1, 100);
-                current().step(count);
+                if (allRemaining(body)) {
+                    current().stepRemaining();
+                } else {
+                    final int count = integer(body, "count", 1, 1, 100);
+                    current().step(count);
+                }
                 yield state(query);
             }
             case "/api/reset" -> {
@@ -320,7 +335,80 @@ public final class SimulatorServer implements AutoCloseable {
         final int hostLimit = integer(query, "hostLimit", 48, 1, 48);
         final int eventOffset = integer(query, "eventOffset", 0, 0, Integer.MAX_VALUE);
         final int eventLimit = integer(query, "eventLimit", 50, 1, 200);
-        return current().state(hostOffset, hostLimit, eventOffset, eventLimit);
+        final var result = current().state(hostOffset, hostLimit, eventOffset, eventLimit);
+        result.addProperty("profileAvailable", profiler != null && profiler.supports(AsyncProfiler.Format.JFR));
+        result.addProperty("flameGraphAvailable", profiler != null && profiler.supports(AsyncProfiler.Format.HTML));
+        return result;
+    }
+
+    private void profile(HttpExchange exchange) throws Exception {
+        final var request = body(exchange);
+        final boolean all = allRemaining(request);
+        final int count = integer(request, "count", 100, 1, SimulatorSession.MAX_STEP);
+        final String eventName = profileOption(request, "event", "cpu");
+        final String formatName = profileOption(request, "format", "html");
+        final var event = AsyncProfiler.Event.parse(eventName);
+        final var format = AsyncProfiler.Format.parse(formatName);
+        if (profiler == null || !profiler.supports(format)) {
+            throw new RequestFailure(503, "Профиль недоступен. Укажите ASYNC_PROFILER_HOME при запуске симулятора.");
+        }
+        final var current = current();
+        final int startCursor = current.cursor();
+        final int totalEvents = current.input().events().length;
+        if (startCursor >= totalEvents) {
+            throw new IllegalArgumentException("В потоке больше нет событий для профилирования.");
+        }
+        final String stepFrame = SimulatorSession.class.getName().replace('.', '/') + ".step";
+        try (final var capture = profiler.capture(event, format, stepFrame, () -> {
+            if (all) {
+                current.stepRemaining();
+            } else {
+                current.step(count);
+            }
+            return current.cursor();
+        })) {
+            final var headers = exchange.getResponseHeaders();
+            headers.set("Content-Type", "application/octet-stream");
+            headers.set("Content-Disposition", "attachment; filename=\"placement-" + eventName + "." + formatName + "\"");
+            headers.set("Cache-Control", "no-store");
+            headers.set("X-Content-Type-Options", "nosniff");
+            headers.set("X-Placement-Cursor", Integer.toString(capture.value()));
+            exchange.sendResponseHeaders(200, Files.size(capture.file()));
+            Files.copy(capture.file(), exchange.getResponseBody());
+        } catch (AsyncProfiler.NoSamplesException failure) {
+            final int cursor = current.cursor();
+            final String hint = !all && totalEvents - cursor > count && count < SimulatorSession.MAX_STEP
+                    ? "Для следующего профиля увеличьте число событий за прогон."
+                    : "Для более подробного профиля откройте сценарий с большим числом событий.";
+            json(exchange, 422, Map.of("cursor", cursor, "error",
+                    "Сэмплов для графика нет. За прогон обработано %d из %d оставшихся событий. %s"
+                            .formatted(cursor - startCursor, totalEvents - startCursor, hint)));
+        }
+    }
+
+    private static boolean allRemaining(JsonObject request) {
+        if (!request.has("all")) {
+            return false;
+        }
+        final var value = request.get("all");
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isBoolean()) {
+            throw new IllegalArgumentException("all must be a boolean");
+        }
+        if (request.has("count")) {
+            throw new IllegalArgumentException("Choose either all or count");
+        }
+        return value.getAsBoolean();
+    }
+
+    private static String profileOption(JsonObject request, String name, String fallback) {
+        if (!request.has(name)) {
+            return fallback;
+        }
+        final var value = request.get(name);
+        if (!value.isJsonPrimitive() || !value.getAsJsonPrimitive().isString()) {
+            throw new IllegalArgumentException(name + " must be a string");
+        }
+        return value.getAsString();
     }
 
     private JsonObject manual(JsonObject body, Map<String, String> query) throws Exception {

@@ -510,6 +510,10 @@ class RunnerCliTest {
         assertTrue(output.toString(StandardCharsets.UTF_8).startsWith("Usage:"));
         assertEquals("", errors.toString(StandardCharsets.UTF_8));
         final String[][] invalid = {
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile-event", "alloc"},
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile", "profile.txt"},
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile", "profile.jfr",
+                        "--profile-event", "invalid"},
                 {},
                 {"--dataset", "absent", "--algorithm", "fitcount"},
                 {"run", "--dataset", "absent", "--algorithm", "fitcount", "--seed", "44"},
