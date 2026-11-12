@@ -11,7 +11,7 @@ import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
-final class CandidateFeatures {
+public final class CandidateFeatures {
     static final int VERSION = 2;
     private static final long TRAINING_EXTENT_BYTES = 64L << 20;
     private static final int[] DIMENSIONS = {1, 2, 3, 4, 5, 7, 9, 11, 12, 15, 17};
@@ -20,7 +20,7 @@ final class CandidateFeatures {
     private final double[][] initialHost;
     private final double[] initialTotal = new double[DIMENSIONS.length];
 
-    CandidateFeatures(SchedulingContext context) {
+    public CandidateFeatures(SchedulingContext context) {
         this.context = context;
         initialHost = new double[context.model().hostCount + 1][DIMENSIONS.length];
         for (int host = 1; host < initialHost.length; host++) {
@@ -31,7 +31,7 @@ final class CandidateFeatures {
         }
     }
 
-    static List<String> names() {
+    public static List<String> names() {
         return NAMES;
     }
 
@@ -51,12 +51,12 @@ final class CandidateFeatures {
         return List.copyOf(result);
     }
 
-    Decision prepare(Request request, Assignment[][] plans, int candidateCount) {
+    public Decision prepare(Request request, Assignment[][] plans, int candidateCount) {
         return new Decision(request, plans, candidateCount);
     }
 
-    final class Decision {
-        static final int MAX_BATCH_ROWS = 1024;
+    public final class Decision {
+        public static final int MAX_BATCH_ROWS = 1024;
         private final Request request;
         private final Assignment[][] plans;
         private final int candidateCount;
@@ -105,11 +105,11 @@ final class CandidateFeatures {
             }
         }
 
-        int rows() {
+        public int rows() {
             return Math.multiplyExact(candidateCount, request.size());
         }
 
-        float[][] extract(int firstRow, int rowCount) {
+        public float[][] extract(int firstRow, int rowCount) {
             if (firstRow < 0 || rowCount < 0 || rowCount > MAX_BATCH_ROWS
                     || firstRow > rows() - rowCount) {
                 throw new IllegalArgumentException("Invalid feature batch bounds");

@@ -1,0 +1,47 @@
+{
+  "datasets": [
+    "/path/to/placement-datasets-v2/datasets/dataset-08"
+  ],
+  "algorithms": [
+    {
+      "id": "fitcount",
+      "parameters": {
+        "fitCap": 10,
+        "cacheRows": 64
+      }
+    },
+    {
+      "id": "randomn-fitcount",
+      "parameters": {
+        "topN": 20,
+        "fitCap": 10,
+        "cacheRows": 64
+      }
+    },
+    {
+      "id": "rl-top1"
+    },
+    {
+      "id": "rl-topn-fitcount",
+      "parameters": {
+        "topN": 20,
+        "fitCap": 10,
+        "cacheRows": 64
+      }
+    }
+  ],
+  "seeds": [
+    42
+  ],
+  "gpuModel": "devices20",
+  "bulkSize": 1,
+  "catalogueLimit": 32,
+  "maxOperations": 0,
+  "forks": 1,
+  "warmups": 1,
+  "measurements": 2,
+  "timeoutSeconds": 600,
+  "probeCap": 3,
+  "inflationAttempts": 200,
+  "inflationSeed": 42
+}

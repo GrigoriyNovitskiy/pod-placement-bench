@@ -5,6 +5,8 @@ Bulk fitcount, count/tree DP and rollout are implemented; see
 [implementation and usage](IMPLEMENTATION.md). CatBoost and RandomN shortlist
 algorithms, packaged models and historical measurements are described in the
 [CatBoost guide](catboost.md).
+The [RL guide](rl.md) describes the packaged PPO policy, `rl-top1` and
+`rl-topn-fitcount`, their parameters and training split.
 
 Numerical settings below are
 explicit starting configurations agreed for the first experiments; none has been
