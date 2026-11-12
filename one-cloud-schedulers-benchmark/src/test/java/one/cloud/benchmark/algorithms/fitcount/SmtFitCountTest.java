@@ -17,10 +17,12 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
 import one.cloud.benchmark.engine.Engine;
+import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
+import static one.cloud.benchmark.testsupport.TestModel.candidates;
 import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
@@ -145,6 +147,104 @@ class SmtFitCountTest {
     }
 
     @Test
+    void singletonFastPathMatchesDecisionLocalFitCountAcrossNumaPinsAndRemoval() throws Exception {
+        final var specification = model(
+                alloc(1, new int[]{1, 2}, 4, 6), alloc(2, new int[]{1, 2}, 2, 3),
+                alloc(3, new int[]{1, 2}, 1, 1), alloc(4, new int[]{1, 2}, 1, 2),
+                alloc(5, new int[]{1, 2}, 3, 4),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.NUMA).setParent(2).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.NUMA).setParent(2).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(6).setKind(Kind.POD)),
+                rules(Constraints.newBuilder().setId(7).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(8).setKind(Kind.POD).setPinnedHost(2)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3),
+                resource(5, 2, 4), resource(6, 2, 5), resource(7, 3, 6), resource(8, 2, 7),
+                resource(9, 4, 8), resource(10, 5, 6));
+        final var pending = requests(7, 4);
+        for (final var catalogue : new Request[][]{new Request[0], pending}) {
+            for (final int cacheRows : new int[]{1, 64}) {
+                final var expected = new Engine(specification);
+                final var actual = new Engine(specification);
+                try (final var baseline = new SchedulingAlgorithm(expected, 42) {
+                    @Override
+                    public void schedule(Request request) {
+                        new FitCount(context, random.nextLong(), catalogue, 10, cacheRows).schedule(request);
+                    }
+                }; final var smt = new SmtFitCount(actual, 42, catalogue, 10, cacheRows)) {
+                    for (final var request : pending) {
+                        expected.schedule(baseline, request);
+                        actual.schedule(smt, request);
+                        assertSameScalarState(expected, actual, pending);
+                    }
+                    assertNull(actual.placement(10));
+                    expected.remove(pending[0]);
+                    actual.remove(pending[0]);
+                    assertSameScalarState(expected, actual, pending);
+                    expected.schedule(baseline, pending[0]);
+                    actual.schedule(smt, pending[0]);
+                    actual.schedule(smt, new Request[0]);
+                    assertSameScalarState(expected, actual, pending);
+                    assertEquals(5, smt.counters().get("singleton_optima"));
+                    assertEquals(0L, smt.counters().getOrDefault("solver_calls", 0L));
+                }
+            }
+        }
+    }
+
+    @Test
+    void compoundIncumbentRemainsTheOnlyCandidateWhenEnumerationFindsTheSamePlan() throws Exception {
+        final var specification = model(
+                alloc(1, new int[]{1}, 2), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2));
+        final var state = new Engine(specification);
+        try (final var smt = new SmtFitCount(state, 42, new Request[0], 128, 256)) {
+            state.schedule(smt, new Request(2, 3));
+            assertEquals(1, state.placement(2).host());
+            assertEquals(1, state.placement(3).host());
+            assertEquals(1, smt.counters().get("candidate_plans"));
+            assertEquals(1, smt.counters().get("optimized_windows"));
+            assertEquals(0L, smt.counters().getOrDefault("improved_windows", 0L));
+        }
+    }
+
+    @Test
+    void equalFirstScoreComponentStillComparesTheDifferentCatalogueTail() throws Exception {
+        final var specification = model(
+                alloc(1, new int[]{1}, 1), alloc(2, new int[]{1, 2}, 2, 2),
+                alloc(3, new int[]{1, 2}, 2, 3), alloc(4, new int[]{1, 2}, 1, 1),
+                alloc(5, new int[]{2}, 2), alloc(6, new int[]{2}, 3),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setCandidates(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                candidates(2, 2, 3),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 1),
+                resource(4, 1, 2), resource(5, 4, 3), resource(6, 5, 4), resource(7, 6, 4));
+        final var unit = new Request(4, 5);
+        for (final int memoryShape : new int[]{6, 7}) {
+            final var catalogue = new Request[11];
+            for (int index = 0; index < 10; index++) {
+                catalogue[index] = new Request(4);
+            }
+            catalogue[10] = new Request(memoryShape);
+            final var state = new Engine(specification);
+            try (final var smt = new SmtFitCount(state, 42, catalogue, 128, 256)) {
+                state.schedule(smt, unit);
+                assertEquals(1, state.placement(4).host());
+                assertEquals(memoryShape == 6 ? 3 : 2, state.placement(5).host());
+                assertEquals(3, state.available(1, 1) + state.available(2, 1) + state.available(3, 1));
+                assertEquals(2, smt.counters().get("candidate_plans"));
+                assertEquals(1, smt.counters().get("pool_optima"));
+            }
+        }
+    }
+
+    @Test
     void secondaryObjectiveScoresCombinedResidualCapacity() throws Exception {
         final var specification = model(
                 alloc(1, new int[]{1}, 2), alloc(2, new int[]{1}, 1),
@@ -223,14 +323,14 @@ class SmtFitCountTest {
                 alloc(3, new int[]{1}, 1),
                 rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST).setCpuPower(.5)),
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
-                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2));
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2), resource(4, 3, 2));
         final var state = new Engine(specification);
         try (final var smt = new SmtFitCount(state, 42, new Request[]{new Request(3)}, 128, 256)) {
             state.schedule(smt, new Request(2));
             assertEquals(3.5, state.available(1, 1));
-            state.schedule(smt, new Request(3));
-            assertEquals(2.5, state.available(1, 1));
-            assertEquals(2, state.revision());
+            state.schedule(smt, new Request(3), new Request(4));
+            assertEquals(1.5, state.available(1, 1));
+            assertEquals(3, state.revision());
             assertEquals(1, smt.counters().get("fallback_unsupported_resources"));
             assertEquals(1, smt.counters().get("fallback_non_integer"));
             assertEquals(0L, smt.counters().getOrDefault("solver_calls", 0L));
@@ -278,6 +378,25 @@ class SmtFitCountTest {
                         "Miniature instance " + attempt);
             }
         }
+    }
+
+    private static void assertSameScalarState(Engine expected, Engine actual, Request[] requests) {
+        for (final var request : requests) {
+            final int resource = request.resource(0);
+            final var placement = expected.placement(resource);
+            if (placement == null) {
+                assertNull(actual.placement(resource));
+            } else {
+                assertNotNull(actual.placement(resource));
+                assertEquals(placement.host(), actual.placement(resource).host());
+                assertEquals(placement.numa(), actual.placement(resource).numa());
+            }
+        }
+        for (int resource = 1; resource <= 6; resource++) {
+            assertEquals(expected.available(resource, 1), actual.available(resource, 1));
+            assertEquals(expected.available(resource, 2), actual.available(resource, 2));
+        }
+        assertEquals(expected.revision(), actual.revision());
     }
 
     private static ClusterSpec pinnedTrap(boolean dependency) throws IOException {

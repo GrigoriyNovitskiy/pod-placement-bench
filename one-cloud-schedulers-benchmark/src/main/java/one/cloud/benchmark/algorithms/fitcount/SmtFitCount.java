@@ -103,69 +103,76 @@ public final class SmtFitCount extends SchedulingAlgorithm {
         }
         final var state = trial.state();
         final var baseline = new FitCount(state, random.nextLong(), catalogue, cap, cacheRows);
-        final var planner = new GreedyPlanner(state);
+        final boolean singleton = requests.length == 1 && requests[0].size() == 1;
+        final var planner = singleton ? null : new GreedyPlanner(state);
         Assignment[][] winner;
         try {
             state.schedule(baseline, requests);
             final var incumbent = snapshot(state, requests);
             winner = incumbent;
-            final var samples = orderedSamples();
-            long[] bestScore = score(planner, samples);
-            int bestAdmission = admitted(winner);
-            trial.reset();
-            try {
-                final var pool = new Pool(state, planner, requests, incumbent);
+            if (singleton) {
+                // FitCount already considers every host/NUMA plan for one scalar member.
+                increment("singleton_optima");
+            } else {
+                final var samples = orderedSamples();
+                long[] bestScore = score(planner, samples, null);
+                int bestAdmission = admitted(winner);
+                trial.reset();
                 try {
-                    pool.generate();
-                } finally {
-                    counts.merge("candidate_nodes", (long) pool.visited, Long::sum);
-                    counts.merge("candidate_plans", (long) pool.total, Long::sum);
-                }
-                final int[] sizes = pool.plans.stream().mapToInt(List::size).toArray();
-                final var rows = pool.rows();
-                try (final var solver = new SmtSolver(sizes, rows, resourceLimit)) {
-                    solverVersion = SmtSolver.version();
-                    increment("optimized_windows");
-                    boolean exhausted = false;
-                    for (int attempt = 0; attempt < solutionLimit; attempt++) {
-                        increment("solver_calls");
-                        final int[] choices = solver.next(bestAdmission);
-                        if (choices == null) {
-                            increment("pool_optima");
-                            exhausted = true;
-                            break;
-                        }
-                        final var proposal = new Assignment[requests.length][];
-                        for (int unit = 0; unit < requests.length; unit++) {
-                            if (choices[unit] >= 0) {
-                                proposal[unit] = pool.plans.get(unit).get(choices[unit]).assignments;
+                    final var pool = new Pool(state, planner, requests, incumbent);
+                    try {
+                        pool.generate();
+                    } finally {
+                        counts.merge("candidate_nodes", (long) pool.visited, Long::sum);
+                        counts.merge("candidate_plans", (long) pool.total, Long::sum);
+                    }
+                    final int[] sizes = pool.plans.stream().mapToInt(List::size).toArray();
+                    final var rows = pool.rows();
+                    try (final var solver = new SmtSolver(sizes, rows, resourceLimit)) {
+                        solverVersion = SmtSolver.version();
+                        increment("optimized_windows");
+                        boolean exhausted = false;
+                        for (int attempt = 0; attempt < solutionLimit; attempt++) {
+                            increment("solver_calls");
+                            final int[] choices = solver.next(bestAdmission);
+                            if (choices == null) {
+                                increment("pool_optima");
+                                exhausted = true;
+                                break;
+                            }
+                            final var proposal = new Assignment[requests.length][];
+                            for (int unit = 0; unit < requests.length; unit++) {
+                                if (choices[unit] >= 0) {
+                                    proposal[unit] = pool.plans.get(unit).get(choices[unit]).assignments;
+                                }
+                            }
+                            trial.reset();
+                            if (!replay(state, requests, proposal)) {
+                                increment("rejected_solutions");
+                                continue;
+                            }
+                            final int admission = admitted(proposal);
+                            final long[] proposedScore = score(planner, samples,
+                                    admission > bestAdmission ? null : bestScore);
+                            if (proposedScore != null) {
+                                winner = proposal;
+                                bestAdmission = admission;
+                                bestScore = proposedScore;
                             }
                         }
-                        trial.reset();
-                        if (!replay(state, requests, proposal)) {
-                            increment("rejected_solutions");
-                            continue;
-                        }
-                        final int admission = admitted(proposal);
-                        final long[] proposedScore = score(planner, samples);
-                        if (admission > bestAdmission || admission == bestAdmission && compare(proposedScore, bestScore) > 0) {
-                            winner = proposal;
-                            bestAdmission = admission;
-                            bestScore = proposedScore;
+                        if (!exhausted) {
+                            increment("solution_budget");
                         }
                     }
-                    if (!exhausted) {
-                        increment("solution_budget");
-                    }
+                } catch (Unsupported unsupportedCase) {
+                    increment("fallback_" + unsupportedCase.getMessage());
+                } catch (SmtSolver.Limit exhausted) {
+                    increment("resource_budget");
+                    winner = incumbent;
+                } catch (SmtSolver.Unavailable unavailable) {
+                    increment("fallback_solver_unavailable");
+                    winner = incumbent;
                 }
-            } catch (Unsupported unsupportedCase) {
-                increment("fallback_" + unsupportedCase.getMessage());
-            } catch (SmtSolver.Limit exhausted) {
-                increment("resource_budget");
-                winner = incumbent;
-            } catch (SmtSolver.Unavailable unavailable) {
-                increment("fallback_solver_unavailable");
-                winner = incumbent;
             }
             if (winner != incumbent) {
                 increment("improved_windows");
@@ -175,7 +182,7 @@ public final class SmtFitCount extends SchedulingAlgorithm {
                 throw new IllegalStateException("Saved SMT result failed prefix replay");
             }
         } finally {
-            trialPlannerCalls += baseline.plannerCalls() + planner.planCalls();
+            trialPlannerCalls += baseline.plannerCalls() + (planner == null ? 0 : planner.planCalls());
             trial.reset();
         }
         for (int unit = 0; unit < requests.length; unit++) {
@@ -236,24 +243,21 @@ public final class SmtFitCount extends SchedulingAlgorithm {
         return samples.toArray(Request[]::new);
     }
 
-    private long[] score(GreedyPlanner planner, Request[] samples) {
+    private long[] score(GreedyPlanner planner, Request[] samples, long[] incumbent) {
         final var result = new long[samples.length];
+        boolean better = incumbent == null;
         for (int sample = 0; sample < samples.length; sample++) {
             for (int host = 1; host <= context.model().hostCount; host++) {
                 result[sample] += planner.fitCount(samples[sample], host, cap);
             }
-        }
-        return result;
-    }
-
-    private static int compare(long[] first, long[] second) {
-        for (int index = 0; index < first.length; index++) {
-            final int compared = Long.compare(first[index], second[index]);
-            if (compared != 0) {
-                return compared;
+            if (!better) {
+                if (result[sample] < incumbent[sample]) {
+                    return null;
+                }
+                better = result[sample] > incumbent[sample];
             }
         }
-        return 0;
+        return better ? result : null;
     }
 
     private static int admitted(Assignment[][] plans) {
@@ -355,11 +359,11 @@ public final class SmtFitCount extends SchedulingAlgorithm {
         }
 
         private void add(int unit, Assignment[] assignments) {
-            for (final var existing : plans.get(unit)) {
+            if (incumbent[unit] != null && !plans.get(unit).isEmpty()) {
                 boolean same = true;
                 for (int member = 0; member < assignments.length; member++) {
-                    same &= existing.assignments[member].host() == assignments[member].host()
-                            && existing.assignments[member].numa() == assignments[member].numa();
+                    same &= incumbent[unit][member].host() == assignments[member].host()
+                            && incumbent[unit][member].numa() == assignments[member].numa();
                 }
                 if (same) {
                     return;
