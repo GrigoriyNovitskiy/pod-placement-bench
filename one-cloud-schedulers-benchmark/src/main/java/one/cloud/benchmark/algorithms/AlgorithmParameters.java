@@ -35,10 +35,6 @@ public final class AlgorithmParameters {
             "cacheRows", "FitCount cache rows", "Число профилей запросов в кэше FitCount.",
             256, 1, 4096).asAdvanced();
 
-    public static final Parameter INCUMBENT_GUARD = Parameter.bool(
-            "incumbentGuard", "Sequential quality guard", "Сравнивать пачку с последовательным FitCount.",
-            true).asAdvanced();
-
     public static final Parameter CANDIDATES = Parameter.integer(
             "candidates", "Candidate limit", "Максимум вариантов текущего размещения для rollout.",
             8, 1, Integer.MAX_VALUE);
@@ -54,7 +50,7 @@ public final class AlgorithmParameters {
     public static final List<Parameter> SEED_ONLY = List.of(SEED);
     public static final List<Parameter> FIT_COUNT = List.of(SEED, FIT_CAP, CACHE_ROWS);
     public static final List<Parameter> SHORTLIST = List.of(TOP_N, SEED, FIT_CAP, CACHE_ROWS);
-    public static final List<Parameter> BULK = List.of(BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS, INCUMBENT_GUARD);
+    public static final List<Parameter> BULK = List.of(BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS);
     public static final List<Parameter> ROLLOUT = List.of(
             BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS, CANDIDATES, SCENARIOS, HORIZON);
 

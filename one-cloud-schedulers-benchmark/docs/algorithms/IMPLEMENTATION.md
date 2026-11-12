@@ -54,23 +54,19 @@ are resource counts, including every member of a declined atomic unit.
 
 `BulkFitCount` implements frozen-order greedy marginals. Its
 `dynamicProgramming(...)` factory selects count/tree DP over the same concrete
-host trajectories. A saved sequential FitCount trial is the external incumbent:
-maximize admitted units, then frozen lexicographic physical-fit loss; it wins ties.
-The incumbent uses a declared decision-local SplitMix seed rather than pretending
-to clone the persistent fallback's SplittableRandom. Canonical placed/removed
-notifications keep the persistent fallback cache current.
+host trajectories. Both compute a proposal in a detached trial and publish it
+without a sequential comparison pass. Canonical placed/removed notifications
+keep the persistent fallback cache current. Greedy uses a decision-local SplitMix
+seed and caches physical marginals for the first `cacheRows` frozen samples on
+unchanged hosts, with hits/evaluations reported. Runtime profiles are
+`bulk-fitcount-v2` and `dp-fitcount-v2`.
 
-For the fast profile, add `--param incumbentGuard=false` to bulk/DP. This skips
-all sequential incumbent searches; feasibility validation and fallback remain.
-It gives up the per-burst guarantee against the saved sequential solution.
-The default remains guarded. Greedy bulk caches physical marginals for the first
-`cacheRows` frozen samples on unchanged hosts, with hits/evaluations reported.
 Use matching explicit `seed`, `fitCap` and `cacheRows` for comparisons: registry
 defaults differ between ordinary and bulk FitCount.
 
 The structural gate certifies allocation/geometry, masks/pins, relative links,
 shared/private group stencils, ready external dependencies and one-host options.
-Unsupported bursts retain the sequential result with a reason. DP additionally
+Unsupported bursts use sequential FitCount with a reason. DP additionally
 certifies actual laminar host sets, constant per-replica group multiplicities and
 a maximum depth 5. NUMA and host-local limits remain in concrete geometry; a NUMA
 cap is never collapsed into an artificial host cap.
@@ -78,9 +74,9 @@ cap is never collapsed into an artificial host cap.
 Count DP retains nonconvex and negative loss curves. It uses rolling primitive
 vectors and compact traceback, with 100,000,000 component operations and 64 MiB
 optimizer workspace guards. No hosts*replicas*catalogue cost matrix is retained.
-Guard exhaustion returns the saved incumbent, not a partial DP solution. Common
-trial/engine/planner storage and external incumbent/cache are reported through
-process heap diagnostics in addition to the optimizer's own workspace accounting.
+Budget exhaustion discards the trial before sequential fallback. Common
+trial/engine/planner storage and the persistent fallback/cache are excluded from
+the optimizer's workspace accounting.
 The optional 32-unit/64-host local hybrid from the proposal is not implemented.
 
 ## Explicit rollout prior

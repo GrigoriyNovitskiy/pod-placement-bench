@@ -1,6 +1,7 @@
 # Dynamic programming for bulk host options
 
-Status: planned. Use the [shared contract](README.md). DP is an alternative selector
+Status: implemented for count/tree DP; the optional hybrid below is planned.
+Use the [shared contract](README.md). DP is an alternative selector
 for [bulk fitcount's](bulk-fitcount.md) concrete options and frozen loss vectors,
 not a second physical model or a general fleet-wide resource-discretization DP.
 
@@ -16,7 +17,7 @@ For a group contributing m resources per replica to a domain, convert its remain
 resource-count limit into a replica cap floor(remaining/m); combine applicable caps.
 Only do this when the group stencil makes m constant. Identity-dependent caps,
 crossing domains, multi-host units and dynamic dependencies fail the gate and use
-the saved FitCount solution. Do not add one-per-host or discard constraints to
+sequential FitCount. Do not add one-per-host or discard constraints to
 make decomposition possible. Record gate coverage and fallback reasons.
 
 ## Recurrence
@@ -35,8 +36,8 @@ same k can be reduced to one only when their retained boundary semantics agree.
 
 Use two primitive rolling cost buffers, checked long loss accumulation and compact
 predecessor counts. Recover host counts, reconstruct concrete geometry in stable
-order and validate the original-order prefix replay. Keep the external sequential
-incumbent and prefer it unless the declared objective improves.
+order and validate the original-order prefix replay before committing the complete
+proposal. No sequential comparison pass is performed.
 
 ## Optional hybrid: local DP over tentative placements
 
@@ -102,9 +103,9 @@ Crossing caps or nonseparable dependencies still select search/fallback.
 
 Charge vector additions, comparisons and copies to the work budget, including
 allocation initialization; count transitions separately. Check workspace size
-before allocation. On either guard, return the externally saved incumbent, not a
-partially filled DP result. The memory limit excludes the shared model, incumbent
-and baseline cache; report total process memory separately.
+before allocation. On budget exhaustion, discard the trial and run sequential
+FitCount. The memory limit excludes the shared model, engine/trial/planner and
+persistent fallback/cache; report total process memory separately.
 
 For catalogue length T, simple flat DP costs O(hosts*N^2*T); rolling values use
 O(N*T), traceback O(treeNodes*N). Never allocate hosts*N*T. Tree convolutions have

@@ -228,41 +228,7 @@ class BulkFitCountTest {
     }
 
     @Test
-    void mismatchedPinsAndWorkOrWorkspaceGuardsCommitTheSavedIncumbentOnly() throws Exception {
-        final var changed = model(
-                alloc(1, new int[]{1}, 4), alloc(2, new int[]{1}, 1),
-                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
-                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1).setPinnedHost(1)),
-                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1).setPinnedHost(2)),
-                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3));
-        final var state = new Engine(changed);
-        final var requests = new Request[]{new Request(3), new Request(4)};
-        try (final var algorithm = BulkFitCount.dynamicProgramming(state, 42, requests, 128, 1)) {
-            state.schedule(algorithm, requests);
-            assertEquals(1, state.placement(3).host());
-            assertEquals(2, state.placement(4).host());
-            assertEquals(1, algorithm.counters().get("fallback_replica_shape"));
-            assertEquals(2, state.revision());
-        }
-        final long[][] budgets = {{1, 64L << 20}, {137, 64L << 20}, {100_000_000, 1}};
-        for (final var budget : budgets) {
-            final var model = scalar(2, 2, null);
-            final var guarded = new Engine(model);
-            final var pending = requests(3, 2);
-            try (final var algorithm = BulkFitCount.dynamicProgramming(guarded, 42, pending, 128, 1,
-                    budget[0], budget[1])) {
-                guarded.schedule(algorithm, pending);
-                assertNotNull(guarded.placement(3));
-                assertNotNull(guarded.placement(4));
-                assertEquals(1, algorithm.counters().get(budget[1] == 1 ? "fallback_workspace_budget" : "fallback_work_budget"));
-                assertEquals(2, guarded.revision());
-                assertEquals(3, guarded.available(1, 1) + guarded.available(2, 1));
-            }
-        }
-    }
-
-    @Test
-    void countDpPublishesAStrictlyBetterCompleteBulkAndUpdatesTheRealFallback() throws Exception {
+    void countDpPublishesCompleteBulkAndUpdatesTheRealFallback() throws Exception {
         final var model = model(
                 alloc(1, new int[]{1, 2}, 12, 8), alloc(2, new int[]{1, 2}, 12, 12),
                 alloc(3, new int[]{1, 2}, 8, 5), alloc(4, new int[]{1, 2}, 1, 3),
@@ -286,7 +252,7 @@ class BulkFitCountTest {
         final var state = new Engine(model);
         try (final var algorithm = BulkFitCount.dynamicProgramming(state, 42, catalogue, 128, 256)) {
             state.schedule(algorithm, pending);
-            assertEquals(1, algorithm.counters().get("optimizer_wins"));
+            assertEquals(1, algorithm.counters().get("optimized_bulks"));
             assertEquals(4, state.revision());
             for (final var request : pending) {
                 assertEquals(2, state.placement(request.resource(0)).host());
@@ -340,7 +306,7 @@ class BulkFitCountTest {
     }
 
     @Test
-    void unguardedBulksReuseHostScoresAndKeepCacheBoundsOutOfPlacementDecisions() throws Exception {
+    void bulksReuseHostScoresAndKeepCacheBoundsOutOfPlacementDecisions() throws Exception {
         final var model = scalar(16, 32, null);
         final var pending = requests(17, 32);
         final var catalogue = new Request[]{pending[0], new Request(17, 18)};
@@ -354,7 +320,7 @@ class BulkFitCountTest {
         for (final int rows : new int[]{1, 256}) {
             final var state = new Engine(model);
             final var actual = new int[2 * pending.length];
-            try (final var fit = new BulkFitCount(state, 42, catalogue, 128, rows, false)) {
+            try (final var fit = new BulkFitCount(state, 42, catalogue, 128, rows)) {
                 for (int cycle = 0; cycle < 2; cycle++) {
                     state.schedule(fit, pending);
                     for (int index = 0; index < pending.length; index++) {
@@ -368,9 +334,7 @@ class BulkFitCountTest {
                     }
                     assertEquals(16 * 2.5, totalCpu(state));
                 }
-                assertEquals("disabled", fit.parameters().get("incumbent_guard"));
-                assertEquals(0, fit.counters().get("incumbent_searches"));
-                assertEquals(2, fit.counters().get("unguarded_bulks"));
+                assertEquals(2, fit.counters().get("optimized_bulks"));
                 assertTrue(fit.counters().get("marginal_evaluations") > 0);
                 assertTrue(fit.counters().get("marginal_cache_hits") > 0);
                 assertTrue(fit.plannerCalls() < sequentialCalls);
@@ -381,29 +345,21 @@ class BulkFitCountTest {
                 assertArrayEquals(expected, actual);
             }
         }
-        final var guarded = new Engine(model);
-        try (final var fit = new BulkFitCount(guarded, 42, catalogue, 128, 256)) {
-            guarded.schedule(fit, pending);
-            assertEquals(32, fit.counters().get("incumbent_searches"));
-            assertEquals(0, fit.counters().get("unguarded_bulks"));
-            assertTrue(fit.plannerCalls() >= sequentialCalls);
-        }
     }
 
     @Test
-    void unguardedBulksRespectChangingDomainLimitsAndFallBackWithoutTrialPlacements() throws Exception {
+    void bulksRespectChangingDomainLimitsAndFallBackWithoutTrialPlacements() throws Exception {
         final var model = scalar(8, 12, Limit.newBuilder().setDomain(3).setMax(2).setHard(true));
         final var pending = requests(9, 12);
         for (final boolean dp : new boolean[]{false, true}) {
             final var state = new Engine(model);
-            try (final var fit = dp ? BulkFitCount.dynamicProgramming(state, 42, pending, 128, 256, false)
-                    : new BulkFitCount(state, 42, pending, 128, 256, false)) {
+            try (final var fit = dp ? BulkFitCount.dynamicProgramming(state, 42, pending, 128, 256)
+                    : new BulkFitCount(state, 42, pending, 128, 256)) {
                 state.schedule(fit, pending);
                 assertEquals(4, state.revision());
                 assertEquals(4, state.groupCount(1));
                 assertEquals(16, totalCpu(state));
-                assertEquals(1, fit.counters().get("unguarded_bulks"));
-                assertEquals(0, fit.counters().get("incumbent_searches"));
+                assertEquals(1, fit.counters().get("optimized_bulks"));
             }
         }
         final var mismatch = model(
@@ -413,13 +369,13 @@ class BulkFitCountTest {
                 rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1).setPinnedHost(2)),
                 resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3));
         final var state = new Engine(mismatch);
-        try (final var fit = new BulkFitCount(state, 42, new Request[]{new Request(3)}, 128, 256, false)) {
+        try (final var fit = new BulkFitCount(state, 42, new Request[]{new Request(3)}, 128, 256)) {
             state.schedule(fit, new Request(3), new Request(4));
             assertEquals(1, state.placement(3).host());
             assertEquals(2, state.placement(4).host());
             assertEquals(2, state.revision());
             assertEquals(1, fit.counters().get("fallback_replica_shape"));
-            assertEquals(0, fit.counters().get("unguarded_bulks"));
+            assertEquals(0, fit.counters().get("optimized_bulks"));
         }
         final var limitedModel = scalar(2, 2, null);
         final var limitedRequests = requests(3, 2);
@@ -427,15 +383,15 @@ class BulkFitCountTest {
         try (final var fit = new FitCount(sequential, 42, limitedRequests, 128, 1)) {
             sequential.schedule(fit, limitedRequests);
         }
-        for (final long work : new long[]{1, 64}) {
+        for (final var budget : new long[][]{{1, 64L << 20}, {64, 64L << 20}, {100_000_000, 1}}) {
             final var limited = new Engine(limitedModel);
             try (final var fit = BulkFitCount.dynamicProgramming(limited, 42, limitedRequests, 128, 1,
-                    false, work, 64L << 20)) {
+                    budget[0], budget[1])) {
                 limited.schedule(fit, limitedRequests);
                 assertEquals(2, limited.revision());
                 assertEquals(3, totalCpu(limited));
-                assertEquals(1, fit.counters().get("fallback_work_budget"));
-                assertEquals(0, fit.counters().get("unguarded_bulks"));
+                assertEquals(1, fit.counters().get(budget[1] == 1 ? "fallback_workspace_budget" : "fallback_work_budget"));
+                assertEquals(0, fit.counters().get("optimized_bulks"));
                 for (final var request : limitedRequests) {
                     final int resource = request.resource(0);
                     assertEquals(sequential.placement(resource).host(), limited.placement(resource).host());

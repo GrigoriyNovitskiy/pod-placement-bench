@@ -66,10 +66,10 @@ when a unit contains exactly one POD. It does not establish interchangeability:
 check allocation/geometry, masks, pins, relative links, group stencils and external
 dependencies. Never manufacture a burst by reading the hidden replay suffix.
 
-On a structural-gate failure or declared work-budget exhaustion, use the saved
-FitCount result and report the reason and coverage. This is not permission to
-remove unsupported constraints. Preserve the incumbent outside the optimizer;
-check proposed replacements by isolated prefix replay before canonical commit.
+On a structural-gate failure or declared work-budget exhaustion, bulk/DP discard
+the detached trial and run sequential FitCount, reporting the reason and coverage.
+Unsupported constraints must remain enforced. Check proposed replacements by
+isolated prefix replay before canonical commit.
 Unexpected exceptions, cancellation, invalid models, native failures and watchdog
 expiry fail the run. They are not ordinary declines. A bound for a restricted
 candidate pool is not a global bound for the full placement problem.
@@ -109,8 +109,8 @@ modes):
 | `geometric-best-fit` | [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java); [specification](../geometric-best-fit/README.md) |
 | `fgd` | [Fgd](../../src/main/java/one/cloud/benchmark/algorithms/fgd/Fgd.java), GPU fragmentation |
 | `cpu-ram-fgd` | The same class, `Fgd.cpuRam` |
-| `bulk-fitcount` | `BulkFitCount`, frozen-order greedy and sequential-incumbent guard |
-| `dp` | `BulkFitCount.dynamicProgramming`, guarded count/tree selection |
+| `bulk-fitcount` | `BulkFitCount`, frozen-order greedy selection |
+| `dp` | `BulkFitCount.dynamicProgramming`, count/tree selection |
 | `rollout` | `Rollout`, explicit prior and common isolated continuation paths |
 | `catboost-top1` / `catboost-topn-fitcount` | `CatBoostTop1` / `CatBoostTopNFitCount`, imitation model |
 | `catboost-rollout-top1` / `catboost-rollout-topn-fitcount` | `CatBoostRolloutTop1` / `CatBoostRolloutTopNFitCount`, trained rollout model |
