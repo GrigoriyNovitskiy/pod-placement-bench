@@ -27,11 +27,51 @@ import static one.cloud.benchmark.testsupport.TestModel.trace;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatasetRunnerTest {
+    @Test
+    void benchmarkContinuesAfterDeclinesAndMeasuresTheSameReplayWithoutProbes() throws Exception {
+        final var scenario = Scenario.from(trace(new Record[]{
+                alloc(1, new int[]{1}, 100), alloc(2, new int[]{1}, 200), alloc(3, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.HOST).setFlags(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 2), resource(3, 2, 3), resource(4, 3, 3)},
+                3, 4, -4, -3));
+        final var options = new BenchmarkExperiment.Options(0, 0, 10, 50, 42);
+        final var quality = BenchmarkExperiment.quality(scenario, options, FitCount::new);
+        final var measured = BenchmarkExperiment.measure(scenario, options, FitCount::new);
+        assertEquals(measured.counts(), quality.counts());
+        assertTrue(quality.counts().complete());
+        assertEquals(4, quality.counts().processedOperations());
+        assertEquals(2, measured.scheduleWindows().count());
+        assertTrue(measured.eventsPerSecond() > 0);
+        assertEquals(1, quality.counts().admittedUnits());
+        assertEquals(1, quality.counts().declinedUnits());
+        assertEquals(1, quality.counts().committedRemovals());
+        assertEquals(1, quality.counts().skippedRemovals());
+        assertEquals(0, quality.checkpoints().getFirst().admittedActiveUnits());
+        final var checkpoint = quality.checkpoints().getLast();
+        assertEquals(201.0, checkpoint.offeredActiveDemand().get("VCORES"));
+        assertEquals(100.0, checkpoint.utilization().get("VCORES").capacity());
+        assertEquals(99.0, checkpoint.utilization().get("VCORES").available());
+        assertNull(checkpoint.utilization().get("MEM_MIB").fraction());
+        assertEquals(0, checkpoint.holeFilling().getFirst().additionalCopies());
+        assertEquals(10, checkpoint.holeFilling().getLast().additionalCopies());
+        assertEquals(1, checkpoint.holeFilling().getLast().hostsAtCopyCap());
+        final var inflation = quality.inflation();
+        assertEquals(2, inflation.operation());
+        assertEquals(50, inflation.attemptedUnits());
+        assertEquals(50, inflation.admittedUnits() + inflation.declinedUnits());
+        assertTrue(inflation.admittedAfterFirstDecline() > 0);
+        assertEquals(99.0 - inflation.admittedUnits(), inflation.utilizationAfter().get("VCORES").available());
+        assertEquals(quality, BenchmarkExperiment.quality(scenario, options, FitCount::new));
+    }
+
     @Test
     void measuresWholeAnnouncedWindowsAndReportsUnitsLogicalWorkAndPrefixCuts() throws Exception {
         final var scenario = Scenario.from(trace(new Record[]{
@@ -124,6 +164,12 @@ class DatasetRunnerTest {
             assertArrayEquals(first.checkpoints().get(index).fitCounts(), second.checkpoints().get(index).fitCounts());
         }
         assertTrue(first.plannerCalls() > 0);
+        final var report = BenchmarkExperiment.quality(scenario, new BenchmarkExperiment.Options(0, 0, 10, 0, 42),
+                Fgd::new);
+        final var gpus = report.checkpoints().getLast().utilization().get("NVIDIA_GPUS");
+        assertEquals(2.0, gpus.capacity());
+        assertEquals(1.5, gpus.usedOrUnavailable());
+        assertEquals(.75, gpus.fraction());
     }
 
     @Test
@@ -249,6 +295,11 @@ class DatasetRunnerTest {
         assertEquals(0, result.removal().count());
         assertEquals(2, result.checkpoints().getFirst().logicalUnits());
         assertEquals(0, result.checkpoints().getFirst().activeUnits());
+        final var inflation = BenchmarkExperiment.quality(scenario, new BenchmarkExperiment.Options(0, 0, 10, 3, 42),
+                FitCount::new).inflation();
+        assertEquals(1, inflation.eligibleTemplates());
+        assertEquals(1, inflation.excludedTemplates());
+        assertEquals(3, inflation.declinedUnits());
     }
 
     @Test

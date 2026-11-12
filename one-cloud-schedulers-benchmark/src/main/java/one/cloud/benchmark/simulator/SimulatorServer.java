@@ -18,8 +18,11 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import com.google.gson.Gson;
@@ -34,6 +37,7 @@ import com.sun.net.httpserver.HttpServer;
 
 import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.dataset.Dataset;
+import one.cloud.benchmark.runner.BenchmarkExperiment;
 import one.cloud.benchmark.runner.Scenario;
 
 public final class SimulatorServer implements AutoCloseable {
@@ -44,8 +48,26 @@ public final class SimulatorServer implements AutoCloseable {
             "/", "index.html", "/app.js", "app.js", "/views.js", "views.js", "/style.css", "style.css");
     private final HttpServer server;
     private final ExecutorService owner = Executors.newSingleThreadExecutor();
+    private final ExecutorService benchmarkWorker = Executors.newSingleThreadExecutor(
+            Thread.ofPlatform().daemon().name("placement-benchmark").factory());
     private SimulatorSession session;
     private ManualScenario.Config config;
+    private Scenario datasetScenario;
+    private BenchmarkJob benchmarkJob;
+    private long nextBenchmarkId;
+
+    private record BenchmarkJob(String id, String source, BenchmarkExperiment.ScenarioInfo scenario,
+            BenchmarkExperiment.Options options, Future<List<BenchmarkLane>> result) {
+    }
+
+    private record BenchmarkLane(AlgorithmRegistry.Settings algorithm, BenchmarkExperiment.Quality quality,
+            String error) {
+    }
+
+    private record BenchmarkStatus(int formatVersion, String measurement, String id, String status, String source,
+            BenchmarkExperiment.ScenarioInfo scenario, BenchmarkExperiment.Options options, List<BenchmarkLane> lanes,
+            String error) {
+    }
 
     public SimulatorServer(int port) throws IOException {
         if (port < 0 || port > 65535) {
@@ -125,7 +147,7 @@ public final class SimulatorServer implements AutoCloseable {
                 }
                 final boolean mutation = switch (path) {
                     case "/api/manual", "/api/dataset", "/api/step", "/api/reset", "/api/probes" -> true;
-                    case "/api/algorithms" -> exchange.getRequestMethod().equals("POST");
+                    case "/api/algorithms", "/api/benchmark" -> exchange.getRequestMethod().equals("POST");
                     case "/api/state", "/api/inspect", "/api/scenario" -> false;
                     default -> throw new RequestFailure(404, "Unknown API endpoint");
                 };
@@ -134,7 +156,7 @@ public final class SimulatorServer implements AutoCloseable {
                     validateMutation(exchange);
                 }
                 final Object result = dispatch(exchange, path);
-                json(exchange, 200, result);
+                json(exchange, path.equals("/api/benchmark") && mutation ? 202 : 200, result);
             } catch (RequestFailure failure) {
                 json(exchange, failure.status, Map.of("error", failure.getMessage()));
             } catch (IllegalArgumentException | IllegalStateException | JsonParseException | ClassCastException
@@ -183,8 +205,98 @@ public final class SimulatorServer implements AutoCloseable {
                 body(exchange);
                 yield current().probes();
             }
+            case "/api/benchmark" -> exchange.getRequestMethod().equals("POST")
+                    ? startBenchmark(body(exchange)) : benchmarkStatus(query.get("id"));
             default -> throw new RequestFailure(404, "Unknown API endpoint");
         };
+    }
+
+    private BenchmarkStatus startBenchmark(JsonObject body) throws Exception {
+        if (benchmarkJob != null && !benchmarkJob.result.isDone()) {
+            throw new RequestFailure(409, "A benchmark is already running");
+        }
+        final var keys = Set.of("scenarioDigest", "algorithms", "maxOperations", "catalogueLimit", "probeCap",
+                "inflationAttempts", "inflationSeed", "bulkSize");
+        for (final var key : body.keySet()) {
+            if (!keys.contains(key)) {
+                throw new IllegalArgumentException("Unknown benchmark option: " + key);
+            }
+        }
+        final var current = current();
+        final var input = current.input();
+        if (body.has("scenarioDigest")) {
+            final var digest = body.get("scenarioDigest");
+            if (!digest.isJsonPrimitive() || !digest.getAsJsonPrimitive().isString()) {
+                throw new IllegalArgumentException("scenarioDigest must be a string");
+            }
+            if (!input.digest().equals(digest.getAsString())) {
+                throw new RequestFailure(409, "The simulator scenario has changed");
+            }
+        }
+        final int bulkSize = integer(body, "bulkSize", 1, 1, 100);
+        final var scenario = (datasetScenario != null ? datasetScenario
+                : Scenario.fromAtomicEvents(input.model(), input.requests(), input.events(), input.catalogue(), input.digest()))
+                .withServiceBursts(bulkSize);
+        final var options = new BenchmarkExperiment.Options(
+                integer(body, "maxOperations", 0, 0, Integer.MAX_VALUE),
+                integer(body, "catalogueLimit", 32, 0, Integer.MAX_VALUE),
+                integer(body, "probeCap", 10, 1, 1000),
+                integer(body, "inflationAttempts", 1000, 0, 10000),
+                integer(body, "inflationSeed", 42, Integer.MIN_VALUE, Integer.MAX_VALUE));
+        final var algorithms = body.has("algorithms") ? settings(body.getAsJsonArray("algorithms"))
+                : current.settings();
+        final var selected = algorithms.stream()
+                .map(setting -> new BenchmarkExperiment.Algorithm(setting.id(), setting.parameters(), null)
+                        .settings(null, bulkSize))
+                .toList();
+        final var result = benchmarkWorker.submit(() -> {
+            final var lanes = new ArrayList<BenchmarkLane>();
+            for (final var setting : selected) {
+                try {
+                    final var report = BenchmarkExperiment.quality(scenario, options, BenchmarkExperiment.factory(setting, null));
+                    lanes.add(new BenchmarkLane(setting, report, null));
+                } catch (InterruptedException interrupted) {
+                    throw interrupted;
+                } catch (Exception | LinkageError failure) {
+                    lanes.add(new BenchmarkLane(setting, null, failure.getMessage() == null
+                            ? failure.getClass().getSimpleName() : failure.getMessage()));
+                }
+            }
+            return List.copyOf(lanes);
+        });
+        final var job = new BenchmarkJob(Long.toString(++nextBenchmarkId), input.source(),
+                BenchmarkExperiment.ScenarioInfo.from(scenario), options, result);
+        benchmarkJob = job;
+        return benchmarkStatus(job, "running", List.of(), null);
+    }
+
+    private BenchmarkStatus benchmarkStatus(String id) throws Exception {
+        final var job = benchmarkJob;
+        if (id != null && (job == null || !id.equals(job.id))) {
+            throw new RequestFailure(404, "Benchmark job not found");
+        }
+        if (job == null) {
+            return benchmarkStatus(null, "idle", List.of(), null);
+        }
+        if (!job.result.isDone()) {
+            return benchmarkStatus(job, "running", List.of(), null);
+        }
+        final List<BenchmarkLane> lanes;
+        try {
+            lanes = job.result.get();
+        } catch (ExecutionException failure) {
+            return benchmarkStatus(job, "failed", List.of(), message(failure.getCause()));
+        }
+        final long successful = lanes.stream().filter(lane -> lane.error == null).count();
+        return benchmarkStatus(job, successful == lanes.size() ? "complete" : successful == 0 ? "failed" : "partial",
+                lanes, null);
+    }
+
+    private static BenchmarkStatus benchmarkStatus(BenchmarkJob job, String status, List<BenchmarkLane> lanes,
+            String error) {
+        return new BenchmarkStatus(BenchmarkExperiment.FORMAT_VERSION, "quality-replay", job == null ? null : job.id,
+                status, job == null ? null : job.source, job == null ? null : job.scenario,
+                job == null ? null : job.options, lanes, error);
     }
 
     private SimulatorSession current() throws Exception {
@@ -225,7 +337,7 @@ public final class SimulatorServer implements AutoCloseable {
         final int cursor = integer(body, "cursor", 0, 0, input.events().length);
         final var selected = body.has("algorithms") ? settings(body.getAsJsonArray("algorithms"))
                 : session == null ? defaults() : session.settings();
-        replace(input, selected, cursor, nextConfig);
+        replace(input, selected, cursor, nextConfig, null);
         return state(query);
     }
 
@@ -254,13 +366,13 @@ public final class SimulatorServer implements AutoCloseable {
             if (operationBytes == 0) {
                 throw new IllegalArgumentException("Both snapshot.pb and operations.pb are required");
             }
-            final ScenarioInput input;
+            final Scenario scenario;
             try {
-                input = ScenarioInput.from(Scenario.from(Dataset.load(snapshot, operations)));
+                scenario = Scenario.from(Dataset.load(snapshot, operations));
             } catch (IOException failure) {
                 throw new IllegalArgumentException("Invalid dataset: " + failure.getMessage(), failure);
             }
-            replace(input, session == null ? defaults() : session.settings(), 0, null);
+            replace(ScenarioInput.from(scenario), session == null ? defaults() : session.settings(), 0, null, scenario);
             return state(query);
         } finally {
             Files.deleteIfExists(snapshot);
@@ -270,7 +382,7 @@ public final class SimulatorServer implements AutoCloseable {
     }
 
     private void replace(ScenarioInput input, List<AlgorithmRegistry.Settings> selected,
-            int cursor, ManualScenario.Config nextConfig) throws Exception {
+            int cursor, ManualScenario.Config nextConfig, Scenario nextDataset) throws Exception {
         final var next = new SimulatorSession(input, selected);
         try {
             for (int remaining = cursor; remaining > 0; remaining -= Math.min(remaining, 10000)) {
@@ -283,6 +395,7 @@ public final class SimulatorServer implements AutoCloseable {
         final var previous = session;
         session = next;
         config = nextConfig;
+        datasetScenario = nextDataset;
         if (previous != null) {
             previous.close();
         }
@@ -476,13 +589,14 @@ public final class SimulatorServer implements AutoCloseable {
         exchange.getResponseBody().write(bytes);
     }
 
-    private static String message(Exception failure) {
+    private static String message(Throwable failure) {
         return failure.getMessage() == null ? failure.getClass().getSimpleName() : failure.getMessage();
     }
 
     @Override
     public void close() throws Exception {
         server.stop(0);
+        benchmarkWorker.shutdownNow();
         try {
             owner.submit(() -> {
                 if (session != null) {

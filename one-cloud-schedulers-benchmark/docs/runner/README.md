@@ -73,10 +73,8 @@ catalogue. Limits, catalogue/probe identity, source/scenario digests, seed, Java
 version and outcome counts accompany timing output. Full-catalogue fitcount can
 have a substantial cold first operation; this cost remains in operation timing.
 
-The built-ins are fitcount and normalized residual L2 geometric best-fit, following
-the separate [geometric specification](../geometric-best-fit/README.md). The runner
-and CLI were independently checked before the second algorithm was added. No JMH
-fixtures, automatic parameter sweep, LP solver or ML backend are introduced here.
+The [algorithm registry](../algorithms/README.md) lists the available strategies.
+For warmed measurements and parameter sweeps, use the experiment matrix below.
 
 ## Announced service bursts
 
@@ -95,3 +93,115 @@ parameter digest and outcome/work/fallback counters.
 
 See [bulk, DP and rollout usage](../algorithms/IMPLEMENTATION.md) for the distinct
 online and announced-window profiles and explicit forecast manifest.
+
+## Experiment matrix
+
+Use `run` to debug one replay. Use `benchmark` for a controlled series:
+
+```sh
+./gradlew :one-cloud-schedulers-benchmark:installDist
+cp one-cloud-schedulers-benchmark/docs/runner/benchmark.example.json ./local-benchmark.json
+# Edit the dataset paths before running (relative paths resolve against the manifest).
+./placement-bench benchmark --config ./local-benchmark.json > ./benchmark-results.json
+```
+
+The [example manifest](benchmark.example.json) runs the same scenario for each
+dataset × algorithm configuration × seed. Each dataset directory needs
+`snapshot.pb` and `operations.pb`. Algorithm IDs and typed parameters come
+from `./placement-bench algorithms`. For Rollout, set `rolloutPrior` to the
+compatible file on the algorithm object. It is also relative to the manifest.
+Omit `seeds` to keep registry defaults and explicit algorithm seeds. If supplied,
+the list overrides the algorithm seed where that parameter exists; algorithms
+without it are run once per distinct configuration.
+
+| Option | Default | Effect |
+| --- | --- | --- |
+| `forks`, `warmups`, `measurements` | 2, 1, 3 | JVMs per case; full warmup and timed replays in each JVM |
+| `timeoutSeconds` | 3600 | Timeout for each worker, including startup, loading and warmup |
+| `maxOperations` | 0 | Normalized event prefix; 0 means the complete replay |
+| `catalogueLimit` | 0 | Deterministic sample for the algorithm and independent probes; 0 means all |
+| `gpuModel`, `bulkSize` | devices20, 1 | Common GPU model and announcement window limit |
+| `probeCap` | 10 | Maximum copies attempted per host and probe profile |
+| `inflationAttempts`, `inflationSeed` | 1000, 42 | Fixed mixed offer count (0 disables it) and independent seed |
+
+For a smoke run use a short prefix, `catalogueLimit: 32`, one fork and one
+measurement. Keep full runs for comparisons of admission under pressure. A
+shortened catalogue is part of the experiment; it can change algorithms'
+decisions. A run with `warmups: 0` measures cold JVMs. Long or variable runs
+can need more than one warmup. Choose fork and warmup counts after inspecting
+the raw samples, and run on an otherwise idle machine. Run separate manifests
+for online vs. announced-window scheduling and compare within each mode.
+
+### What is timed
+
+Workers run serially. A worker loads and compiles the scenario once, then each
+warmup and measurement creates a new engine, algorithm, RNG and caches. This
+warms the JVM while preserving the cost of populating empty algorithm caches
+in each replay. Warmup results are discarded. Process startup, input work,
+algorithm initialization, and all quality probes are outside replay timing.
+Replay timing includes event bookkeeping, scheduling, removals and declined
+delete no-ops; initialization is reported separately. Throughput is normalized
+events per replay second. Create latency includes planning, validation, commit
+and notifications. With `bulkSize > 1` latency is per announced window, not
+per atomic unit. Successful delete latency is reported separately.
+
+The report contains individual measurements under `cases[].forks` and
+min/median/max under `cases[].timing`. The summary p95/p99 values are
+distributions of the per-replay percentiles. There is no pooled percentile.
+Timeouts and backend errors are recorded per fork or quality replay; they do
+not count as refused requests. The CLI proceeds to other cases, emits JSON on
+stdout and returns exit status 1 if any case failed. Progress goes to stderr.
+Matching input hashes, scenario, options and resolved parameters identify a
+comparison. A wall-clock-limited solver may yield different outcomes in timed
+and quality replays; use the checksums and counts from each replay separately.
+
+For a quick comparison of counts and latency, extract one row per case:
+
+```sh
+jq -r '.cases[] | [(.dataset | split("/")[-1]), .algorithm.id,
+  .quality.counts.admittedUnits, .quality.counts.declinedUnits,
+  (.timing.scheduleP95Nanos.median | if . == null then null else . / 1000000 end)] | @tsv' benchmark-results.json
+```
+
+The last column is the median per-replay p95 in milliseconds (blank if there are
+no samples); check fork errors and completion status before interpreting the table.
+
+### What quality measures
+
+A separate replay scans the whole selected trace, including creates after
+refusals. Deletes of refused units remain no-ops. Counts distinguish atomic
+units (a pod and its shards may be one unit) from their individual resources.
+The report also gives requested/admitted logical resource vectors and refusals
+by allocation profile. Those vectors measure accumulated work across creates;
+they are not instantaneous utilization.
+
+| Report field | Interpretation |
+| --- | --- |
+| `checkpoints[].utilization` | Allocation/availability from the real engine ledger, per resource dimension, divided by the capacity of enabled inventory. Compare at the same event boundary and read alongside offered and admitted counts. |
+| `checkpoints[].holeFilling` | How many additional copies of each of up to 16 individual profiles fit independently, using the common greedy physical planner. It tests NUMA, disk and GPU geometry, ignoring placement masks, group dependencies and other nonphysical restrictions. A nonzero `hostsAtCopyCap` means the count might be limited by the per-host cap. Do not sum profiles. |
+| `inflation` | Starting at the first create-phase end (or the selected prefix if earlier), feed a fixed seeded mix into an isolated copy of the occupied engine. A common first-fit placer uses the normal constraints, commits every feasible offer and keeps going after a decline. Report attempts, admits, admits after the first refusal, and final resource utilization. |
+
+Checkpoint boundaries are determined by the shared event stream: up to three
+points around the quarters of the first fill, rounded up to complete announcement
+windows, up to 32 create-phase ends and an occupied truncated prefix end, if needed.
+The reported offered demand uses original requested quantities and can exceed
+capacity. The physical denominator uses host ledger values for host dimensions
+and enabled disk ledger values for device extents/spindles/IOPS. NUMA capacities
+are not added to host capacities. Host media and device rows are alternate
+views; do not sum them. A disk mode switch can make capacity unavailable
+without consuming every displayed unit. Zero capacity gives a null fraction;
+unbounded or unknown values give null quantities.
+
+Inflation samples whole templates uniformly from the declared, unsampled
+catalogue, retaining its shape frequencies. Clones have fresh IDs and groups,
+preserve internal links, masks and pinning, and exclude templates with external
+dependencies. `eligibleTemplates`, `excludedTemplates` and `sequenceChecksum`
+make this restriction and the offered sequence visible. The same sequence is
+offered to every algorithm on a dataset. Inflation measures the room left by
+the existing placement under a common follow-up policy. A fixed budget gives
+a lower bound on how much more can fit; it does not prove global saturation.
+Check both admission and remaining room: a strategy that admitted fewer
+original pods may trivially leave more room.
+
+The [simulator benchmark API](../simulator.md#benchmark-api) exposes the same
+quality report for the current scenario. Use the CLI for controlled timings.

@@ -71,7 +71,18 @@ public final class DatasetRunner {
     }
 
     public static Result run(Scenario scenario, Options options, Factory factory) throws Exception {
-        return new Replay(Objects.requireNonNull(scenario), Objects.requireNonNull(options))
+        return run(scenario, options, factory, scenario.checkpoints, null);
+    }
+
+    @FunctionalInterface
+    interface CheckpointObserver {
+        void observe(Engine engine, Checkpoint checkpoint, Request[] probes, int[] hostsAtCap,
+                boolean[] desired) throws Exception;
+    }
+
+    static Result run(Scenario scenario, Options options, Factory factory, int[] qualityOperations,
+            CheckpointObserver observer) throws Exception {
+        return new Replay(Objects.requireNonNull(scenario), Objects.requireNonNull(options), qualityOperations, observer)
                 .run(Objects.requireNonNull(factory));
     }
 
@@ -81,6 +92,8 @@ public final class DatasetRunner {
         private final Request[] catalogue, probes;
         private final long catalogueChecksum, probeChecksum;
         private final int limit;
+        private final int[] qualityOperations;
+        private final CheckpointObserver observer;
         private final boolean[] desired, admitted;
         private final int[] hostByResource, hostUse;
         private final long[] scheduleTimes, removeTimes;
@@ -100,15 +113,17 @@ public final class DatasetRunner {
         private long scheduleNanos, removeNanos, qualityNanos;
         private long checksum = HASH_START, sampledPeakHeap = heapBefore;
 
-        private Replay(Scenario scenario, Options options) {
+        private Replay(Scenario scenario, Options options, int[] qualityOperations, CheckpointObserver observer) {
             this.scenario = scenario;
             this.options = options;
+            this.qualityOperations = qualityOperations;
+            this.observer = observer;
             limit = options.eventLimit == 0 ? scenario.events.length : Math.min(options.eventLimit, scenario.events.length);
             if (8L * limit > Runtime.getRuntime().maxMemory() / 4) {
                 throw new IllegalArgumentException("Timing buffers exceed a quarter of the configured heap");
             }
-            catalogue = sample(scenario.requests, options.catalogueLimit);
-            probes = sample(catalogue, 16);
+            catalogue = sample(scenario.catalogue, options.catalogueLimit);
+            probes = qualityOperations != null ? sample(catalogue, 16) : new Request[0];
             catalogueChecksum = requestChecksum(catalogue);
             probeChecksum = requestChecksum(probes);
             desired = new boolean[scenario.requests.length];
@@ -137,6 +152,9 @@ public final class DatasetRunner {
                 }
                 int checkpoint = 0;
                 for (int index = 0; index < limit;) {
+                    if (observer != null && Thread.currentThread().isInterrupted()) {
+                        throw new InterruptedException("Benchmark interrupted");
+                    }
                     final int event = scenario.events[index];
                     if (event == 0 || event == Integer.MIN_VALUE) {
                         throw new IllegalArgumentException("Invalid scenario event");
@@ -157,13 +175,14 @@ public final class DatasetRunner {
                         remove(unit, request);
                         completed = index + 1;
                     }
-                    if (checkpoint < scenario.checkpoints.length && scenario.checkpoints[checkpoint] == completed) {
+                    if (qualityOperations != null && checkpoint < qualityOperations.length
+                            && qualityOperations[checkpoint] == completed) {
                         checkpoint(completed);
                         checkpoint++;
                     }
                     index = completed;
                 }
-                if (limit < scenario.events.length && logicalUnits > 0
+                if (qualityOperations != null && limit < scenario.events.length && logicalUnits > 0
                         && (checkpoints.isEmpty() || checkpoints.getLast().operation != limit)) {
                     checkpoint(limit);
                 }
@@ -176,7 +195,9 @@ public final class DatasetRunner {
                         peakActiveUnits, peakActiveResources, peakUsedHosts, algorithm.plannerCalls(), checksum,
                         heapBefore, sampledPeakHeap, latency(scheduleTimes, scheduleCount, scheduleNanos),
                         latency(removeTimes, removeCount, removeNanos), List.copyOf(checkpoints),
-                        attemptedUnits, truncatedWindow, Map.copyOf(algorithm.parameters()), Map.copyOf(algorithm.counters()),
+                        attemptedUnits, truncatedWindow,
+                        qualityOperations == null ? Map.of() : Map.copyOf(algorithm.parameters()),
+                        qualityOperations == null ? Map.of() : Map.copyOf(algorithm.counters()),
                         requestedLogical, admittedLogical, refusedResourcesByAllocation);
             }
         }
@@ -235,7 +256,9 @@ public final class DatasetRunner {
                 if ((plan != null) != placed) {
                     throw new IllegalStateException("Engine committed a partial scheduling unit");
                 }
-                logical(resource, placed);
+                if (qualityOperations != null) {
+                    logical(resource, placed);
+                }
                 if (placed) {
                     hostByResource[resource] = plan.host();
                     if (hostUse[plan.host()]++ == 0) {
@@ -313,23 +336,32 @@ public final class DatasetRunner {
             activeResources -= request.size();
         }
 
-        private void checkpoint(int operation) {
+        private void checkpoint(int operation) throws Exception {
             final long start = System.nanoTime();
             if (probePlanner == null && probes.length != 0) {
                 probePlanner = new GreedyPlanner(engine);
             }
             final long[] fitCounts = new long[probes.length];
+            final int[] hostsAtCap = observer == null ? null : new int[probes.length];
             for (int index = 0; index < probes.length; index++) {
                 for (int host = 1; host <= scenario.model.hostCount; host++) {
-                    fitCounts[index] = Math.addExact(fitCounts[index], probePlanner.fitCount(probes[index], host, options.probeCap));
+                    final int fit = probePlanner.fitCount(probes[index], host, options.probeCap);
+                    fitCounts[index] = Math.addExact(fitCounts[index], fit);
+                    if (hostsAtCap != null && fit == options.probeCap) {
+                        hostsAtCap[index]++;
+                    }
                 }
             }
             final long elapsed = System.nanoTime() - start;
             qualityNanos = Math.addExact(qualityNanos, elapsed);
             final long heap = heapUsed();
             sampledPeakHeap = Math.max(sampledPeakHeap, heap);
-            checkpoints.add(new Checkpoint(operation, logicalUnits, logicalResources, activeUnits,
-                    activeResources, usedHosts, fitCounts, elapsed, heap));
+            final var checkpoint = new Checkpoint(operation, logicalUnits, logicalResources, activeUnits,
+                    activeResources, usedHosts, fitCounts, elapsed, heap);
+            checkpoints.add(checkpoint);
+            if (observer != null) {
+                observer.observe(engine, checkpoint, probes, hostsAtCap, desired);
+            }
         }
     }
 

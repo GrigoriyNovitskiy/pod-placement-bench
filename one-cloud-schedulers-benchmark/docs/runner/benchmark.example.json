@@ -1,0 +1,20 @@
+{
+  "datasets": ["./dataset-08", "./dataset-07"],
+  "algorithms": [
+    {"id": "fitcount", "parameters": {"fitCap": 10, "cacheRows": 64}},
+    {"id": "k8s-balanced-allocation"},
+    {"id": "fgd"}
+  ],
+  "seeds": [42, 44],
+  "gpuModel": "devices20",
+  "bulkSize": 1,
+  "catalogueLimit": 0,
+  "maxOperations": 0,
+  "forks": 2,
+  "warmups": 1,
+  "measurements": 3,
+  "timeoutSeconds": 3600,
+  "probeCap": 10,
+  "inflationAttempts": 1000,
+  "inflationSeed": 42
+}

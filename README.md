@@ -189,3 +189,4 @@ register(FirstFit.definition());
 - [Движок и учёт ресурсов](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/engine).
 - [Симулятор и HTTP API](one-cloud-schedulers-benchmark/src/main/java/one/cloud/benchmark/simulator).
 - [Нормализация и воспроизведение датасетов](one-cloud-schedulers-benchmark/docs/runner/README.md).
+- [Серия бенчмарков: конфиг, прогрев JVM и метрики](one-cloud-schedulers-benchmark/docs/runner/README.md#experiment-matrix).

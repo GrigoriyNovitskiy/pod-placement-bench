@@ -34,9 +34,11 @@ public final class RunnerCli {
     private static final String USAGE = """
             Usage: placement-bench simulator [--port N] [--no-open]
                    placement-bench algorithms [ID]
+                   placement-bench benchmark --config FILE
                    placement-bench run --dataset DIR --algorithm ID [options]
               simulator             Start the interactive UI on localhost (default port: 8765)
               algorithms [ID]       Show parameter types, defaults, ranges and runnable examples
+              benchmark             Run an experiment matrix in warmed, isolated JVMs
               DIR contains snapshot.pb and operations.pb.
               --param KEY=VALUE      Algorithm parameter; repeat for different keys
               --probe-cap N          Quality-probe copy cap, independent of algorithm parameters (default: 10)
@@ -66,6 +68,12 @@ public final class RunnerCli {
     }
 
     public static int run(String[] arguments, PrintStream output, PrintStream errors) {
+        if (arguments.length > 0 && arguments[0].equals("benchmark")) {
+            return BenchmarkCli.run(arguments, output, errors);
+        }
+        if (arguments.length == 3 && arguments[0].equals("benchmark-worker")) {
+            return BenchmarkCli.worker(arguments, errors);
+        }
         if (arguments.length > 0 && arguments[0].equals("simulator")) {
             if (arguments.length == 2 && arguments[1].equals("--help")) {
                 output.print(SIMULATOR_USAGE);
@@ -196,7 +204,7 @@ public final class RunnerCli {
 
     private static Arguments parse(String[] arguments) {
         if (arguments.length == 0 || !arguments[0].equals("run")) {
-            throw new IllegalArgumentException("Choose a command: simulator, algorithms or run");
+            throw new IllegalArgumentException("Choose a command: simulator, algorithms, benchmark or run");
         }
         Path dataset = null;
         String algorithm = null;
@@ -298,7 +306,7 @@ public final class RunnerCli {
         throw new IllegalArgumentException(flag + " must be a positive integer");
     }
 
-    private static String sha256(Path path) throws IOException, NoSuchAlgorithmException {
+    static String sha256(Path path) throws IOException, NoSuchAlgorithmException {
         final var digest = MessageDigest.getInstance("SHA-256");
         try (final var input = new DigestInputStream(Files.newInputStream(path), digest)) {
             input.transferTo(OutputStream.nullOutputStream());

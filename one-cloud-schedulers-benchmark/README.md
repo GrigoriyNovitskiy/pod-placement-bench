@@ -47,6 +47,10 @@ source changes. `./placement-bench --help` lists all commands. For development,
 See [the simulator guide](docs/simulator.md) for inputs, metrics and extending the
 algorithm registry. Interactive timings are diagnostic, not a controlled benchmark.
 
+For comparisons across datasets, use `./placement-bench benchmark --config FILE`.
+The [experiment guide](docs/runner/README.md#experiment-matrix) describes the
+manifest, isolated JVM warmups, and utilization and headroom metrics.
+
 ## Run a dataset
 
 A dataset directory contains `snapshot.pb` and `operations.pb`. Run the CLI from

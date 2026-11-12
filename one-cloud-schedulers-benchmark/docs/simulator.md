@@ -229,3 +229,37 @@ and charting dependencies without improving this local browser workflow.
 Engine thread affinity; exact Request identity on deletion; catalogue changes during
 append; host/device resource double counting; stale browser responses after reset or
 algorithm changes. Validate each with targeted session/API/browser checks.
+
+## Benchmark API
+
+`POST /api/benchmark` starts a background quality replay on the current
+manual scenario or uploaded dataset. Send the same `X-Placement-UI: 1` header
+as for other mutations. By default it compares the selected lanes. Optional
+`algorithms` uses the existing algorithm-settings format. It snapshots the
+scenario and settings at submission, runs from event zero and does not move
+the interactive cursor or change its engine.
+
+```js
+const started = await fetch("/api/benchmark", {
+    method: "POST",
+    headers: {"Content-Type": "application/json", "X-Placement-UI": "1"},
+    body: JSON.stringify({maxOperations: 0, catalogueLimit: 32, inflationAttempts: 1000})
+});
+if (!started.ok) throw new Error((await started.json()).error);
+const {id} = await started.json(); // HTTP 202
+// Poll this URL until status is no longer "running":
+const report = await (await fetch("/api/benchmark?id=" + encodeURIComponent(id))).json();
+```
+
+Optional keys: `scenarioDigest` rejects a stale scenario with 409,
+`maxOperations` (0 = all), `catalogueLimit` (default 32; 0 = full),
+`probeCap` (default 10), `inflationAttempts` (default 1000; 0 = disabled),
+`inflationSeed` (default 42), and `bulkSize` (default 1). The simulator uses
+its current GPU model. A second concurrent job returns 409. GET returns the
+latest job (or `idle`) and accepts an `id` filter; replaced IDs return 404.
+Final statuses are `complete`, `partial` (some lanes failed), and `failed`.
+Each result carries `formatVersion`, `measurement: "quality-replay"`,
+`scenario`, `options` and `lanes[]` with `algorithm`, `quality` and
+`error`. The `quality` object matches `cases[].quality` in the CLI report.
+For identical settings across the two interfaces, set the same catalogue limit
+explicitly. See [metrics and CLI experiment options](runner/README.md#experiment-matrix).

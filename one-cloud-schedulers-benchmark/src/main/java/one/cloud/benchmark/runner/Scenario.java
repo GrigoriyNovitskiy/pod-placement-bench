@@ -25,6 +25,7 @@ public final class Scenario {
 
     public final ClusterSpec model;
     public final Request[] requests;
+    final Request[] catalogue;
     public final int[] events;
     public final int[] checkpoints;
     public final int rawOperations;
@@ -35,11 +36,40 @@ public final class Scenario {
     public final int maxBurstSize;
     private final int[] windowEnds;
 
+    private Scenario(ClusterSpec model, Request[] requests, int[] events, Request[] catalogue, String digest) {
+        this.model = Objects.requireNonNull(model);
+        this.requests = requests.clone();
+        this.catalogue = catalogue.clone();
+        this.events = events.clone();
+        this.digest = Objects.requireNonNull(digest);
+        sourceOpsDigest = digest;
+        rawOperations = events.length;
+        partialChurn = 0;
+        expandedRestarts = 0;
+        maxBurstSize = 1;
+        windowEnds = new int[0];
+        final var boundaries = new int[events.length];
+        int count = 0;
+        for (int index = 0; index < events.length; index++) {
+            if (events[index] > 0 && (index + 1 == events.length || events[index + 1] < 0)) {
+                boundaries[count++] = index + 1;
+            }
+        }
+        checkpoints = Arrays.copyOf(boundaries, count);
+    }
+
+    /** The interactive editor has already compiled and validated these atomic lifetimes. */
+    public static Scenario fromAtomicEvents(ClusterSpec model, Request[] requests, int[] events, Request[] catalogue,
+            String digest) {
+        return new Scenario(model, requests, events, catalogue, digest);
+    }
+
     private Scenario(Compiler compiler) {
         maxBurstSize = 1;
         windowEnds = new int[0];
         model = ClusterSpec.from(compiler.data, compiler.gpuMode);
         requests = compiler.requests;
+        catalogue = requests;
         events = compiler.events.values();
         checkpoints = compiler.checkpoints.values();
         rawOperations = compiler.data.operations.resource.length;
@@ -75,6 +105,7 @@ public final class Scenario {
     private Scenario(Scenario source, int size) {
         model = source.model;
         requests = source.requests;
+        catalogue = source.catalogue;
         events = source.events;
         checkpoints = source.checkpoints;
         rawOperations = source.rawOperations;

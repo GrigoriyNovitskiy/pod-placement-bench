@@ -9,7 +9,9 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.concurrent.TimeUnit;
 
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
 import org.junit.jupiter.api.Test;
@@ -56,12 +58,53 @@ class SimulatorServerTest {
             server.start();
             final var base = "http://127.0.0.1:" + server.port();
             assertEquals(403, send(base + "/api/reset", "POST", "{}", false, null).statusCode());
+            assertEquals(403, send(base + "/api/benchmark", "POST", "{}", false, null).statusCode());
             assertEquals(403, send(base + "/api/reset", "POST", "{}", true,
                     "https://untrusted.example").statusCode());
             assertEquals(404, send(base + "/AGENTS.md", "GET", null, false, null).statusCode());
             assertEquals(404, send(base + "/../AGENTS.md", "GET", null, false, null).statusCode());
             assertEquals(405, send(base + "/api/reset", "GET", null, false, null).statusCode());
         }
+    }
+
+    @Test
+    void benchmarksTheCurrentManualScenarioWithoutMovingTheSimulatorCursor() throws Exception {
+        try (final var server = new SimulatorServer(0)) {
+            server.start();
+            final var base = "http://127.0.0.1:" + server.port();
+            assertEquals(200, send(base + "/api/step", "POST", "{\"count\":3}", true, null).statusCode());
+            assertEquals(409, send(base + "/api/benchmark", "POST", "{\"scenarioDigest\":\"stale\"}",
+                    true, null).statusCode());
+            final var started = send(base + "/api/benchmark", "POST", """
+                    {"maxOperations": 2, "inflationAttempts": 0, "algorithms": [{"id": "geometric-best-fit"}]}
+                    """, true, null);
+            assertEquals(202, started.statusCode(), started.body());
+            final var id = JsonParser.parseString(started.body()).getAsJsonObject().get("id").getAsString();
+            final var report = awaitBenchmark(base, id);
+            assertEquals("complete", report.get("status").getAsString());
+            assertEquals("manual", report.get("source").getAsString());
+            final var quality = report.getAsJsonArray("lanes").get(0).getAsJsonObject().getAsJsonObject("quality");
+            assertEquals(2, quality.getAsJsonObject("counts").get("processedOperations").getAsInt());
+            assertFalse(quality.getAsJsonObject("counts").get("complete").getAsBoolean());
+            assertTrue(quality.getAsJsonArray("checkpoints").asList().stream()
+                    .anyMatch(point -> point.getAsJsonObject().get("operation").getAsInt() == 2));
+            final var state = send(base + "/api/state?summary=1", "GET", null, false, null);
+            assertTrue(state.body().contains("\"cursor\":3"), state.body());
+        }
+    }
+
+    private JsonObject awaitBenchmark(String base, String id) throws Exception {
+        final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            final var polled = send(base + "/api/benchmark?id=" + id, "GET", null, false, null);
+            assertEquals(200, polled.statusCode(), polled.body());
+            final var report = JsonParser.parseString(polled.body()).getAsJsonObject();
+            if (!report.get("status").getAsString().equals("running")) {
+                return report;
+            }
+            Thread.sleep(10);
+        }
+        throw new AssertionError("Benchmark job timed out");
     }
 
     @Test
@@ -173,6 +216,15 @@ class SimulatorServerTest {
             assertEquals(200, summary.statusCode(), summary.body());
             assertTrue(summary.body().contains("\"cursor\":4"), summary.body());
             assertFalse(summary.body().contains("\"lanes\""), summary.body());
+            final var started = send(base + "/api/benchmark", "POST", """
+                    {"inflationAttempts": 0, "algorithms": [{"id": "geometric-best-fit"}]}
+                    """, true, null);
+            assertEquals(202, started.statusCode(), started.body());
+            final var report = awaitBenchmark(base, JsonParser.parseString(started.body()).getAsJsonObject()
+                    .get("id").getAsString());
+            assertEquals("complete", report.get("status").getAsString());
+            assertEquals("dataset", report.get("source").getAsString());
+            assertEquals(4, report.getAsJsonObject("scenario").get("normalizedOperations").getAsInt());
             final var reset = send(base + "/api/reset?summary=1", "POST", "{}", true, null);
             assertEquals(200, reset.statusCode(), reset.body());
             assertTrue(reset.body().contains("\"cursor\":0"), reset.body());
