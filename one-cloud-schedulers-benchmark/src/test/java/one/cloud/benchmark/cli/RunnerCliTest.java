@@ -87,6 +87,32 @@ class RunnerCliTest {
     }
 
     @Test
+    void reactiveIlpReportsAdmissionsRelocationsAndOccupiedHosts() throws Exception {
+        writeTrace(temporary, new Record[]{
+                alloc(1, new int[]{1, 2}, 8, 8), alloc(2, new int[]{1, 2}, 7, 10),
+                alloc(3, new int[]{1, 2}, 2, 3), alloc(4, new int[]{1, 2}, 8, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 3, 2), resource(5, 4, 2)},
+                3, 4, 5, -5, -4, -3);
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
+                "--algorithm", "reactive-ilp", "--param", "timeoutMs=5000"),
+                errors.toString(StandardCharsets.UTF_8));
+        final var report = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(5000, report.getAsJsonObject("algorithm_parameters").get("timeoutMs").getAsInt());
+        assertEquals(3, report.getAsJsonObject("creates").get("admitted_units").getAsInt());
+        assertEquals(3, report.getAsJsonObject("deletes").get("committed_units").getAsInt());
+        assertEquals(2, report.get("peak_used_hosts").getAsInt());
+        final var counters = report.getAsJsonObject("algorithm_counters");
+        assertEquals(1, counters.get("ilp_fallbacks").getAsInt());
+        assertEquals(1, counters.get("ilp_rescued").getAsInt());
+        assertEquals(2, counters.get("ilp_moved_units").getAsInt());
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+    }
+
+    @Test
     void runsPackagedCatBoostAndRandomAlgorithmsThroughTheCommonRunner() throws Exception {
         writeTrace(temporary, new Record[]{
                 alloc(1, new int[]{1, 2}, 4, 4096), alloc(2, new int[]{1, 2}, 2, 1024),

@@ -640,6 +640,14 @@ public final class SimulatorSession implements AutoCloseable {
                 engine.schedule(algorithm, request);
                 elapsed = System.nanoTime() - start;
                 creates.add(elapsed);
+                for (final var assignment : engine.drainRelocations()) {
+                    for (final var members : hostMembers) {
+                        if (members.remove(assignment.resource()) != null) {
+                            break;
+                        }
+                    }
+                    hostMembers.get(assignment.host()).put(assignment.resource(), assignment);
+                }
                 admitted[unit] = engine.placement(request.resource(0)) != null;
                 status = admitted[unit] ? "placed" : "rejected";
                 if (admitted[unit]) {
