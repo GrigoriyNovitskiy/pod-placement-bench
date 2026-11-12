@@ -78,11 +78,18 @@ For warmed measurements and parameter sweeps, use the experiment matrix below.
 
 ## Announced service bursts
 
-`Scenario.withServiceBursts(size)` cold-compiles consecutive same-service creates
-into windows of at most 100, using version `service-bursts-v1`. It preserves order
-and breaks at deletes and occupied checkpoints. The announcement boundaries and
-size are included in the scenario digest before scheduling; the operation prefix
-does not change that digest. A truncated final window is explicitly reported.
+`Scenario.withServiceBursts(size)` uses `service-bursts-v2` for sizes 2..100.
+It orders dependency-ready atomic units by their service's first occurrence,
+then by original occurrence, and groups same-service creates into windows up to
+that size. Pod plus regular shard remain one atomic unit. Only create phases
+are reordered; deletes, checkpoints and the B=1 scenario keep their order.
+Dependencies can split a service across several windows. This is a synthetic
+service-level workload, not recovered production API history.
+
+The reordered events, announcement boundaries and size are included in the
+scenario digest before scheduling. Use the same size for every compared algorithm;
+B=1 and B>1 can have different order. An operation prefix does not change the
+digest. A truncated final window is explicitly reported.
 
 The runner times one complete `Engine.schedule(window)` call. JSON format 2 keeps
 attempted units and schedule-window counts separate; latency samples are whole

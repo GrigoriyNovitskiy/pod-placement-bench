@@ -24,12 +24,15 @@ No catalogue limit is applied by default. An explicit `--catalogue-limit` is
 reported and should match between controls. `--bulk-size` defaults 1; without an
 announced burst bulk/DP delegate singleton requests to ordinary fitcount.
 
-`service-bursts-v1` groups only consecutive creates with the same nonzero service
-group and exactly one POD per atomic unit, up to the declared size 1..100. It does
-not reorder events and breaks at deletes/checkpoints. Its full window boundaries
-are included in the scenario digest before replay. All algorithms can receive the
-same announcements; a normal FitCount handles the array sequentially. A prefix
-may cut the last window; this is explicitly reported. Rollout requires B=1.
+`service-bursts-v2` orders dependency-ready atomic units by service first
+occurrence and groups creates with the same nonzero service group and exactly
+one POD per unit, up to the declared size 2..100. Pod plus regular shard remain
+atomic. It reorders only create phases, preserving deletes and checkpoints;
+dependencies may split a service. B=1 retains the original order. The reordered
+events and window boundaries are included in the scenario digest before replay.
+Compare all algorithms with the same burst size; a normal FitCount handles each
+array sequentially. A prefix may cut the last window; this is explicitly reported.
+Rollout requires B=1.
 
 The interactive simulator keeps singleton announcements. Bulk/DP are available
 there, but their window optimizations require CLI `--bulk-size`. Rollout is listed
@@ -56,6 +59,14 @@ maximize admitted units, then frozen lexicographic physical-fit loss; it wins ti
 The incumbent uses a declared decision-local SplitMix seed rather than pretending
 to clone the persistent fallback's SplittableRandom. Canonical placed/removed
 notifications keep the persistent fallback cache current.
+
+For the fast profile, add `--param incumbentGuard=false` to bulk/DP. This skips
+all sequential incumbent searches; feasibility validation and fallback remain.
+It gives up the per-burst guarantee against the saved sequential solution.
+The default remains guarded. Greedy bulk caches physical marginals for the first
+`cacheRows` frozen samples on unchanged hosts, with hits/evaluations reported.
+Use matching explicit `seed`, `fitCap` and `cacheRows` for comparisons: registry
+defaults differ between ordinary and bulk FitCount.
 
 The structural gate certifies allocation/geometry, masks/pins, relative links,
 shared/private group stencils, ready external dependencies and one-host options.

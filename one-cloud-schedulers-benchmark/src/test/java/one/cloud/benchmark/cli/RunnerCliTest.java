@@ -212,33 +212,36 @@ class RunnerCliTest {
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2)}, 2, 3, -3, -2);
         for (final var algorithm : List.of("bulk-fitcount", "dp")) {
-            final var output = new ByteArrayOutputStream();
-            final var errors = new ByteArrayOutputStream();
-            assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
-                    "--algorithm", algorithm, "--bulk-size", "100"), errors.toString(StandardCharsets.UTF_8));
-            final var report = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
-            final var parameters = report.getAsJsonObject("algorithm_parameters");
-            assertEquals(128, parameters.get("fitCap").getAsInt());
-            assertEquals(42, parameters.get("seed").getAsLong());
-            assertEquals(256, parameters.get("cacheRows").getAsInt());
-            assertEquals(2, report.getAsJsonObject("creates").get("attempted_units").getAsInt());
-            assertEquals(1, report.getAsJsonObject("creates").get("schedule_windows").getAsInt());
-            assertEquals(1, report.getAsJsonObject("creates").get("admitted_units").getAsInt());
-            assertEquals(1, report.getAsJsonObject("creates").get("declined_units").getAsInt());
-            assertEquals("service-bursts-v1", report.get("announcement").getAsString());
-            assertEquals("complete announced window", report.getAsJsonObject("creates").get("latency_scope").getAsString());
-            assertTrue(report.has("algorithm_runtime_parameters"));
-            assertTrue(report.has("algorithm_counters"));
-            assertEquals(2, report.getAsJsonObject("logical_resources").getAsJsonObject("requested").get("1").getAsDouble());
-            assertEquals(1, report.getAsJsonObject("logical_resources").getAsJsonObject("admitted").get("1").getAsDouble());
-            assertEquals(1, report.getAsJsonObject("refused_resources_by_allocation_profile").get("2").getAsLong());
-            assertEquals(64, report.get("parameter_digest").getAsString().length());
-            assertEquals("", errors.toString(StandardCharsets.UTF_8));
-            output.reset();
-            assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
-                    "--algorithm", algorithm, "--bulk-size", "100", "--max-operations", "1"));
-            final var prefix = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
-            assertTrue(prefix.get("truncated_window").getAsBoolean());
+            for (final boolean guard : new boolean[]{true, false}) {
+                final var output = new ByteArrayOutputStream();
+                final var errors = new ByteArrayOutputStream();
+                assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
+                        "--algorithm", algorithm, "--bulk-size", "100", "--param", "incumbentGuard=" + guard), errors.toString(StandardCharsets.UTF_8));
+                final var report = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+                final var parameters = report.getAsJsonObject("algorithm_parameters");
+                assertEquals(128, parameters.get("fitCap").getAsInt());
+                assertEquals(42, parameters.get("seed").getAsLong());
+                assertEquals(256, parameters.get("cacheRows").getAsInt());
+                assertEquals(guard, parameters.get("incumbentGuard").getAsBoolean());
+                assertEquals(2, report.getAsJsonObject("creates").get("attempted_units").getAsInt());
+                assertEquals(1, report.getAsJsonObject("creates").get("schedule_windows").getAsInt());
+                assertEquals(1, report.getAsJsonObject("creates").get("admitted_units").getAsInt());
+                assertEquals(1, report.getAsJsonObject("creates").get("declined_units").getAsInt());
+                assertEquals("service-bursts-v2", report.get("announcement").getAsString());
+                assertEquals("complete announced window", report.getAsJsonObject("creates").get("latency_scope").getAsString());
+                assertTrue(report.has("algorithm_runtime_parameters"));
+                assertTrue(report.has("algorithm_counters"));
+                assertEquals(2, report.getAsJsonObject("logical_resources").getAsJsonObject("requested").get("1").getAsDouble());
+                assertEquals(1, report.getAsJsonObject("logical_resources").getAsJsonObject("admitted").get("1").getAsDouble());
+                assertEquals(1, report.getAsJsonObject("refused_resources_by_allocation_profile").get("2").getAsLong());
+                assertEquals(64, report.get("parameter_digest").getAsString().length());
+                assertEquals("", errors.toString(StandardCharsets.UTF_8));
+                output.reset();
+                assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
+                        "--algorithm", algorithm, "--bulk-size", "100", "--max-operations", "1"));
+                final var prefix = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+                assertTrue(prefix.get("truncated_window").getAsBoolean());
+            }
         }
     }
 

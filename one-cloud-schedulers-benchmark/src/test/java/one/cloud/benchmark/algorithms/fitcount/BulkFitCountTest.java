@@ -339,6 +339,119 @@ class BulkFitCountTest {
                 42, pending, 128, 256, 0, 1));
     }
 
+    @Test
+    void unguardedBulksReuseHostScoresAndKeepCacheBoundsOutOfPlacementDecisions() throws Exception {
+        final var model = scalar(16, 32, null);
+        final var pending = requests(17, 32);
+        final var catalogue = new Request[]{pending[0], new Request(17, 18)};
+        final var sequential = new Engine(model);
+        final long sequentialCalls;
+        try (final var fit = new FitCount(sequential, 42, catalogue, 128, 256)) {
+            sequential.schedule(fit, pending);
+            sequentialCalls = fit.plannerCalls();
+        }
+        int[] expected = null;
+        for (final int rows : new int[]{1, 256}) {
+            final var state = new Engine(model);
+            final var actual = new int[2 * pending.length];
+            try (final var fit = new BulkFitCount(state, 42, catalogue, 128, rows, false)) {
+                for (int cycle = 0; cycle < 2; cycle++) {
+                    state.schedule(fit, pending);
+                    for (int index = 0; index < pending.length; index++) {
+                        actual[cycle * pending.length + index] = state.placement(pending[index].resource(0)).host();
+                    }
+                    for (int index = 0; index < pending.length; index += 2) {
+                        assertEquals(actual[cycle * pending.length + index], actual[cycle * pending.length + index + 1]);
+                    }
+                    for (int index = pending.length - 1; index >= 0; index--) {
+                        state.remove(pending[index]);
+                    }
+                    assertEquals(16 * 2.5, totalCpu(state));
+                }
+                assertEquals("disabled", fit.parameters().get("incumbent_guard"));
+                assertEquals(0, fit.counters().get("incumbent_searches"));
+                assertEquals(2, fit.counters().get("unguarded_bulks"));
+                assertTrue(fit.counters().get("marginal_evaluations") > 0);
+                assertTrue(fit.counters().get("marginal_cache_hits") > 0);
+                assertTrue(fit.plannerCalls() < sequentialCalls);
+            }
+            if (expected == null) {
+                expected = actual;
+            } else {
+                assertArrayEquals(expected, actual);
+            }
+        }
+        final var guarded = new Engine(model);
+        try (final var fit = new BulkFitCount(guarded, 42, catalogue, 128, 256)) {
+            guarded.schedule(fit, pending);
+            assertEquals(32, fit.counters().get("incumbent_searches"));
+            assertEquals(0, fit.counters().get("unguarded_bulks"));
+            assertTrue(fit.plannerCalls() >= sequentialCalls);
+        }
+    }
+
+    @Test
+    void unguardedBulksRespectChangingDomainLimitsAndFallBackWithoutTrialPlacements() throws Exception {
+        final var model = scalar(8, 12, Limit.newBuilder().setDomain(3).setMax(2).setHard(true));
+        final var pending = requests(9, 12);
+        for (final boolean dp : new boolean[]{false, true}) {
+            final var state = new Engine(model);
+            try (final var fit = dp ? BulkFitCount.dynamicProgramming(state, 42, pending, 128, 256, false)
+                    : new BulkFitCount(state, 42, pending, 128, 256, false)) {
+                state.schedule(fit, pending);
+                assertEquals(4, state.revision());
+                assertEquals(4, state.groupCount(1));
+                assertEquals(16, totalCpu(state));
+                assertEquals(1, fit.counters().get("unguarded_bulks"));
+                assertEquals(0, fit.counters().get("incumbent_searches"));
+            }
+        }
+        final var mismatch = model(
+                alloc(1, new int[]{1}, 4), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1).setPinnedHost(2)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3));
+        final var state = new Engine(mismatch);
+        try (final var fit = new BulkFitCount(state, 42, new Request[]{new Request(3)}, 128, 256, false)) {
+            state.schedule(fit, new Request(3), new Request(4));
+            assertEquals(1, state.placement(3).host());
+            assertEquals(2, state.placement(4).host());
+            assertEquals(2, state.revision());
+            assertEquals(1, fit.counters().get("fallback_replica_shape"));
+            assertEquals(0, fit.counters().get("unguarded_bulks"));
+        }
+        final var limitedModel = scalar(2, 2, null);
+        final var limitedRequests = requests(3, 2);
+        final var sequential = new Engine(limitedModel);
+        try (final var fit = new FitCount(sequential, 42, limitedRequests, 128, 1)) {
+            sequential.schedule(fit, limitedRequests);
+        }
+        for (final long work : new long[]{1, 64}) {
+            final var limited = new Engine(limitedModel);
+            try (final var fit = BulkFitCount.dynamicProgramming(limited, 42, limitedRequests, 128, 1,
+                    false, work, 64L << 20)) {
+                limited.schedule(fit, limitedRequests);
+                assertEquals(2, limited.revision());
+                assertEquals(3, totalCpu(limited));
+                assertEquals(1, fit.counters().get("fallback_work_budget"));
+                assertEquals(0, fit.counters().get("unguarded_bulks"));
+                for (final var request : limitedRequests) {
+                    final int resource = request.resource(0);
+                    assertEquals(sequential.placement(resource).host(), limited.placement(resource).host());
+                }
+            }
+        }
+    }
+
+    private static double totalCpu(Engine state) {
+        double total = 0;
+        for (int host = 1; host <= state.model().hostCount; host++) {
+            total += state.available(host, 1);
+        }
+        return total;
+    }
+
     private static BulkFitCount algorithm(Engine state, Request[] catalogue, boolean dp) {
         return dp ? BulkFitCount.dynamicProgramming(state, 42, catalogue, 128, 256)
                 : new BulkFitCount(state, 42, catalogue, 128, 256);

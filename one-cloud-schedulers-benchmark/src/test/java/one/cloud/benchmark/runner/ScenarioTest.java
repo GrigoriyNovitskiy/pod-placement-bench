@@ -23,19 +23,18 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class ScenarioTest {
     @Test
-    void announcesOnlyConsecutiveSameServiceCreatesAndKeepsChurnBoundaries() throws Exception {
+    void groupsInterleavedServiceCreatesAndKeepsChurnBoundaries() throws Exception {
         final var source = Scenario.from(trace(records(pod(1), pod(1), pod(2), pod(1)),
                 2, 3, 4, 5, -2, -3, 2, 3, -5, -4, -3, -2));
         final var bursts = source.withServiceBursts(3);
         assertEquals(source, source.withServiceBursts(1));
-        assertArrayEquals(source.events, bursts.events);
+        assertArrayEquals(new int[]{1, 2, 4, 3, -2, -1, 1, 2, -4, -3, -2, -1}, bursts.events);
         assertArrayEquals(source.checkpoints, bursts.checkpoints);
         assertEquals(source.sourceOpsDigest, bursts.sourceOpsDigest);
         assertNotEquals(source.digest, bursts.digest);
         assertEquals(bursts.digest, source.withServiceBursts(3).digest);
         assertNotEquals(bursts.digest, source.withServiceBursts(2).digest);
-        assertEquals(2, bursts.windowEnd(0));
-        assertEquals(3, bursts.windowEnd(2));
+        assertEquals(3, bursts.windowEnd(0));
         assertEquals(4, bursts.windowEnd(3));
         assertEquals(5, bursts.windowEnd(4));
         assertEquals(6, bursts.windowEnd(5));
@@ -43,6 +42,26 @@ class ScenarioTest {
         assertThrows(IllegalArgumentException.class, () -> bursts.windowEnd(1));
         assertThrows(IllegalArgumentException.class, () -> source.withServiceBursts(101));
         assertThrows(IllegalArgumentException.class, () -> bursts.withServiceBursts(2));
+    }
+
+    @Test
+    void serviceBurstsRespectGroupBarriersAtomicUnitsAndWindowLimits() throws Exception {
+        final var rows = records(pod(1), pod(2), shard(3),
+                pod(1).addLinks(colocate(4)).addLinks(group(3, Relation.READY_GROUP)),
+                shard(3), pod(1), pod(1));
+        final var source = Scenario.from(trace(rows, 2, 3, 4, 5, 6, 7, 8, -8, -7, -6, -5, -4, -3, -2));
+        final var bursts = source.withServiceBursts(2);
+        assertEquals(2, bursts.requests[2].size());
+        assertArrayEquals(new int[]{1, 5, 6, 2, 4, 3, -6, -5, -3, -4, -2, -1}, bursts.events);
+        assertArrayEquals(source.checkpoints, bursts.checkpoints);
+        assertEquals(2, bursts.windowEnd(0));
+        assertEquals(3, bursts.windowEnd(2));
+        assertEquals(4, bursts.windowEnd(3));
+        assertEquals(5, bursts.windowEnd(4));
+        assertEquals(6, bursts.windowEnd(5));
+        for (int index = 6; index < source.events.length; index++) {
+            assertEquals(source.events[index], bursts.events[index]);
+        }
     }
 
     @Test

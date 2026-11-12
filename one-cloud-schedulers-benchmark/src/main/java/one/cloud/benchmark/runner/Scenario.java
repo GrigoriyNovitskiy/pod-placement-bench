@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.PriorityQueue;
@@ -21,7 +22,7 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation.COLOCA
 /** Cold, deterministic normalization of complete synthetic traces into atomic request lifetimes. */
 public final class Scenario {
     public static final String NORMALIZATION_VERSION = "joint-phases-v1";
-    public static final String BURST_VERSION = "service-bursts-v1";
+    public static final String BURST_VERSION = "service-bursts-v2";
 
     public final ClusterSpec model;
     public final Request[] requests;
@@ -67,7 +68,7 @@ public final class Scenario {
     private Scenario(Compiler compiler) {
         maxBurstSize = 1;
         windowEnds = new int[0];
-        model = ClusterSpec.from(compiler.data, compiler.gpuMode);
+        model = compiler.model;
         requests = compiler.requests;
         catalogue = requests;
         events = compiler.events.values();
@@ -106,7 +107,7 @@ public final class Scenario {
         model = source.model;
         requests = source.requests;
         catalogue = source.catalogue;
-        events = source.events;
+        events = serviceEvents(source);
         checkpoints = source.checkpoints;
         rawOperations = source.rawOperations;
         partialChurn = source.partialChurn;
@@ -119,11 +120,14 @@ public final class Scenario {
         hash.update(BURST_VERSION.getBytes(StandardCharsets.UTF_8));
         final var buffer = ByteBuffer.allocate(Long.BYTES);
         update(hash, buffer, size);
+        for (final int event : events) {
+            update(hash, buffer, event);
+        }
         for (int start = 0; start < events.length;) {
             int end = start + 1;
-            final int group = events[start] > 0 ? service(requests[events[start] - 1]) : 0;
+            final int group = events[start] > 0 ? service(model, requests[events[start] - 1]) : 0;
             while (group != 0 && end < events.length && end - start < size && events[end] > 0
-                    && Arrays.binarySearch(checkpoints, end) < 0 && service(requests[events[end] - 1]) == group) {
+                    && Arrays.binarySearch(checkpoints, end) < 0 && service(model, requests[events[end] - 1]) == group) {
                 end++;
             }
             windowEnds[start] = end;
@@ -147,7 +151,7 @@ public final class Scenario {
         return windowEnds.length == 0 ? start + 1 : windowEnds[start];
     }
 
-    private int service(Request request) {
+    private static int service(ClusterSpec model, Request request) {
         int group = 0;
         int pods = 0;
         for (int index = 0; index < request.size(); index++) {
@@ -199,6 +203,7 @@ public final class Scenario {
     private static final class Compiler {
         private final Dataset data;
         private final ClusterSpec.GpuMode gpuMode;
+        private final ClusterSpec model;
         private final Dataset.Operations operations;
         private final int resourceCount;
         private final Ints phases = new Ints();
@@ -207,8 +212,7 @@ public final class Scenario {
         private Request[] requests = new Request[0];
         private int[] units;
         private int[] order;
-        private Group[] groups;
-        private int[][] memberships;
+        private Ordering ordering;
         private int partialChurn;
         private int expandedRestarts;
 
@@ -218,6 +222,7 @@ public final class Scenario {
             }
             this.data = data;
             this.gpuMode = gpuMode;
+            model = ClusterSpec.from(data, gpuMode);
             operations = data.operations;
             resourceCount = data.alloc.length;
         }
@@ -233,8 +238,8 @@ public final class Scenario {
             }
             validate();
             buildRequests();
-            buildGroups();
-            sort();
+            ordering = new Ordering(model, requests);
+            order = ordering.sort(null);
             normalize();
             return new Scenario(this);
         }
@@ -353,27 +358,168 @@ public final class Scenario {
             }
         }
 
+        private void normalize() {
+            for (final int unit : order) {
+                events.add(unit + 1);
+            }
+            checkpoints.add(events.size);
+            final var seen = new int[requests.length];
+            final var seenGroups = new int[ordering.groups.length];
+            final var deletedMembers = new int[requests.length];
+            final var queue = new int[requests.length];
+            for (int phase = 1; phase < phases.size; phase += 2) {
+                if (phase == phases.size - 1) {
+                    for (int index = order.length - 1; index >= 0; index--) {
+                        events.add(-order[index] - 1);
+                    }
+                    break;
+                }
+                int size = 0;
+                for (int index = phases.get(phase - 1); index < phases.get(phase); index++) {
+                    final int unit = units[operations.resource[index]];
+                    deletedMembers[unit]++;
+                    if (seen[unit] != phase) {
+                        seen[unit] = phase;
+                        queue[size++] = unit;
+                    }
+                }
+                final int touched = size;
+                for (int index = 0; index < touched; index++) {
+                    final int unit = queue[index];
+                    if (deletedMembers[unit] != requests[unit].size()) {
+                        partialChurn++;
+                    }
+                    deletedMembers[unit] = 0;
+                }
+                for (int next = 0; next < size; next++) {
+                    for (final int group : ordering.memberships[queue[next]]) {
+                        if (seenGroups[group] != phase) {
+                            seenGroups[group] = phase;
+                            for (final int consumer : ordering.groups[group].consumers) {
+                                if (seen[consumer] != phase) {
+                                    seen[consumer] = phase;
+                                    queue[size++] = consumer;
+                                }
+                            }
+                        }
+                    }
+                }
+                expandedRestarts = Math.addExact(expandedRestarts, size - touched);
+                for (int index = order.length - 1; index >= 0; index--) {
+                    if (seen[order[index]] == phase) {
+                        events.add(-order[index] - 1);
+                    }
+                }
+                for (final int unit : order) {
+                    if (seen[unit] == phase) {
+                        events.add(unit + 1);
+                    }
+                }
+                checkpoints.add(events.size);
+            }
+        }
+
+        private boolean workload(int resource) {
+            final int kind = data.rules.kind[data.constraints[resource]];
+            return kind == POD_VALUE || kind == SHARD_VALUE;
+        }
+
+        private IllegalArgumentException invalid(int operation, String message) {
+            return new IllegalArgumentException(message + " at operation " + operation);
+        }
+    }
+
+    private static int[] serviceEvents(Scenario source) {
+        final var priorities = new int[source.requests.length];
+        Arrays.fill(priorities, Integer.MAX_VALUE);
+        final var servicePriority = new TreeMap<Integer, Integer>();
+        for (int index = 0; index < source.events.length; index++) {
+            final int unit = source.events[index] - 1;
+            if (unit >= 0 && priorities[unit] == Integer.MAX_VALUE) {
+                priorities[unit] = index;
+                final int group = service(source.model, source.requests[unit]);
+                if (group != 0) {
+                    servicePriority.putIfAbsent(group, index);
+                }
+            }
+        }
+        final var ranks = new int[source.requests.length];
+        final var serviceRanks = new int[source.requests.length];
+        for (int unit = 0; unit < source.requests.length; unit++) {
+            final int group = service(source.model, source.requests[unit]);
+            serviceRanks[unit] = servicePriority.getOrDefault(group, priorities[unit]);
+        }
+        final var priority = Comparator.<Integer>comparingInt(unit -> serviceRanks[unit])
+                .thenComparingInt(unit -> priorities[unit]).thenComparingInt(unit -> unit);
+        final var order = new Ordering(source.model, source.requests).sort(priority);
+        for (int rank = 0; rank < order.length; rank++) {
+            ranks[order[rank]] = rank;
+        }
+        final var events = source.events.clone();
+        final var sorted = new long[events.length];
+        for (int start = 0; start < events.length;) {
+            if (events[start] < 0) {
+                start++;
+                continue;
+            }
+            int end = start;
+            do {
+                sorted[end] = (long) ranks[events[end] - 1] << 32 | events[end];
+                end++;
+            } while (end < events.length && events[end] > 0
+                    && Arrays.binarySearch(source.checkpoints, end) < 0);
+            Arrays.sort(sorted, start, end);
+            for (int index = start; index < end; index++) {
+                events[index] = (int) sorted[index];
+            }
+            start = end;
+        }
+        return events;
+    }
+
+    private static final class Ordering {
+        private final ClusterSpec model;
+        private final Request[] requests;
+        private final int resourceCount;
+        private final int[] units;
+        private Group[] groups;
+        private int[][] memberships;
+
+        private Ordering(ClusterSpec model, Request[] requests) {
+            this.model = model;
+            this.requests = requests;
+            resourceCount = model.alloc.length;
+            units = new int[resourceCount];
+            Arrays.fill(units, -1);
+            for (int unit = 0; unit < requests.length; unit++) {
+                for (int member = 0; member < requests[unit].size(); member++) {
+                    units[requests[unit].resource(member)] = unit;
+                }
+            }
+            buildGroups();
+        }
+
         private void buildGroups() {
             final var referenced = new TreeMap<Integer, Group>();
             for (int resource = 1; resource < resourceCount; resource++) {
                 if (units[resource] < 0) {
                     continue;
                 }
-                final int profile = data.constraints[resource];
-                for (int link = data.rules.linkOffset[profile]; link < data.rules.linkOffset[profile + 1]; link++) {
-                    if (data.rules.linkKind[link] != COLOCATE_VALUE) {
-                        referenced.computeIfAbsent(data.rules.linkTarget[link], ignored -> new Group())
+                final int profile = model.constraints[resource];
+                for (int link = model.rules.linkOffset[profile]; link < model.rules.linkOffset[profile + 1]; link++) {
+                    if (model.rules.linkKind[link] != COLOCATE_VALUE) {
+                        referenced.computeIfAbsent(model.rules.linkTarget[link], ignored -> new Group())
                                 .consumerBuilder.add(units[resource]);
                     }
                 }
             }
             for (int resource = 1; resource < resourceCount; resource++) {
-                final int profile = data.constraints[resource];
-                final int kind = data.rules.kind[profile];
+                final int profile = model.constraints[resource];
+                final int kind = model.rules.kind[profile];
                 if (kind >= 1 && kind <= 3) {
                     continue;
                 }
-                final var group = referenced.get(data.rules.group[profile]);
+                final var group = referenced.get(model.rules.group[profile]);
                 if (group != null) {
                     if (units[resource] < 0) {
                         throw new IllegalArgumentException("Missing initial group member " + resource);
@@ -407,7 +553,7 @@ public final class Scenario {
             }
         }
 
-        private void sort() {
+        private int[] sort(Comparator<Integer> priority) {
             final var unmet = new int[requests.length];
             for (final var group : groups) {
                 for (final int consumer : group.consumers) {
@@ -416,14 +562,14 @@ public final class Scenario {
                     }
                 }
             }
-            final var ready = new PriorityQueue<Integer>();
+            final var ready = new PriorityQueue<Integer>(priority);
             for (int unit = 0; unit < requests.length; unit++) {
                 if (unmet[unit] == 0) {
                     ready.add(unit);
                 }
             }
             final var processed = new boolean[requests.length];
-            order = new int[requests.length];
+            final var order = new int[requests.length];
             int next = 0;
             while (!ready.isEmpty()) {
                 final int unit = ready.remove();
@@ -450,76 +596,7 @@ public final class Scenario {
             if (next != requests.length) {
                 throw new IllegalArgumentException("Joint colocation and group dependencies contain a cycle");
             }
-        }
-
-        private void normalize() {
-            for (final int unit : order) {
-                events.add(unit + 1);
-            }
-            checkpoints.add(events.size);
-            final var seen = new int[requests.length];
-            final var seenGroups = new int[groups.length];
-            final var deletedMembers = new int[requests.length];
-            final var queue = new int[requests.length];
-            for (int phase = 1; phase < phases.size; phase += 2) {
-                if (phase == phases.size - 1) {
-                    for (int index = order.length - 1; index >= 0; index--) {
-                        events.add(-order[index] - 1);
-                    }
-                    break;
-                }
-                int size = 0;
-                for (int index = phases.get(phase - 1); index < phases.get(phase); index++) {
-                    final int unit = units[operations.resource[index]];
-                    deletedMembers[unit]++;
-                    if (seen[unit] != phase) {
-                        seen[unit] = phase;
-                        queue[size++] = unit;
-                    }
-                }
-                final int touched = size;
-                for (int index = 0; index < touched; index++) {
-                    final int unit = queue[index];
-                    if (deletedMembers[unit] != requests[unit].size()) {
-                        partialChurn++;
-                    }
-                    deletedMembers[unit] = 0;
-                }
-                for (int next = 0; next < size; next++) {
-                    for (final int group : memberships[queue[next]]) {
-                        if (seenGroups[group] != phase) {
-                            seenGroups[group] = phase;
-                            for (final int consumer : groups[group].consumers) {
-                                if (seen[consumer] != phase) {
-                                    seen[consumer] = phase;
-                                    queue[size++] = consumer;
-                                }
-                            }
-                        }
-                    }
-                }
-                expandedRestarts = Math.addExact(expandedRestarts, size - touched);
-                for (int index = order.length - 1; index >= 0; index--) {
-                    if (seen[order[index]] == phase) {
-                        events.add(-order[index] - 1);
-                    }
-                }
-                for (final int unit : order) {
-                    if (seen[unit] == phase) {
-                        events.add(unit + 1);
-                    }
-                }
-                checkpoints.add(events.size);
-            }
-        }
-
-        private boolean workload(int resource) {
-            final int kind = data.rules.kind[data.constraints[resource]];
-            return kind == POD_VALUE || kind == SHARD_VALUE;
-        }
-
-        private IllegalArgumentException invalid(int operation, String message) {
-            return new IllegalArgumentException(message + " at operation " + operation);
+            return order;
         }
     }
 

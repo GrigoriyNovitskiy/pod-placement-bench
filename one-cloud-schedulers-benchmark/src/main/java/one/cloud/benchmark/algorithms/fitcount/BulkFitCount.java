@@ -1,6 +1,7 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -24,9 +25,10 @@ public final class BulkFitCount extends SchedulingAlgorithm {
     private final int cap, rows;
     private final int[] groupSizes;
     private final long seed, workLimit, memoryLimit;
-    private final boolean dp;
+    private final boolean dp, incumbentGuard;
     private final long[] reasons = new long[REASONS.length];
     private long decisions, delegations, certified, wins, retained, trialCalls, operations, transitions, workspacePeak;
+    private long incumbentSearches, unguarded, marginalEvaluations, marginalCacheHits;
     private long orderChecksum = 0xcbf29ce484222325L;
 
     public static AlgorithmDefinition definition() {
@@ -39,7 +41,8 @@ public final class BulkFitCount extends SchedulingAlgorithm {
                         parameters.get("seed").getAsLong(),
                         catalogue,
                         parameters.get("fitCap").getAsInt(),
-                        parameters.get("cacheRows").getAsInt()));
+                        parameters.get("cacheRows").getAsInt(),
+                        parameters.get("incumbentGuard").getAsBoolean()));
     }
 
     public static AlgorithmDefinition dynamicProgrammingDefinition() {
@@ -52,7 +55,8 @@ public final class BulkFitCount extends SchedulingAlgorithm {
                         parameters.get("seed").getAsLong(),
                         catalogue,
                         parameters.get("fitCap").getAsInt(),
-                        parameters.get("cacheRows").getAsInt()));
+                        parameters.get("cacheRows").getAsInt(),
+                        parameters.get("incumbentGuard").getAsBoolean()));
     }
 
     public BulkFitCount(SchedulingContext context, long seed, Request[] catalogue) {
@@ -60,21 +64,36 @@ public final class BulkFitCount extends SchedulingAlgorithm {
     }
 
     public BulkFitCount(SchedulingContext context, long seed, Request[] catalogue, int cap, int rows) {
-        this(context, seed, catalogue, cap, rows, false, WORK_LIMIT, MEMORY_LIMIT);
+        this(context, seed, catalogue, cap, rows, true);
+    }
+
+    public BulkFitCount(SchedulingContext context, long seed, Request[] catalogue, int cap, int rows,
+            boolean incumbentGuard) {
+        this(context, seed, catalogue, cap, rows, false, incumbentGuard, WORK_LIMIT, MEMORY_LIMIT);
     }
 
     public static BulkFitCount dynamicProgramming(SchedulingContext context, long seed, Request[] catalogue,
             int cap, int rows) {
-        return dynamicProgramming(context, seed, catalogue, cap, rows, WORK_LIMIT, MEMORY_LIMIT);
+        return dynamicProgramming(context, seed, catalogue, cap, rows, true);
+    }
+
+    public static BulkFitCount dynamicProgramming(SchedulingContext context, long seed, Request[] catalogue,
+            int cap, int rows, boolean incumbentGuard) {
+        return new BulkFitCount(context, seed, catalogue, cap, rows, true, incumbentGuard, WORK_LIMIT, MEMORY_LIMIT);
     }
 
     static BulkFitCount dynamicProgramming(SchedulingContext context, long seed, Request[] catalogue,
             int cap, int rows, long workLimit, long memoryLimit) {
-        return new BulkFitCount(context, seed, catalogue, cap, rows, true, workLimit, memoryLimit);
+        return dynamicProgramming(context, seed, catalogue, cap, rows, true, workLimit, memoryLimit);
+    }
+
+    static BulkFitCount dynamicProgramming(SchedulingContext context, long seed, Request[] catalogue,
+            int cap, int rows, boolean incumbentGuard, long workLimit, long memoryLimit) {
+        return new BulkFitCount(context, seed, catalogue, cap, rows, true, incumbentGuard, workLimit, memoryLimit);
     }
 
     private BulkFitCount(SchedulingContext context, long seed, Request[] catalogue,
-            int cap, int rows, boolean dp, long workLimit, long memoryLimit) {
+            int cap, int rows, boolean dp, boolean incumbentGuard, long workLimit, long memoryLimit) {
         super(context, seed);
         new CountDp.Work(workLimit, memoryLimit);
         fallback = new FitCount(context, seed, catalogue, cap, rows);
@@ -82,6 +101,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
         this.cap = cap;
         this.rows = rows;
         this.dp = dp;
+        this.incumbentGuard = incumbentGuard;
         this.seed = seed;
         this.workLimit = workLimit;
         this.memoryLimit = memoryLimit;
@@ -130,15 +150,18 @@ public final class BulkFitCount extends SchedulingAlgorithm {
         }
         final long incumbentSeed = mix64(seed ^ mix64(decision));
         final var state = trial.state();
-        final var baseline = new FitCount(state, incumbentSeed, catalogue, cap, rows);
+        final var baseline = incumbentGuard ? new FitCount(state, incumbentSeed, catalogue, cap, rows) : null;
         final var planner = new GreedyPlanner(state);
         final var work = new CountDp.Work(workLimit, memoryLimit);
-        Assignment[][] winner;
+        Assignment[][] winner = null;
         try {
-            state.schedule(baseline, requests);
-            final var incumbent = snapshot(state, requests, null);
-            winner = incumbent;
-            trial.reset();
+            if (baseline != null) {
+                incumbentSearches = Math.addExact(incumbentSearches, requests.length);
+                state.schedule(baseline, requests);
+                winner = snapshot(state, requests, null);
+                trial.reset();
+            }
+            final var incumbent = winner;
             try {
                 work.reserve(16L + 4L * groupSizes.length);
                 final var model = new BulkModel(context, requests, groupSizes, work);
@@ -162,37 +185,46 @@ public final class BulkFitCount extends SchedulingAlgorithm {
                                 mix64(incumbentSeed ^ 0xd1b54a32d192ed03L), work), requests);
                     }
                     final var proposal = snapshot(state, requests, work);
-                    final int admitted = admitted(proposal), previous = admitted(incumbent);
-                    boolean better = admitted > previous;
-                    if (admitted == previous) {
-                        final long[] proposedLoss = loss(planner, frozen, work);
-                        trial.reset();
-                        final var replay = new ReplayPolicy(state, incumbent);
-                        state.schedule(replay, requests);
-                        if (!replay.complete) {
-                            throw new IllegalStateException("Saved incumbent failed prefix replay");
-                        }
-                        final long[] incumbentLoss = loss(planner, frozen, work);
-                        better = compare(proposedLoss, incumbentLoss, work) < 0;
-                    }
-                    if (better) {
+                    if (incumbent == null) {
                         winner = proposal;
-                        wins++;
+                        unguarded++;
                     } else {
-                        retained++;
+                        final int admitted = admitted(proposal), previous = admitted(incumbent);
+                        boolean better = admitted > previous;
+                        if (admitted == previous) {
+                            final long[] proposedLoss = loss(planner, frozen, work);
+                            trial.reset();
+                            final var replay = new ReplayPolicy(state, incumbent);
+                            state.schedule(replay, requests);
+                            if (!replay.complete) {
+                                throw new IllegalStateException("Saved incumbent failed prefix replay");
+                            }
+                            final long[] incumbentLoss = loss(planner, frozen, work);
+                            better = compare(proposedLoss, incumbentLoss, work) < 0;
+                        }
+                        if (better) {
+                            winner = proposal;
+                            wins++;
+                        } else {
+                            retained++;
+                        }
                     }
-                } else {
+                } else if (incumbent != null) {
                     retained++;
                 }
             } catch (BulkModel.Unsupported | CountDp.Limit unsupported) {
                 reason(unsupported.getMessage());
             }
         } finally {
-            trialCalls = Math.addExact(trialCalls, baseline.plannerCalls() + planner.planCalls());
+            trialCalls = Math.addExact(trialCalls, (baseline == null ? 0 : baseline.plannerCalls()) + planner.planCalls());
             operations = Math.addExact(operations, work.operations);
             transitions = Math.addExact(transitions, work.transitions);
             workspacePeak = Math.max(workspacePeak, work.workspace);
             trial.reset();
+        }
+        if (winner == null) {
+            fallback.schedule(requests);
+            return;
         }
         for (int index = 0; index < requests.length; index++) {
             if (winner[index] != null) {
@@ -313,6 +345,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
         private final CountDp.Work work;
         private final Assignment[][] next;
         private final int[] source, candidates;
+        private final int[][] marginals;
         private int index;
 
         GreedyPolicy(SchedulingContext context, GreedyPlanner planner, Request[] requests,
@@ -323,7 +356,8 @@ public final class BulkFitCount extends SchedulingAlgorithm {
             this.samples = samples;
             this.work = work;
             final int hosts = context.model().hostCount;
-            work.reserve(64L + 16L * (hosts + 1));
+            work.reserve(80L + 16L * (hosts + 1) + 8L * Math.min(rows, samples.length));
+            marginals = new int[Math.min(rows, samples.length)][];
             next = new Assignment[hosts + 1][];
             source = new int[hosts + 1];
             candidates = new int[hosts];
@@ -361,8 +395,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
                 for (int candidate = 0; candidate < count; candidate++) {
                     work.charge(3);
                     final int host = candidates[candidate];
-                    final int delta = planner.fitCount(samples[sample].request, host, cap)
-                            - planner.fitCount(samples[sample].request, host, next[host], cap);
+                    final int delta = marginal(sample, host);
                     if (delta < best) {
                         best = delta;
                         retained = 0;
@@ -376,6 +409,12 @@ public final class BulkFitCount extends SchedulingAlgorithm {
             if (count != 0) {
                 final int host = candidates[count == 1 ? 0 : random.nextInt(count)];
                 context.place(request, next[host]);
+                work.charge(marginals.length);
+                for (final var row : marginals) {
+                    if (row != null) {
+                        row[host] = Integer.MIN_VALUE;
+                    }
+                }
                 if (index + 1 < requests.length) {
                     final var plan = first(planner, requests[index + 1], host);
                     if (plan != null && bytes(plan) > bytes(next[host])) {
@@ -386,6 +425,31 @@ public final class BulkFitCount extends SchedulingAlgorithm {
                 }
             }
             index++;
+        }
+
+        private int marginal(int sample, int host) {
+            int[] cached = null;
+            if (sample < marginals.length) {
+                cached = marginals[sample];
+                if (cached == null) {
+                    work.reserve(16L + 4L * next.length);
+                    work.charge(next.length);
+                    cached = new int[next.length];
+                    Arrays.fill(cached, Integer.MIN_VALUE);
+                    marginals[sample] = cached;
+                }
+                if (cached[host] != Integer.MIN_VALUE) {
+                    marginalCacheHits++;
+                    return cached[host];
+                }
+            }
+            marginalEvaluations++;
+            final int delta = planner.fitCount(samples[sample].request, host, cap)
+                    - planner.fitCount(samples[sample].request, host, next[host], cap);
+            if (cached != null) {
+                cached[host] = delta;
+            }
+            return delta;
         }
     }
 
@@ -561,7 +625,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
         result.put("trajectories_per_host", "1");
         result.put("objective", "max-admitted-then-frozen-entry-scarcity-lex-physical-copy-loss");
         result.put("incumbent_seed", "mix64(runSeed ^ mix64(zero-based-bulk-decision))");
-        result.put("incumbent_guard", "enabled; incumbent wins ties");
+        result.put("incumbent_guard", incumbentGuard ? "enabled; incumbent wins ties" : "disabled");
         result.put("work_limit", Long.toString(workLimit));
         result.put("workspace_limit_bytes", Long.toString(memoryLimit));
         result.put("workspace_scope", "optimizer arrays, gate/tree, retained geometry; excludes shared trial/planner and incumbent/cache");
@@ -578,6 +642,10 @@ public final class BulkFitCount extends SchedulingAlgorithm {
         result.put("certified_bulks", certified);
         result.put("optimizer_wins", wins);
         result.put("incumbent_retained", retained);
+        result.put("incumbent_searches", incumbentSearches);
+        result.put("unguarded_bulks", unguarded);
+        result.put("marginal_evaluations", marginalEvaluations);
+        result.put("marginal_cache_hits", marginalCacheHits);
         result.put("component_operations", operations);
         result.put("dp_transitions", transitions);
         result.put("optimizer_workspace_peak_bytes", workspacePeak);

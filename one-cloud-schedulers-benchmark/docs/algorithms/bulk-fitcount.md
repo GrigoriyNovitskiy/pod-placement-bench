@@ -1,6 +1,6 @@
 # Bulk fitcount
 
-Status: planned. Use the [shared contract](README.md). This is a service-burst
+Status: implemented. Use the [shared contract](README.md). This is a service-burst
 strategy; DP/search are optional ways to optimize the same host options.
 
 ## Decision and objective
@@ -8,7 +8,9 @@ strategy; DP/search are optional ways to optimize the same host options.
 Accept at most 100 already announced, interchangeable pod/regular-shard units.
 The single-request overload delegates to ordinary FitCount. The first supported
 bulk scope has single-host units, ready external dependencies and no positive
-links between units. Unsupported bursts use sequential FitCount, with a reason.
+links between units. Unsupported bursts use sequential FitCount, with a reason. The explicit
+`incumbentGuard=false` profile skips the sequential quality guard; the default
+remains `true`.
 
 Freeze catalogue scarcity order at bulk entry. Let F_s(S_h) be capped physical
 multiplicity of sample s on host h. A concrete prefix of k replicas defines:
@@ -56,8 +58,14 @@ Keep one wrapper and a small internal selector, without a public optimizer hiera
 | Sequential-incumbent quality guard | Enabled |
 
 The enabled guard itself runs N sequential searches, so this quality profile
-makes no amortized speedup claim. A separate guard-disabled ablation measures
-amortization and loses the incumbent guarantee. Neither profile guarantees better
+makes no amortized speedup claim. Run `--param incumbentGuard=false` to measure amortization without the
+incumbent guarantee. In particular, the fast greedy profile can admit fewer
+replicas than sequential FitCount and does not promise a global optimum. It commits
+a complete validated trial proposal;
+unsupported scopes and exhausted work or workspace budgets discard the trial and
+use the persistent sequential fallback. Neither profile publishes partial trial
+placements. The `incumbent_searches`, `unguarded_bulks`, `marginal_evaluations` and
+`marginal_cache_hits` counters distinguish actual shared work from baseline work. Neither profile guarantees better
 future replay quality. Sweep cap 64/128/512, trajectories 1/4 and N 16/100, one
 axis at a time, with matching sequential controls.
 
