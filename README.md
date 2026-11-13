@@ -250,7 +250,7 @@ register(FirstFit.definition());
 ```
 
 ## Презентация
-https://docs.google.com/presentation/d/1CpCuJprRl1_inGXa2tIGWDxhtbRfS_jr/edit?slide=id.p1#slide=id.p1
+[https://docs.google.com/presentation/d/1CpCuJprRl1_inGXa2tIGWDxhtbRfS_jr/edit?slide=id.p1#slide=id.p1](https://docs.google.com/presentation/d/1ek7K_SNevZJ2hmweATozhZHY1OmOzeNX/edit?usp=share_link&ouid=118244570005818027131&rtpof=true&sd=true)
 
 ## Где что находится
 
