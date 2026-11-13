@@ -226,6 +226,9 @@ register(FirstFit.definition());
 ./placement-bench run --dataset /path/to/dataset --algorithm first-fit
 ```
 
+## Презентация
+https://docs.google.com/presentation/d/1CpCuJprRl1_inGXa2tIGWDxhtbRfS_jr/edit?slide=id.p1#slide=id.p1
+
 ## Где что находится
 
 - [Java-модуль и формат данных](one-cloud-schedulers-benchmark/README.md).
