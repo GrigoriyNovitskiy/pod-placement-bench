@@ -37,7 +37,12 @@ public final class DatasetRunner {
         }
     }
 
-    public record Latency(int count, long totalNanos, long p50Nanos, long p95Nanos, long p99Nanos, long maxNanos) {
+    public record Latency(int count, long totalNanos, long p50Nanos, long p95Nanos, long p99Nanos, long maxNanos,
+            Long p90Nanos) {
+        /** Legacy summaries cannot recover p90 for nonempty measurements. */
+        public Latency(int count, long totalNanos, long p50Nanos, long p95Nanos, long p99Nanos, long maxNanos) {
+            this(count, totalNanos, p50Nanos, p95Nanos, p99Nanos, maxNanos, count == 0 ? 0L : null);
+        }
     }
 
     public record Checkpoint(int operation, int logicalUnits, long logicalResources, int activeUnits,
@@ -52,7 +57,27 @@ public final class DatasetRunner {
             long plannerCalls, long checksum, long heapBeforeBytes, long sampledPeakHeapBytes,
             Latency scheduling, Latency removal, List<Checkpoint> checkpoints,
             long attemptedUnits, boolean truncatedWindow, Map<String, String> parameters, Map<String, Long> counters,
-            double[] requestedLogical, double[] admittedLogical, long[] refusedResourcesByAllocation) {
+            double[] requestedLogical, double[] admittedLogical, long[] refusedResourcesByAllocation,
+            double[] peakActiveLogical) {
+        public Result(Options options, String scenarioDigest, String algorithmClass, int processedOperations,
+                int catalogueSize, long catalogueChecksum, int probeCount, long probeChecksum,
+                long initializationNanos, long algorithmInitializationNanos, long replayNanos, long qualityNanos,
+                long placedUnits, long attemptedResources, long placedResources, long removedUnits, long skippedRemovals,
+                int peakActiveUnits, long peakActiveResources, int peakUsedHosts,
+                long plannerCalls, long checksum, long heapBeforeBytes, long sampledPeakHeapBytes,
+                Latency scheduling, Latency removal, List<Checkpoint> checkpoints,
+                long attemptedUnits, boolean truncatedWindow, Map<String, String> parameters, Map<String, Long> counters,
+                double[] requestedLogical, double[] admittedLogical, long[] refusedResourcesByAllocation) {
+            this(options, scenarioDigest, algorithmClass, processedOperations,
+                    catalogueSize, catalogueChecksum, probeCount, probeChecksum,
+                    initializationNanos, algorithmInitializationNanos, replayNanos, qualityNanos,
+                    placedUnits, attemptedResources, placedResources, removedUnits, skippedRemovals,
+                    peakActiveUnits, peakActiveResources, peakUsedHosts, plannerCalls, checksum,
+                    heapBeforeBytes, sampledPeakHeapBytes, scheduling, removal, checkpoints,
+                    attemptedUnits, truncatedWindow, parameters, counters, requestedLogical, admittedLogical,
+                    refusedResourcesByAllocation, new double[0]);
+        }
+
         public Result(Options options, String scenarioDigest, String algorithmClass, int processedOperations,
                 int catalogueSize, long catalogueChecksum, int probeCount, long probeChecksum,
                 long initializationNanos, long algorithmInitializationNanos, long replayNanos, long qualityNanos,
@@ -97,7 +122,7 @@ public final class DatasetRunner {
         private final boolean[] desired, admitted;
         private final int[] hostByResource, hostUse;
         private final long[] scheduleTimes, removeTimes;
-        private final double[] requestedLogical, admittedLogical;
+        private final double[] requestedLogical, admittedLogical, activeLogical, peakActiveLogical;
         private final long[] refusedResourcesByAllocation;
         private final ArrayList<Checkpoint> checkpoints = new ArrayList<>();
         private final long started = System.nanoTime();
@@ -138,6 +163,8 @@ public final class DatasetRunner {
             removeTimes = new long[limit - creates];
             requestedLogical = new double[scenario.model.dimensionCount + 1];
             admittedLogical = new double[requestedLogical.length];
+            activeLogical = new double[qualityOperations == null ? 0 : requestedLogical.length];
+            peakActiveLogical = new double[activeLogical.length];
             refusedResourcesByAllocation = new long[scenario.model.allocations.offset.length - 1];
         }
 
@@ -198,7 +225,7 @@ public final class DatasetRunner {
                         attemptedUnits, truncatedWindow,
                         qualityOperations == null ? Map.of() : Map.copyOf(algorithm.parameters()),
                         qualityOperations == null ? Map.of() : Map.copyOf(algorithm.counters()),
-                        requestedLogical, admittedLogical, refusedResourcesByAllocation);
+                        requestedLogical, admittedLogical, refusedResourcesByAllocation, peakActiveLogical);
             }
         }
 
@@ -291,6 +318,8 @@ public final class DatasetRunner {
                 requestedLogical[dimension] = addLogical(requestedLogical[dimension], amount);
                 if (placed) {
                     admittedLogical[dimension] = addLogical(admittedLogical[dimension], amount);
+                    activeLogical[dimension] = addLogical(activeLogical[dimension], amount);
+                    peakActiveLogical[dimension] = Math.max(peakActiveLogical[dimension], activeLogical[dimension]);
                 }
             }
         }
@@ -329,6 +358,14 @@ public final class DatasetRunner {
                     usedHosts--;
                 }
                 hostByResource[resource] = 0;
+                if (qualityOperations != null) {
+                    final var allocations = scenario.model.allocations;
+                    final int profile = scenario.model.alloc[resource];
+                    for (int value = allocations.offset[profile]; value < allocations.offset[profile + 1]; value++) {
+                        final int dimension = allocations.type[value];
+                        activeLogical[dimension] = addLogical(activeLogical[dimension], -allocations.amount[value]);
+                    }
+                }
             }
             admitted[unit] = false;
             removedUnits++;
@@ -374,13 +411,13 @@ public final class DatasetRunner {
         return result;
     }
 
-    private static Latency latency(long[] values, int count, long total) {
+    static Latency latency(long[] values, int count, long total) {
         if (count == 0) {
-            return new Latency(0, 0, 0, 0, 0, 0);
+            return new Latency(0, 0, 0, 0, 0, 0, 0L);
         }
         Arrays.sort(values, 0, count);
         return new Latency(count, total, quantile(values, count, .50), quantile(values, count, .95),
-                quantile(values, count, .99), values[count - 1]);
+                quantile(values, count, .99), values[count - 1], quantile(values, count, .90));
     }
 
     private static long quantile(long[] values, int count, double percentile) {

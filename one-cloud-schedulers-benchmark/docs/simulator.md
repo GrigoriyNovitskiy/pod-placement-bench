@@ -271,8 +271,7 @@ and charting dependencies without improving this local browser workflow.
 - [x] Browser: classpath `index.html`, `app.js`, `views.js`, `style.css`; Gradle `runSimulator`.
   Exercise manual host/pod edits, atomic deletes, algorithm comparison, upload,
   resource metrics, probes, selection, pan/zoom and save/load against the server.
-- [x] Independent review, fixes, `git diff --check` and module build. Leave changes
-  uncommitted as requested. Keep local datasets, logs and browser test artifacts out
+- [x] Independent review, fixes, `git diff --check` and module build. Keep local datasets, logs and browser test artifacts out
   of version control.
 
 ### Review focus

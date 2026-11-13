@@ -76,7 +76,8 @@ final class BenchmarkCli {
     }
 
     private record Summary(Distribution replayNanos, Distribution eventsPerSecond, Distribution scheduleP50Nanos,
-            Distribution scheduleP95Nanos, Distribution scheduleP99Nanos, Distribution removalP99Nanos) {
+            Distribution scheduleP95Nanos, Distribution scheduleP99Nanos, Distribution removalP99Nanos,
+            Distribution scheduleP90Nanos) {
     }
 
     private record Cell(String dataset, AlgorithmRegistry.Settings algorithm, String rolloutPrior, String priorSha256,
@@ -356,7 +357,9 @@ final class BenchmarkCli {
                 distribution(creates, sample -> sample.scheduleWindows().p50Nanos()),
                 distribution(creates, sample -> sample.scheduleWindows().p95Nanos()),
                 distribution(creates, sample -> sample.scheduleWindows().p99Nanos()),
-                distribution(removes, sample -> sample.removals().p99Nanos()));
+                distribution(removes, sample -> sample.removals().p99Nanos()),
+                distribution(creates.stream().filter(sample -> sample.scheduleWindows().p90Nanos() != null).toList(),
+                        sample -> sample.scheduleWindows().p90Nanos()));
     }
 
     private static Distribution distribution(List<Measurement> samples, ToDoubleFunction<Measurement> metric) {

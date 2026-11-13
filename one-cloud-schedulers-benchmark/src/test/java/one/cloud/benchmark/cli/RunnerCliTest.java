@@ -372,6 +372,11 @@ class RunnerCliTest {
         assertEquals(2, parameters.get("fitCap").getAsInt());
         assertEquals(1, parameters.get("cacheRows").getAsInt());
         assertEquals(3, report.get("probe_cap").getAsInt());
+        final var latency = report.getAsJsonObject("creates").getAsJsonObject("latency_ms");
+        assertTrue(latency.get("p90").getAsDouble() >= latency.get("p50").getAsDouble());
+        assertTrue(latency.get("p90").getAsDouble() <= latency.get("p95").getAsDouble());
+        assertEquals(2.0, report.getAsJsonObject("logical_resources").getAsJsonObject("peak_active")
+                .get("1").getAsDouble());
         assertFalse(report.has("seed"));
         assertFalse(report.has("copy_cap"));
         assertFalse(report.has("cache_rows"));
@@ -442,6 +447,7 @@ class RunnerCliTest {
         assertTrue(json.contains("\"processed_operations\":0"));
         assertTrue(json.contains("\"catalogue_units\":0"));
         assertTrue(json.contains("\"mean\":null"));
+        assertTrue(json.contains("\"p90\":null"));
         assertEquals("", errors.toString(StandardCharsets.UTF_8));
     }
 

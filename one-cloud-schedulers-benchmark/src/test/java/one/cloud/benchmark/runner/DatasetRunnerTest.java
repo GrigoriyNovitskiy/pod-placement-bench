@@ -34,6 +34,51 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatasetRunnerTest {
     @Test
+    void computesNearestRankP90WithoutReplacingP95OrInventingLegacySamples() {
+        final long[] samples = {20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1};
+        final var latency = DatasetRunner.latency(samples, samples.length, 210);
+        assertEquals(10, latency.p50Nanos());
+        assertEquals(Long.valueOf(18), latency.p90Nanos());
+        assertEquals(19, latency.p95Nanos());
+        assertEquals(20, latency.p99Nanos());
+        assertEquals(20, latency.maxNanos());
+        assertEquals(Long.valueOf(0), DatasetRunner.latency(new long[0], 0, 0).p90Nanos());
+        assertNull(new DatasetRunner.Latency(20, 210, 10, 19, 20, 20).p90Nanos());
+    }
+
+    @Test
+    void peakLogicalDemandTracksChurnRefusalsAndAtomicMembersPerDimension() throws Exception {
+        final var scenario = Scenario.from(trace(new Record[]{
+                alloc(1, new int[]{1, 2}, 10, 10), alloc(2, new int[]{1, 2}, 4, 1),
+                alloc(3, new int[]{1, 2}, 1, 1), alloc(4, new int[]{1, 2}, 1, 7),
+                alloc(5, new int[]{1, 2}, 20, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)
+                        .addLinks(Link.newBuilder().setTarget(3).setRelation(Relation.COLOCATE).setDomain(1))),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.SHARD)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
+                resource(4, 4, 4), resource(5, 5, 4)},
+                2, 3, 4, 5, -3, -2, 2, 3, -5, -4, -3, -2));
+        final var result = DatasetRunner.run(scenario, DatasetRunner.Options.defaults(), FitCount::new);
+        assertEquals(3, result.placedUnits());
+        assertEquals(5, result.placedResources());
+        assertEquals(1, result.skippedRemovals());
+        assertEquals(2, result.peakActiveUnits());
+        assertEquals(3, result.peakActiveResources());
+        assertEquals(11, result.admittedLogical()[1]);
+        assertEquals(11, result.admittedLogical()[2]);
+        assertEquals(6, result.peakActiveLogical()[1]);
+        assertEquals(9, result.peakActiveLogical()[2]);
+        final var options = new BenchmarkExperiment.Options(0, 0, 10, 0, 42);
+        final var quality = BenchmarkExperiment.quality(scenario, options, FitCount::new);
+        assertEquals(Map.of("VCORES", 6.0, "MEM_MIB", 9.0), quality.peakActiveLogical());
+        assertEquals(quality.counts(), BenchmarkExperiment.measure(scenario, options, FitCount::new).counts());
+        final var measured = DatasetRunner.run(scenario, DatasetRunner.Options.defaults(), FitCount::new, null, null);
+        assertEquals(0, measured.peakActiveLogical().length);
+    }
+
+    @Test
     void benchmarkContinuesAfterDeclinesAndMeasuresTheSameReplayWithoutProbes() throws Exception {
         final var scenario = Scenario.from(trace(new Record[]{
                 alloc(1, new int[]{1}, 100), alloc(2, new int[]{1}, 200), alloc(3, new int[]{1}, 1),

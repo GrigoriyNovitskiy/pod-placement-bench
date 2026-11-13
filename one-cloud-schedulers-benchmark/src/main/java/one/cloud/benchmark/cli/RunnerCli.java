@@ -421,6 +421,8 @@ public final class RunnerCli {
         vector(out, result.requestedLogical());
         out.append(",\"admitted\":");
         vector(out, result.admittedLogical());
+        out.append(",\"peak_active\":");
+        vector(out, result.peakActiveLogical());
         final var refusals = new TreeMap<Integer, Long>();
         for (int profile = 0; profile < result.refusedResourcesByAllocation().length; profile++) {
             final long count = result.refusedResourcesByAllocation()[profile];
@@ -461,10 +463,11 @@ public final class RunnerCli {
 
     private static void latency(StringBuilder out, DatasetRunner.Latency latency) {
         if (latency.count() == 0) {
-            out.append("{\"mean\":null,\"p50\":null,\"p95\":null,\"p99\":null,\"max\":null}");
+            out.append("{\"mean\":null,\"p50\":null,\"p90\":null,\"p95\":null,\"p99\":null,\"max\":null}");
         } else {
             out.append("{\"mean\":").append(latency.totalNanos() / (1e6 * latency.count()))
                     .append(",\"p50\":").append(ms(latency.p50Nanos()))
+                    .append(",\"p90\":").append(latency.p90Nanos() == null ? "null" : ms(latency.p90Nanos()))
                     .append(",\"p95\":").append(ms(latency.p95Nanos()))
                     .append(",\"p99\":").append(ms(latency.p99Nanos()))
                     .append(",\"max\":").append(ms(latency.maxNanos())).append('}');

@@ -46,8 +46,9 @@ Unexpected backend failures abort the run.
 `algorithm_initialization` is a breakdown inside that interval and is not additive.
 Input hashing, loading and scenario compilation are reported separately.
 
-Primitive latency arrays provide p50/p95/p99 after replay. Results include attempted,
-admitted and declined units/resources, occupancy, candidate planner calls, sampled
+Primitive latency arrays provide nearest-rank p50/p90/p95/p99 after replay.
+Results include attempted, admitted and declined units/resources, occupancy,
+candidate planner calls, sampled
 heap usage and a history checksum including assignment geometry. Heap is sampled
 before initialization, at occupied checkpoints and at replay end; it is not peak
 RSS or retained size. A final empty world does not erase the checksum.
@@ -153,7 +154,7 @@ and notifications. With `bulkSize > 1` latency is per announced window, not
 per atomic unit. Successful delete latency is reported separately.
 
 The report contains individual measurements under `cases[].forks` and
-min/median/max under `cases[].timing`. The summary p95/p99 values are
+min/median/max under `cases[].timing`. The summary p50/p90/p95/p99 values are
 distributions of the per-replay percentiles. There is no pooled percentile.
 Timeouts and backend errors are recorded per fork or quality replay; they do
 not count as refused requests. The CLI proceeds to other cases, emits JSON on
@@ -180,7 +181,13 @@ refusals. Deletes of refused units remain no-ops. Counts distinguish atomic
 units (a pod and its shards may be one unit) from their individual resources.
 The report also gives requested/admitted logical resource vectors and refusals
 by allocation profile. Those vectors measure accumulated work across creates;
-they are not instantaneous utilization.
+they are not instantaneous utilization. `quality.peakActiveLogical` records the
+componentwise maximum of simultaneously admitted logical demand across every
+create and committed removal, including churn. Dimensions can peak at different
+events, so the vector need not describe a single placement. It excludes refused
+requests and does not measure physical ledger unavailability or JVM allocations.
+`peakActiveUnits` and `peakActiveResources` are simultaneous occupancy counts;
+`admittedUnits` and `admittedResources` accumulate successful creates.
 
 | Report field | Interpretation |
 | --- | --- |

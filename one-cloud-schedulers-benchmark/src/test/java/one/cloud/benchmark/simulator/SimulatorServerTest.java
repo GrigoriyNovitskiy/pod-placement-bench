@@ -138,6 +138,10 @@ class SimulatorServerTest {
                 assertEquals(1, fork.getAsJsonArray("measurements").size());
                 final var measurement = fork.getAsJsonArray("measurements").get(0).getAsJsonObject();
                 assertTrue(measurement.get("replayNanos").getAsLong() > 0);
+                final long p90 = measurement.getAsJsonObject("scheduleWindows").get("p90Nanos").getAsLong();
+                assertTrue(p90 > 0);
+                assertEquals(p90, cell.getAsJsonObject("timing").getAsJsonObject("scheduleP90Nanos")
+                        .get("median").getAsLong());
                 assertEquals(4, measurement.getAsJsonObject("counts").get("processedOperations").getAsInt());
                 assertTrue(measurement.getAsJsonObject("counts").get("complete").getAsBoolean());
                 final var quality = cell.getAsJsonObject("quality");
@@ -147,6 +151,7 @@ class SimulatorServerTest {
                 assertEquals(2, counts.get("admittedResources").getAsLong());
                 assertEquals(2, counts.get("committedRemovals").getAsLong());
                 assertFalse(quality.getAsJsonArray("checkpoints").isEmpty());
+                assertTrue(quality.getAsJsonObject("peakActiveLogical").get("VCORES").getAsDouble() > 0);
 
                 final var workspace = JsonParser.parseString(send(base + "/api/experiments", "GET", null,
                         false, null).body()).getAsJsonObject();

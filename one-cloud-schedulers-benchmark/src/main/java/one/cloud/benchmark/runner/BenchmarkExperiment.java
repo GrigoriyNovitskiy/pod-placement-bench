@@ -116,7 +116,15 @@ public final class BenchmarkExperiment {
     public record Quality(ReplayCounts counts, int catalogueSize, String catalogueChecksum,
             Map<String, Double> requestedLogical, Map<String, Double> admittedLogical,
             Map<Integer, Long> refusedResourcesByAllocation, long plannerCalls, Map<String, String> parameters,
-            Map<String, Long> counters, List<Checkpoint> checkpoints, Inflation inflation) {
+            Map<String, Long> counters, List<Checkpoint> checkpoints, Inflation inflation,
+            Map<String, Double> peakActiveLogical) {
+        public Quality(ReplayCounts counts, int catalogueSize, String catalogueChecksum,
+                Map<String, Double> requestedLogical, Map<String, Double> admittedLogical,
+                Map<Integer, Long> refusedResourcesByAllocation, long plannerCalls, Map<String, String> parameters,
+                Map<String, Long> counters, List<Checkpoint> checkpoints, Inflation inflation) {
+            this(counts, catalogueSize, catalogueChecksum, requestedLogical, admittedLogical,
+                    refusedResourcesByAllocation, plannerCalls, parameters, counters, checkpoints, inflation, Map.of());
+        }
     }
 
     public static DatasetRunner.Factory factory(AlgorithmRegistry.Settings settings, Path prior) {
@@ -176,7 +184,7 @@ public final class BenchmarkExperiment {
         return new Quality(ReplayCounts.from(scenario, result), result.catalogueSize(),
                 Long.toUnsignedString(result.catalogueChecksum(), 16), vector(result.requestedLogical()),
                 vector(result.admittedLogical()), refused, result.plannerCalls(), result.parameters(), result.counters(),
-                List.copyOf(checkpoints), inflation[0]);
+                List.copyOf(checkpoints), inflation[0], vector(result.peakActiveLogical()));
     }
 
     private static int[] qualityOperations(Scenario scenario, int limit, int initialFill) {
