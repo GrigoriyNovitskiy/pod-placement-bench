@@ -2,6 +2,7 @@ package one.cloud.benchmark.runner;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -9,6 +10,7 @@ import java.util.Objects;
 import one.cloud.benchmark.algorithms.fitcount.Catalogue;
 import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.engine.ReplayMaintenance;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Assignment;
@@ -212,6 +214,8 @@ public final class DatasetRunner {
                 if (engine.revision() != 0) {
                     throw new IllegalArgumentException("Algorithm initialization changed the fresh engine");
                 }
+                final var maintenance = algorithm instanceof ReplayMaintenance policy ? policy : null;
+                final var waiting = maintenance == null ? null : new IdentityHashMap<Request, Integer>();
                 int checkpoint = 0;
                 for (int index = 0; index < limit;) {
                     if (observer != null && Thread.currentThread().isInterrupted()) {
@@ -231,11 +235,29 @@ public final class DatasetRunner {
                         final int announcedEnd = scenario.windowEnd(index);
                         completed = Math.min(announcedEnd, limit);
                         truncatedWindow |= completed != announcedEnd;
-                        create(algorithm, index, completed);
+                        create(algorithm, index, completed, waiting);
                     } else {
                         checksum = mix(mix(checksum, index), event);
+                        if (maintenance != null) {
+                            maintenance.cancel(request);
+                            waiting.remove(request);
+                        }
                         remove(unit, request);
                         completed = index + 1;
+                    }
+                    if (maintenance != null) {
+                        final var late = maintenance.advance(completed - index);
+                        for (final var plan : engine.drainRelocations()) {
+                            relocated(plan);
+                        }
+                        peakUsedHosts = Math.max(peakUsedHosts, usedHosts);
+                        for (final var admittedRequest : late) {
+                            final var admittedUnit = waiting.remove(admittedRequest);
+                            if (admittedUnit == null) {
+                                throw new IllegalStateException("Maintenance admitted a request outside its pending lifetime");
+                            }
+                            recordPlacement(admittedUnit, admittedRequest, true);
+                        }
                     }
                     if (qualityOperations != null && checkpoint < qualityOperations.length
                             && qualityOperations[checkpoint] == completed) {
@@ -264,7 +286,8 @@ public final class DatasetRunner {
             }
         }
 
-        private void create(SchedulingAlgorithm algorithm, int first, int end) throws Exception {
+        private void create(SchedulingAlgorithm algorithm, int first, int end, Map<Request, Integer> waiting)
+                throws Exception {
             final var window = new Request[end - first];
             for (int index = first; index < end; index++) {
                 final int event = scenario.events[index];
@@ -290,7 +313,10 @@ public final class DatasetRunner {
             for (int index = first; index < end; index++) {
                 final int event = scenario.events[index];
                 checksum = mix(mix(checksum, index), event);
-                created(event - 1, window[index - first]);
+                final var request = window[index - first];
+                if (!recordPlacement(event - 1, request, false) && waiting != null) {
+                    waiting.put(request, event - 1);
+                }
             }
         }
 
@@ -309,9 +335,12 @@ public final class DatasetRunner {
             checksum = assignmentChecksum(mix(checksum, -1), plan);
         }
 
-        private void created(int unit, Request request) {
+        private boolean recordPlacement(int unit, Request request, boolean late) {
             final boolean placed = engine.placement(request.resource(0)) != null;
-            checksum = mix(checksum, placed ? 1 : 0);
+            if (late && (!desired[unit] || admitted[unit] || !placed)) {
+                throw new IllegalStateException("Invalid late admission");
+            }
+            checksum = mix(checksum, late ? -2 : placed ? 1 : 0);
             for (int index = 0; index < request.size(); index++) {
                 final int resource = request.resource(index);
                 final var plan = engine.placement(resource);
@@ -319,7 +348,7 @@ public final class DatasetRunner {
                     throw new IllegalStateException("Engine committed a partial scheduling unit");
                 }
                 if (qualityOperations != null) {
-                    logical(resource, placed);
+                    logical(resource, placed, late);
                 }
                 if (placed) {
                     hostByResource[resource] = plan.host();
@@ -337,20 +366,25 @@ public final class DatasetRunner {
                 activeResources += request.size();
                 peakActiveUnits = Math.max(peakActiveUnits, activeUnits);
                 peakActiveResources = Math.max(peakActiveResources, activeResources);
-                peakUsedHosts = Math.max(peakUsedHosts, usedHosts);
             }
+            peakUsedHosts = Math.max(peakUsedHosts, usedHosts);
+            return placed;
         }
 
-        private void logical(int resource, boolean placed) {
+        private void logical(int resource, boolean placed, boolean late) {
             final var allocations = scenario.model.allocations;
             final int profile = scenario.model.alloc[resource];
-            if (!placed) {
+            if (late) {
+                refusedResourcesByAllocation[profile]--;
+            } else if (!placed) {
                 refusedResourcesByAllocation[profile]++;
             }
             for (int index = allocations.offset[profile]; index < allocations.offset[profile + 1]; index++) {
                 final int dimension = allocations.type[index];
                 final double amount = allocations.amount[index];
-                requestedLogical[dimension] = addLogical(requestedLogical[dimension], amount);
+                if (!late) {
+                    requestedLogical[dimension] = addLogical(requestedLogical[dimension], amount);
+                }
                 if (placed) {
                     admittedLogical[dimension] = addLogical(admittedLogical[dimension], amount);
                     activeLogical[dimension] = addLogical(activeLogical[dimension], amount);

@@ -22,6 +22,8 @@ import one.cloud.benchmark.algorithms.rl.RlTop1;
 import one.cloud.benchmark.algorithms.rl.RlPoolFitCount;
 import one.cloud.benchmark.algorithms.rl.RlMaskedFitCount;
 import one.cloud.benchmark.algorithms.rl.RlTopNFitCount;
+import one.cloud.benchmark.algorithms.yp.YpLight;
+import one.cloud.benchmark.algorithms.yp.YpPlanner;
 
 import static one.cloud.benchmark.algorithms.AlgorithmRegistry.register;
 
@@ -39,6 +41,8 @@ final class Algorithms {
         register(GeometricBestFit.definition());
         register(ReactiveIlp.definition());
         register(ProactiveIlp.definition());
+        register(YpLight.definition());
+        register(YpPlanner.definition());
         register(Fgd.definition());
         register(Fgd.cpuRamDefinition());
         register(KubernetesResourceScoring.definition(Strategy.LEAST_ALLOCATED));

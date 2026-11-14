@@ -433,6 +433,46 @@ public final class Engine implements SchedulingContext {
         }
     }
 
+    /** Checks soft domain limits of a feasible plan, including its own colocated members. */
+    public boolean satisfiesSoftLimits(Assignment[] plans) {
+        checkThread();
+        for (final var plan : plans) {
+            final int profile = model.constraints[plan.resource()];
+            for (int limit = model.rules.limitOffset[profile]; limit < model.rules.limitOffset[profile + 1]; limit++) {
+                if (!model.rules.limitHard[limit]) {
+                    return countSoftLimits(plans);
+                }
+            }
+        }
+        return true;
+    }
+
+    private boolean countSoftLimits(Assignment[] plans) {
+        for (final var plan : plans) {
+            update(plan, 1, tentativeGroups, tentativeCounts);
+        }
+        try {
+            for (final var plan : plans) {
+                final int profile = model.constraints[plan.resource()];
+                final int group = group(plan);
+                for (int limit = model.rules.limitOffset[profile]; limit < model.rules.limitOffset[profile + 1]; limit++) {
+                    if (!model.rules.limitHard[limit]) {
+                        final int level = model.rules.limitDomain[limit], value = domain(plan, level);
+                        if (value == 0 || count(counts, group, level, value)
+                                + count(tentativeCounts, group, level, value) > model.rules.limitMax[limit]) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        } finally {
+            for (final var plan : plans) {
+                update(plan, -1, tentativeGroups, tentativeCounts);
+            }
+        }
+    }
+
     @Override
     public void place(Request request, Assignment... plans) {
         checkMutable();

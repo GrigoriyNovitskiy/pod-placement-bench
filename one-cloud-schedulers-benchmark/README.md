@@ -82,6 +82,8 @@ Built-in algorithms are `fitcount`, `mean-fitcount`, `geometric-best-fit`, `fgd`
 relocations after a decline from `geometric-best-fit`.
 [`proactive-ilp`](docs/algorithms/proactive-ilp.md) periodically moves pods to
 increase room for a reference workload.
+[`yp-light` and `yp-planner`](docs/algorithms/yp-planner.md) compare the Yandex Planner
+host ranking with and without a separate retry queue and CBC defragmentation.
 The five [CatBoost and RandomN variants](docs/algorithms/catboost.md) use packaged
 models and the same runner: `catboost-top1`, `catboost-topn-fitcount`,
 `catboost-rollout-top1`, `catboost-rollout-topn-fitcount`, and `randomn-fitcount`.
