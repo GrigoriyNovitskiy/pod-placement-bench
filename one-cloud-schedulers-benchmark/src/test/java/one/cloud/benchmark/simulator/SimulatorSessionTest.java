@@ -27,6 +27,46 @@ import static org.junit.jupiter.api.Assertions.*;
 
 class SimulatorSessionTest {
     @Test
+    void yPlannerReflectsReactiveAndProactiveCbcRelocationsInUi() throws Exception {
+        final var cluster = model(
+                alloc(1, new int[]{1, 2}, 8, 8), alloc(2, new int[]{1, 2}, 7, 1000),
+                alloc(3, new int[]{1, 2}, 2, 3), alloc(4, new int[]{1, 2}, 8, 2),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 3, 2),
+                resource(5, 4, 2), resource(6, 3, 2));
+        final var requests = new Request[]{new Request(3), new Request(4), new Request(5), new Request(6)};
+        final var scenario = Scenario.fromAtomicEvents(cluster, requests,
+                new int[]{1, 2, 3, 4, -4, -3, -2, -1}, requests, "yp-cbc");
+        final var settings = new AlgorithmRegistry.Settings("yp-planner",
+                Map.of("retryEvery", new JsonPrimitive(4), "timeoutMs", new JsonPrimitive(5000)));
+        try (var session = new SimulatorSession(ScenarioInput.from(scenario), List.of(settings))) {
+            session.step(3);
+            assertArrayEquals(new int[]{3, 4}, memberIds(session.inspect(0, 1)));
+            assertEquals(2, counters(session).get("placedUnits").getAsInt());
+            session.step(1);
+            assertArrayEquals(new int[]{5}, memberIds(session.inspect(0, 1)));
+            assertEquals(3, session.inspect(0, 2).get("activeResources").getAsInt());
+            assertEquals(4, counters(session).get("placedUnits").getAsInt());
+            session.stepRemaining();
+            assertEquals(4, counters(session).get("removedUnits").getAsInt());
+            assertEquals(0, counters(session).get("usedHosts").getAsInt());
+        }
+
+        final var proactive = new AlgorithmRegistry.Settings("yp-planner",
+                Map.of("proactiveEvery", new JsonPrimitive(2), "probeRamMiB", new JsonPrimitive(2),
+                        "timeoutMs", new JsonPrimitive(5000)));
+        try (var session = new SimulatorSession(ScenarioInput.from(scenario), List.of(proactive))) {
+            session.step(2);
+            assertEquals(0, session.inspect(0, 1).get("activeResources").getAsInt());
+            assertEquals(2, session.inspect(0, 2).get("activeResources").getAsInt());
+            session.step(1);
+            assertArrayEquals(new int[]{5}, memberIds(session.inspect(0, 1)));
+            assertEquals(3, counters(session).get("placedUnits").getAsInt());
+        }
+    }
+
+    @Test
     void stepsThroughCreateRejectAndDeleteAndReset() throws Exception {
         try (var session = new SimulatorSession(input(), List.of(AlgorithmRegistry.defaults("fitcount")))) {
             session.step(2);
