@@ -364,7 +364,7 @@ class FitCountTest {
         final var selected = new Engine(model);
         final var chooser = new FitCount(selected, 42, new Request[]{demand}, 10, 1,
                 (request, plans, count) -> new int[]{count - 1});
-        final var wrapper = new SchedulingAlgorithm(selected, 42) {
+        final var wrapper = new SchedulingAlgorithm(selected) {
             @Override
             public void schedule(Request request) {
                 final var direct = chooser.select(request);
@@ -381,13 +381,8 @@ class FitCountTest {
             }
 
             @Override
-            public void placed(Assignment plan) {
-                chooser.placed(plan);
-            }
-
-            @Override
-            public void removed(Assignment plan) {
-                chooser.removed(plan);
+            public void capacityChanged(int host) {
+                chooser.capacityChanged(host);
             }
         };
         for (int pass = 0; pass < 2; pass++) {
@@ -733,7 +728,7 @@ class FitCountTest {
                 final var catalogue = new Request[settings[0]];
                 Arrays.fill(catalogue, sample);
                 final FitCount[] delegate = {null};
-                final var scheduler = new SchedulingAlgorithm(state, 0) {
+                final var scheduler = new SchedulingAlgorithm(state) {
                     @Override
                     public void schedule(Request request) {
                         if (request == background) {
@@ -748,16 +743,9 @@ class FitCountTest {
                     }
 
                     @Override
-                    public void placed(Assignment plan) {
+                    public void capacityChanged(int host) {
                         if (delegate[0] != null) {
-                            delegate[0].placed(plan);
-                        }
-                    }
-
-                    @Override
-                    public void removed(Assignment plan) {
-                        if (delegate[0] != null) {
-                            delegate[0].removed(plan);
+                            delegate[0].capacityChanged(host);
                         }
                     }
                 };
@@ -821,19 +809,29 @@ class FitCountTest {
         final var units = new Request[]{new Request(3), new Request(4), new Request(5)};
         final var planner = new GreedyPlanner(state);
         final var cache = new FitCountCache(state, planner, units, 7, 1);
-        try (final var scheduler = new FitCount(state, 3, units, 7, 1)) {
+        final var delegate = new FitCount(state, 3, units, 7, 1);
+        try (delegate; final var scheduler = new SchedulingAlgorithm(state) {
+            @Override
+            public void schedule(Request request) {
+                delegate.schedule(request);
+            }
+
+            @Override
+            public void capacityChanged(int host) {
+                delegate.capacityChanged(host);
+                cache.changed(host);
+            }
+        }) {
             for (int step = 0; step < units.length * 2 + 1; step++) {
                 if (step != 0) {
                     final var unit = units[(step - 1) % units.length];
                     if (step <= units.length) {
                         state.schedule(scheduler, unit);
-                        cache.changed(state.placement(unit.resource(0)).host());
                     } else {
-                        final int host = state.placement(unit.resource(0)).host();
                         state.remove(unit);
-                        cache.changed(host);
                     }
                 }
+                assertEquals(step, cache.generation());
                 for (final double limit : new double[]{0, 1.5, 3.5, Double.MAX_VALUE}) {
                     int expected = 0;
                     for (final var sample : cache.samples()) {
@@ -956,7 +954,7 @@ class FitCountTest {
                 try (final var ordinary = new FitCount(baseline, 42, requests);
                         final var chooser = new FitCount(selected, 42, requests)) {
                     final var owned = new ArrayList<Assignment[]>();
-                    final var wrapper = new SchedulingAlgorithm(selected, 99) {
+                    final var wrapper = new SchedulingAlgorithm(selected) {
                         @Override
                         public void schedule(Request request) {
                             final long revision = context.revision();
@@ -974,13 +972,8 @@ class FitCountTest {
                         }
 
                         @Override
-                        public void placed(Assignment plan) {
-                            chooser.placed(plan);
-                        }
-
-                        @Override
-                        public void removed(Assignment plan) {
-                            chooser.removed(plan);
+                        public void capacityChanged(int host) {
+                            chooser.capacityChanged(host);
                         }
                     };
                     for (int pass = 0; pass < 2; pass++) {
@@ -1036,7 +1029,7 @@ class FitCountTest {
                     final var request = new Request(pod, 18);
                     final var catalogue = tied ? new Request[0] : new Request[]{new Request(19), new Request(20)};
                     final var state = new Engine(model);
-                    state.schedule(new SchedulingAlgorithm(state, 44) {
+                    state.schedule(new SchedulingAlgorithm(state) {
                         @Override
                         public void schedule(Request pending) throws Exception {
                             final var planner = new GreedyPlanner(state);
@@ -1118,7 +1111,7 @@ class FitCountTest {
             final var probe = new Engine(model);
             final var request = new Request(17, 18);
             final Assignment[][] expected = new Assignment[1][];
-            probe.schedule(new SchedulingAlgorithm(probe, 44) {
+            probe.schedule(new SchedulingAlgorithm(probe) {
                 @Override
                 public void schedule(Request pending) {
                     final var planner = new GreedyPlanner(probe);
@@ -1217,7 +1210,7 @@ class FitCountTest {
         final var planner = new GreedyPlanner(oracleState);
         final var plans = new Assignment[hosts][];
         final var original = new Assignment[hosts][];
-        oracleState.schedule(new SchedulingAlgorithm(oracleState, 0) {
+        oracleState.schedule(new SchedulingAlgorithm(oracleState) {
             @Override
             public void schedule(Request pending) {
                 for (int host = 1; host <= hosts; host++) {

@@ -7,7 +7,6 @@ import one.cloud.benchmark.algorithms.AlgorithmDefinition;
 import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
-import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class MaskedFitCount extends SchedulingAlgorithm {
@@ -31,7 +30,7 @@ public final class MaskedFitCount extends SchedulingAlgorithm {
 
     public MaskedFitCount(SchedulingContext context, long seed, Request[] catalogue,
             int cap, int cacheRows, FitCount.CandidateSelector selector, int maxRetainedWidth) {
-        super(context, seed);
+        super(context);
         if (maxRetainedWidth <= 0) {
             throw new IllegalArgumentException("Maximum retained width must be positive");
         }
@@ -58,13 +57,8 @@ public final class MaskedFitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        delegate.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        delegate.removed(placement);
+    public void capacityChanged(int host) {
+        delegate.capacityChanged(host);
     }
 
     @Override

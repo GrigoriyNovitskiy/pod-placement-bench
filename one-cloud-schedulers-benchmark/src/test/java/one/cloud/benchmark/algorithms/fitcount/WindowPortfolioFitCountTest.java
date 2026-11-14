@@ -206,7 +206,7 @@ class WindowPortfolioFitCountTest {
                         }
                     });
             try (final var window = new WindowPortfolioFitCount(context, 44, pending)) {
-                final var wrapper = new SchedulingAlgorithm(isolated, 44) {
+                final var wrapper = new SchedulingAlgorithm(isolated) {
                     @Override
                     public void schedule(Request request) throws Exception {
                         window.schedule(request);
@@ -218,13 +218,8 @@ class WindowPortfolioFitCountTest {
                     }
 
                     @Override
-                    public void placed(Assignment placement) {
-                        window.placed(placement);
-                    }
-
-                    @Override
-                    public void removed(Assignment placement) {
-                        window.removed(placement);
+                    public void capacityChanged(int host) {
+                        window.capacityChanged(host);
                     }
                 };
                 if (unavailable) {

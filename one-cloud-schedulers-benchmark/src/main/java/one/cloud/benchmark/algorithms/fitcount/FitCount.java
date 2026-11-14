@@ -23,6 +23,7 @@ public final class FitCount extends SchedulingAlgorithm {
         int[] select(Request request, Assignment[][] plans, int count) throws Exception;
     }
 
+    private final SplittableRandom random;
     private final GreedyPlanner planner;
     private final FitCountCache cache;
     private final int cap;
@@ -123,7 +124,8 @@ public final class FitCount extends SchedulingAlgorithm {
     private FitCount(SchedulingContext context, long seed, Catalogue catalogue,
             int maxFitCount, int maxCachedShapes, boolean weighted, CandidateSelector selector,
             int maxRetainedWidth, double maxTotalFit) {
-        super(context, seed);
+        super(context);
+        random = new SplittableRandom(seed);
         if (!Double.isFinite(maxTotalFit) || maxTotalFit < 0) {
             throw new IllegalArgumentException("Total FitCount limit must be finite and nonnegative");
         }
@@ -488,12 +490,7 @@ public final class FitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        cache.changed(placement.host());
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        cache.changed(placement.host());
+    public void capacityChanged(int host) {
+        cache.changed(host);
     }
 }

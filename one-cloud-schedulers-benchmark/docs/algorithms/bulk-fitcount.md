@@ -37,7 +37,7 @@ placement. Curves can be nonconvex or nonmonotonic with greedy geometry.
 4. Bind plans to actual request IDs in original order. DP reconstructs and
    validates the selected count options through the common engine.
 5. Commit the complete validated proposal in input order. Forward actual
-   placed/removed notifications to the persistent FitCount fallback so its cache
+   `capacityChanged(host)` notifications to the persistent FitCount fallback so its cache
    stays current.
 
 Stream host curves or reconstruct them; avoid an H*N*catalogue dense matrix.

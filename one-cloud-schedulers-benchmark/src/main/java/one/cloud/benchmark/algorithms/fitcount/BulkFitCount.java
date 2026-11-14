@@ -3,6 +3,7 @@ package one.cloud.benchmark.algorithms.fitcount;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Map;
+import java.util.SplittableRandom;
 import java.util.TreeMap;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
@@ -76,7 +77,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
 
     private BulkFitCount(SchedulingContext context, long seed, Request[] catalogue,
             int cap, int rows, boolean dp, long workLimit, long memoryLimit) {
-        super(context, seed);
+        super(context);
         new CountDp.Work(workLimit, memoryLimit);
         fallback = new FitCount(context, seed, catalogue, cap, rows);
         this.cap = cap;
@@ -227,7 +228,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
                 before[sample] = planner.fitCount(samples[sample].request, host, cap);
             }
             final int[] count = {0};
-            trial.state().schedule(new SchedulingAlgorithm(trial.state(), 0) {
+            trial.state().schedule(new SchedulingAlgorithm(trial.state()) {
                 @Override
                 public void schedule(Request request) {
                     final var plan = first(planner, request, host);
@@ -264,6 +265,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
     }
 
     private final class GreedyPolicy extends SchedulingAlgorithm {
+        private final SplittableRandom random;
         private final GreedyPlanner planner;
         private final Request[] requests;
         private final FitCountCache.Sample[] samples;
@@ -275,7 +277,8 @@ public final class BulkFitCount extends SchedulingAlgorithm {
 
         GreedyPolicy(SchedulingContext context, GreedyPlanner planner, Request[] requests,
                 FitCountCache.Sample[] samples, long seed, CountDp.Work work) {
-            super(context, seed);
+            super(context);
+            random = new SplittableRandom(seed);
             this.planner = planner;
             this.requests = requests;
             this.samples = samples;
@@ -385,7 +388,7 @@ public final class BulkFitCount extends SchedulingAlgorithm {
         boolean complete = true;
 
         CountsPolicy(SchedulingContext context, GreedyPlanner planner, int[] counts) {
-            super(context, 0);
+            super(context);
             this.planner = planner;
             this.counts = counts;
         }
@@ -487,13 +490,8 @@ public final class BulkFitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        fallback.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        fallback.removed(placement);
+    public void capacityChanged(int host) {
+        fallback.capacityChanged(host);
     }
 
     @Override

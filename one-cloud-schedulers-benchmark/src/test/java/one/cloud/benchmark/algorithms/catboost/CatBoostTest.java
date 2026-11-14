@@ -158,7 +158,7 @@ class CatBoostTest {
             final var state = new Engine(ClusterSpec.from(Dataset.load(path)));
             final var encoder = new CandidateFeatures(state);
             final int slot = index++;
-            state.schedule(new SchedulingAlgorithm(state, 42) {
+            state.schedule(new SchedulingAlgorithm(state) {
                 @Override
                 public void schedule(Request request) {
                     final var plans = candidates(state, new GreedyPlanner(state), request);
@@ -201,7 +201,7 @@ class CatBoostTest {
                 final var lines = reader.lines().toList();
                 assertEquals(CandidateFeatures.names(), Arrays.asList(lines.getFirst().split(",")).subList(5, 116));
                 final int[] row = {1};
-                final var probe = new SchedulingAlgorithm(state, 42) {
+                final var probe = new SchedulingAlgorithm(state) {
                     @Override
                     public void schedule(Request request) throws Exception {
                         final var plans = candidates(state, planner, request);
@@ -236,7 +236,7 @@ class CatBoostTest {
         final var request = new Request(3, 4);
         final float[][][] extracted = new float[1][][];
         final var encoder = new CandidateFeatures(state);
-        state.schedule(new SchedulingAlgorithm(state, 42) {
+        state.schedule(new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 final var plans = candidates(state, new GreedyPlanner(state), request);
@@ -285,7 +285,7 @@ class CatBoostTest {
         final var request = new Request(ids);
         try (final var scorer = new CatBoostScorer(null,
                 "/one/cloud/benchmark/algorithms/catboost/fitcount.cbm")) {
-            probeState.schedule(new SchedulingAlgorithm(probeState, 42) {
+            probeState.schedule(new SchedulingAlgorithm(probeState) {
                 @Override
                 public void schedule(Request request) throws Exception {
                     final var plans = candidates(probeState, new GreedyPlanner(probeState), request);

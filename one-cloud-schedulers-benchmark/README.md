@@ -266,8 +266,8 @@ import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Request;
 
 public final class MyAlgorithm extends SchedulingAlgorithm {
-    public MyAlgorithm(SchedulingContext context, long seed) {
-        super(context, seed);
+    public MyAlgorithm(SchedulingContext context) {
+        super(context);
     }
 
     @Override
@@ -280,6 +280,10 @@ public final class MyAlgorithm extends SchedulingAlgorithm {
 The array overload calls the single-request method in order by default. Batch
 algorithms may override it to plan the entire visible window. Treat the array as
 read-only.
+
+Only algorithms that use randomness own a seeded RNG. Cache invalidation,
+diagnostics (`plannerCalls`, `parameters`, `counters`) and backend cleanup (`close`)
+are optional hooks with defaults.
 
 `GreedyPlanner` is the shared greedy geometry helper for host-selection
 algorithms. Iterate the borrowed, read-only `numaNodes(host)` array, where zero
@@ -327,13 +331,23 @@ state, including aggregate budgets and intra-unit constraints. `canPlace` is pur
 malformed inputs throw, well-formed infeasible plans return false. It must retain
 no buffers or invoke notifications. `place` validates the whole unit, snapshots all
 winning buffers before mutation, commits all members, updates revisions, then
-calls `placed` in request member order. Submission buffers can be reused on return.
-Current placements and notification arguments are read-only engine-owned snapshots.
-`removed` sees the state after release. A notification failure aborts the run;
+calls `capacityChanged(host)` once for each host whose physical budget changed.
+Removal notifies after the whole unit is released. Relocation notifies the old
+and new hosts after all moves and any admission are committed; the same host may
+be notified for several units. Zero-demand placements advance `revision()` but
+do not change `capacityRevision(host)` or invoke this hook. Use `revision()` for
+caches of group, domain or dependency eligibility. Notification order is unspecified.
+Submission buffers can be reused on return. Current placements are read-only
+engine-owned snapshots. A notification failure aborts the run;
 arbitrary callback effects are not rolled back. State changes and notifications
 stay on one owner thread; notifications may read state but cannot reenter mutation.
 Solver, native and GPU work must finish before its result
 is submitted and before `schedule` returns; `close` releases backend resources.
+
+Custom algorithms must migrate `super(context, seed)` to `super(context)` and
+create their own seeded RNG when needed. Replace `placed`/`removed` cache hooks
+with `capacityChanged(int host)` and forward this hook to any delegate. It reports
+physical capacity invalidation rather than individual placement events.
 
 Each `Engine` starts with empty hosts and owns one run's placements, resource
 budgets and dependency counters. It executes scheduling windows, validates and

@@ -190,7 +190,7 @@ public final class FirstFit extends SchedulingAlgorithm {
     private final GreedyPlanner planner;
 
     public FirstFit(SchedulingContext context) {
-        super(context, 0);
+        super(context);
         planner = new GreedyPlanner(context);
     }
 

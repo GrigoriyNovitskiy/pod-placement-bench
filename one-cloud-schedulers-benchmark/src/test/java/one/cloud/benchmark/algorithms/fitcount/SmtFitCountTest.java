@@ -168,7 +168,9 @@ class SmtFitCountTest {
             for (final int cacheRows : new int[]{1, 64}) {
                 final var expected = new Engine(specification);
                 final var actual = new Engine(specification);
-                try (final var baseline = new SchedulingAlgorithm(expected, 42) {
+                try (final var baseline = new SchedulingAlgorithm(expected) {
+                    private final SplittableRandom random = new SplittableRandom(42);
+
                     @Override
                     public void schedule(Request request) {
                         new FitCount(context, random.nextLong(), catalogue, 10, cacheRows).schedule(request);

@@ -196,7 +196,7 @@ public final class Engine implements SchedulingContext {
             throw new IllegalStateException("A live placement depends on this unit");
         }
         detach(unit);
-        notify(unit.plans, false);
+        notifyCapacityChanged(unit);
     }
 
     private void detach(Unit unit) {
@@ -318,11 +318,11 @@ public final class Engine implements SchedulingContext {
             for (final var plan : replacements[move].plans) {
                 relocations.add(plan.copy());
             }
-            notify(previous[move].plans, false);
-            notify(replacements[move].plans, true);
+            notifyCapacityChanged(previous[move]);
+            notifyCapacityChanged(replacements[move]);
         }
         if (admitted != null) {
-            notify(admitted.plans, true);
+            notifyCapacityChanged(admitted);
         }
         return true;
     }
@@ -342,7 +342,7 @@ public final class Engine implements SchedulingContext {
         private Assignment[] plans;
 
         private CheckedPlacement(Engine engine) {
-            super(engine, 0);
+            super(engine);
             this.engine = engine;
         }
 
@@ -452,7 +452,7 @@ public final class Engine implements SchedulingContext {
         }
         attach(unit);
         nextRequest = pending.get(request) + 1;
-        notify(unit.plans, true);
+        notifyCapacityChanged(unit);
     }
 
     private void attach(Unit unit) {
@@ -716,15 +716,11 @@ public final class Engine implements SchedulingContext {
         }
     }
 
-    private void notify(Assignment[] plans, boolean placed) {
+    private void notifyCapacityChanged(Unit unit) {
         notifying = true;
         try {
-            for (final var plan : plans) {
-                if (placed) {
-                    algorithm.placed(plan);
-                } else {
-                    algorithm.removed(plan);
-                }
+            for (final int host : unit.hosts) {
+                algorithm.capacityChanged(host);
             }
         } catch (RuntimeException | Error failure) {
             this.failure = failure;

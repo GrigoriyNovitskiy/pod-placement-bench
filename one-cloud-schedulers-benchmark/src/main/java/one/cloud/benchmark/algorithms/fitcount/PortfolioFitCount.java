@@ -77,7 +77,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     private PortfolioFitCount(SchedulingContext context, long seed, Catalogue catalogue,
             int randomCandidates, int fragmentationCandidates, int leastCandidates, int geometricCandidates,
             int cap, int cacheRows, double maxTotalFit, boolean weighted) {
-        super(context, seed);
+        super(context);
         if (randomCandidates < 1 || randomCandidates > 64 || fragmentationCandidates < 0
                 || fragmentationCandidates > 16 || leastCandidates < 0 || leastCandidates > 16
                 || geometricCandidates < 0 || geometricCandidates > 16) {
@@ -238,13 +238,8 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        delegate.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        delegate.removed(placement);
+    public void capacityChanged(int host) {
+        delegate.capacityChanged(host);
     }
 
     @Override

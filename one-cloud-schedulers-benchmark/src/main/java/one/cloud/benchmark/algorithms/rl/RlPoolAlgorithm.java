@@ -13,7 +13,6 @@ import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.fitcount.MaskedFitCount;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
-import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.algorithms.AlgorithmParameters.CACHE_ROWS;
@@ -56,7 +55,7 @@ abstract class RlPoolAlgorithm extends SchedulingAlgorithm {
     RlPoolAlgorithm(SchedulingContext context, long seed, Catalogue catalogue, int topN, int poolSize,
             int extras, int fitCap, int cacheRows, Path model, boolean uniformExtras, Refinement refinement,
             double maxTotalFit) throws IOException {
-        super(context, seed);
+        super(context);
         selector = new RlPoolSelector(context, seed, topN, poolSize, extras, model, uniformExtras);
         delegate = switch (refinement) {
             case MASKED -> new MaskedFitCount(context, seed, catalogue.requests(), fitCap, cacheRows, selector, topN + extras);
@@ -76,13 +75,8 @@ abstract class RlPoolAlgorithm extends SchedulingAlgorithm {
     }
 
     @Override
-    public final void placed(Assignment placement) {
-        delegate.placed(placement);
-    }
-
-    @Override
-    public final void removed(Assignment placement) {
-        delegate.removed(placement);
+    public final void capacityChanged(int host) {
+        delegate.capacityChanged(host);
     }
 
     @Override

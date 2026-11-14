@@ -2,6 +2,7 @@ package one.cloud.benchmark.algorithms.kubernetes;
 
 import java.util.Locale;
 import java.util.Objects;
+import java.util.SplittableRandom;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
@@ -25,6 +26,7 @@ public final class KubernetesResourceScoring extends SchedulingAlgorithm {
     private static final int EMPTY_SCORE = 10;
     private static final int FULL_SCORE = 50;
 
+    private final SplittableRandom random;
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
 
@@ -38,7 +40,8 @@ public final class KubernetesResourceScoring extends SchedulingAlgorithm {
     }
 
     public KubernetesResourceScoring(SchedulingContext context, long seed, Strategy strategy) {
-        super(context, seed);
+        super(context);
+        random = new SplittableRandom(seed);
         planner = new GreedyPlanner(context);
         scorer = scorer(planner, strategy);
     }

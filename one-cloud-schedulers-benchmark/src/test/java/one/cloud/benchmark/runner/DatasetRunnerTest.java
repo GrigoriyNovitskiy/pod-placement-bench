@@ -127,7 +127,7 @@ class DatasetRunnerTest {
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 2, 2)},
                 2, 3, 4, -4, -3, -2)).withServiceBursts(2);
         final var windows = new ArrayList<Integer>();
-        final DatasetRunner.Factory factory = (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+        final DatasetRunner.Factory factory = (context, seed, catalogue) -> new SchedulingAlgorithm(context) {
             final FitCount fallback = new FitCount(context, seed, catalogue);
 
             @Override
@@ -144,13 +144,8 @@ class DatasetRunnerTest {
             }
 
             @Override
-            public void placed(Assignment placement) {
-                fallback.placed(placement);
-            }
-
-            @Override
-            public void removed(Assignment placement) {
-                fallback.removed(placement);
+            public void capacityChanged(int host) {
+                fallback.capacityChanged(host);
             }
 
             @Override
@@ -346,13 +341,13 @@ class DatasetRunnerTest {
                 rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
                 resource(1, 1, 1), resource(2, 2, 2)}, 2, -2), ClusterSpec.GpuMode.DEVICES_20);
-        final DatasetRunner.Factory firstGpu = (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+        final DatasetRunner.Factory firstGpu = (context, seed, catalogue) -> new SchedulingAlgorithm(context) {
             @Override
             public void schedule(Request request) {
                 context.place(request, new Assignment(request.resource(0), 1, 0, new int[]{0}, new int[0], new int[]{1}));
             }
         };
-        final DatasetRunner.Factory secondGpu = (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+        final DatasetRunner.Factory secondGpu = (context, seed, catalogue) -> new SchedulingAlgorithm(context) {
             @Override
             public void schedule(Request request) {
                 context.place(request, new Assignment(request.resource(0), 1, 0, new int[]{0}, new int[0], new int[]{2}));
@@ -395,7 +390,7 @@ class DatasetRunnerTest {
         final var scenario = Scenario.from(trace(scalar(1, 2, 1), 2, -2));
         final var closed = new AtomicBoolean();
         final var failure = assertThrows(IOException.class, () -> DatasetRunner.run(scenario,
-                DatasetRunner.Options.defaults(), (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+                DatasetRunner.Options.defaults(), (context, seed, catalogue) -> new SchedulingAlgorithm(context) {
                     @Override
                     public void schedule(Request request) throws IOException {
                         throw new IOException("backend failed");
@@ -437,7 +432,7 @@ class DatasetRunnerTest {
     }
 
     private static DatasetRunner.Factory forcedHost(int host) {
-        return (context, seed, catalogue) -> new SchedulingAlgorithm(context, seed) {
+        return (context, seed, catalogue) -> new SchedulingAlgorithm(context) {
             @Override
             public void schedule(Request request) {
                 context.place(request, new Assignment(request.resource(0), host, 0, new int[]{0}, new int[0]));

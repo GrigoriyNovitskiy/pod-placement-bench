@@ -51,7 +51,7 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
     }
 
     public ReactiveIlp(SchedulingContext context, long seed, int maxMoves, int timeoutMs) {
-        super(context, seed);
+        super(context);
         if (!(context instanceof Engine placementEngine)) {
             throw new IllegalArgumentException("Reactive ILP requires the placement engine");
         }
@@ -116,7 +116,7 @@ public final class ReactiveIlp extends SchedulingAlgorithm {
         final var requests = new ArrayList<Request>(victims.size() + 1);
         requests.add(incoming);
         requests.addAll(victims);
-        preview.schedule(new SchedulingAlgorithm(preview, 0) {
+        preview.schedule(new SchedulingAlgorithm(preview) {
             @Override
             public void schedule(Request request) {
                 if (request == incoming) {

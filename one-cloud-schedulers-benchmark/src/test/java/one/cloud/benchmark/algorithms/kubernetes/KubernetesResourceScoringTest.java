@@ -32,7 +32,7 @@ class KubernetesResourceScoringTest {
                 resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2)));
         final var planner = new GreedyPlanner(state);
         final var scorer = KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
-        state.schedule(new SchedulingAlgorithm(state, 44) {
+        state.schedule(new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 for (int host = 1; host <= 2; host++) {

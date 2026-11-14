@@ -21,7 +21,7 @@ public abstract class CatBoostAlgorithm extends SchedulingAlgorithm {
     protected CatBoostAlgorithm(SchedulingContext context, long seed, Request[] catalogue,
             int topN, int fitCap, int cacheRows, Path modelPath, String modelResource)
             throws IOException, CatBoostError {
-        super(context, seed);
+        super(context);
         if (topN <= 0) {
             throw new IllegalArgumentException("Candidate shortlist size must be positive");
         }
@@ -89,13 +89,8 @@ public abstract class CatBoostAlgorithm extends SchedulingAlgorithm {
     }
 
     @Override
-    public final void placed(Assignment placement) {
-        delegate.placed(placement);
-    }
-
-    @Override
-    public final void removed(Assignment placement) {
-        delegate.removed(placement);
+    public final void capacityChanged(int host) {
+        delegate.capacityChanged(host);
     }
 
     @Override

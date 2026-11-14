@@ -128,7 +128,7 @@ class EngineTest {
         final int gpu = state.model().gpus.first(1, 11);
         final var rejected = new Request(2, 3);
         final var accepted = new Request(2, 4);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 final int second = request.resource(1);
@@ -174,7 +174,7 @@ class EngineTest {
         final var mixed = new Request(4);
         final var zero = new Request(5);
         final int[] selected = {nvidia, intel};
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 if (request == whole) {
@@ -226,7 +226,7 @@ class EngineTest {
         final var request = new Request(3, 4);
         final var notifications = new ArrayList<Integer>();
         final int[] offsets = {0};
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request unit) {
                 assertFalse(context.canPlace(unit, plan(3, 1), plan(4, 1)));
@@ -238,22 +238,19 @@ class EngineTest {
             }
 
             @Override
-            public void placed(Assignment plan) {
-                assertNotNull(context.placement(3));
-                assertNotNull(context.placement(4));
-                assertEquals(2, context.groupCount(1));
-                assertEquals(1, context.revision());
+            public void capacityChanged(int host) {
+                if (context.revision() == 1) {
+                    assertNotNull(context.placement(3));
+                    assertNotNull(context.placement(4));
+                    assertEquals(2, context.groupCount(1));
+                } else {
+                    assertNull(context.placement(3));
+                    assertNull(context.placement(4));
+                    assertEquals(0, context.groupCount(1));
+                    assertEquals(2, context.revision());
+                }
                 assertThrows(IllegalStateException.class, () -> state.remove(request));
-                notifications.add(plan.resource());
-            }
-
-            @Override
-            public void removed(Assignment plan) {
-                assertNull(context.placement(3));
-                assertNull(context.placement(4));
-                assertEquals(0, context.groupCount(1));
-                assertEquals(2, context.revision());
-                notifications.add(-plan.resource());
+                notifications.add(host);
             }
         };
         state.schedule(algorithm, request);
@@ -263,13 +260,112 @@ class EngineTest {
         assertEquals(1, state.available(2, 1));
         assertEquals(1, state.capacityRevision(1));
         assertEquals(1, state.capacityRevision(2));
+        assertEquals(List.of(1, 2), notifications.stream().sorted().toList());
         assertThrows(IllegalArgumentException.class, () -> state.remove(new Request(3, 4)));
         state.remove(request);
         assertEquals(3, state.available(1, 1));
         assertEquals(3, state.available(2, 1));
         assertEquals(2, state.capacityRevision(1));
         assertEquals(2, state.capacityRevision(2));
-        assertEquals(List.of(3, 4, -3, -4), notifications);
+        assertEquals(List.of(1, 1, 2, 2), notifications.stream().sorted().toList());
+    }
+
+    @Test
+    void capacityNotificationsDeduplicateHostsAndIgnoreZeroDemand() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1}, 3), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 0, 2)));
+        final var compound = new Request(2, 3);
+        final var empty = new Request(4);
+        final var notifications = new ArrayList<Integer>();
+        final var algorithm = new SchedulingAlgorithm(state) {
+            @Override
+            public void schedule(Request request) {
+                if (request == compound) {
+                    context.place(request, plan(2, 1), plan(3, 1));
+                } else {
+                    context.place(request, plan(4, 1));
+                }
+            }
+
+            @Override
+            public void capacityChanged(int host) {
+                notifications.add(host);
+            }
+        };
+        state.schedule(algorithm, compound);
+        assertEquals(List.of(1), notifications);
+        assertEquals(1, state.capacityRevision(1));
+        state.schedule(algorithm, empty);
+        assertEquals(2, state.revision());
+        assertEquals(3, state.groupCount(1));
+        assertEquals(1, state.capacityRevision(1));
+        assertEquals(List.of(1), notifications);
+        state.remove(empty);
+        assertEquals(3, state.revision());
+        assertEquals(2, state.groupCount(1));
+        assertEquals(1, state.capacityRevision(1));
+        assertEquals(List.of(1), notifications);
+        state.remove(compound);
+        assertEquals(4, state.revision());
+        assertEquals(2, state.capacityRevision(1));
+        assertEquals(List.of(1, 1), notifications);
+    }
+
+    @Test
+    void relocationCapacityNotificationsSeeTheCompleteFinalState() throws Exception {
+        final var state = new Engine(model(
+                alloc(1, new int[]{1}, 3), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2),
+                resource(4, 1, 2), resource(5, 2, 2)));
+        final var movable = new Request(3, 5);
+        final var incoming = new Request(4);
+        final var notifications = new ArrayList<Integer>();
+        final var moves = List.of(new Engine.Relocation(movable, new Assignment[]{plan(3, 2), plan(5, 2)}));
+        final var algorithm = new SchedulingAlgorithm(state) {
+            @Override
+            public void schedule(Request request) throws Exception {
+                if (request == movable) {
+                    context.place(request, plan(3, 1), plan(5, 2));
+                } else {
+                    assertFalse(state.relocateAndPlace(request, new Assignment[]{plan(4, 2)}, moves));
+                    assertEquals(1, context.revision());
+                    assertEquals(1, context.placement(3).host());
+                    assertEquals(2, context.placement(5).host());
+                    assertTrue(notifications.isEmpty());
+                    assertTrue(state.relocateAndPlace(request, new Assignment[]{plan(4, 1)}, moves));
+                }
+            }
+
+            @Override
+            public void capacityChanged(int host) {
+                if (context.revision() == 1) {
+                    assertEquals(1, context.placement(3).host());
+                    assertEquals(2, context.placement(5).host());
+                    assertNull(context.placement(4));
+                } else {
+                    assertEquals(4, context.revision());
+                    assertEquals(2, context.placement(3).host());
+                    assertEquals(2, context.placement(5).host());
+                    assertEquals(1, context.placement(4).host());
+                    assertEquals(0, context.available(1, 1));
+                    assertEquals(1, context.available(2, 1));
+                    assertEquals(3, context.capacityRevision(1));
+                    assertEquals(3, context.capacityRevision(2));
+                }
+                assertThrows(IllegalStateException.class, () -> state.remove(movable));
+                notifications.add(host);
+            }
+        };
+        state.schedule(algorithm, movable);
+        assertEquals(List.of(1, 2), notifications.stream().sorted().toList());
+        notifications.clear();
+        state.schedule(algorithm, incoming);
+        assertEquals(List.of(1, 1, 2, 2), notifications.stream().sorted().toList());
     }
 
     @Test
@@ -289,7 +385,7 @@ class EngineTest {
                 resource(5, 3, 4), resource(6, 3, 4), resource(7, 3, 5)));
         final var unit = new Request(5, 6);
         final var missingDomain = new Request(7);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 if (request == unit) {
@@ -324,7 +420,7 @@ class EngineTest {
         final var first = new Request(3);
         final var second = new Request(4);
         final var dependent = new Request(5);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 if (request == dependent) {
@@ -365,7 +461,7 @@ class EngineTest {
                         .addLinks(Link.newBuilder().setTarget(3).setDomain(1))),
                 candidates(2, 1), resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3)));
         final var unit = new Request(4, 3);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 assertFalse(context.canPlace(request, plan(4, 1), plan(3, 2)));
@@ -386,7 +482,7 @@ class EngineTest {
         final var first = new Request(2);
         final var second = new Request(3);
         final var last = new Request(4);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 throw new AssertionError("Batch override must be used");
@@ -415,14 +511,14 @@ class EngineTest {
     void callbackFailuresAbortEvenIfTheAlgorithmCatchesThem() throws Exception {
         final var state = scalarState();
         final var first = new Request(2);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 assertThrows(IllegalArgumentException.class, () -> context.place(request, plan(2, 1)));
             }
 
             @Override
-            public void placed(Assignment plan) {
+            public void capacityChanged(int host) {
                 throw new IllegalArgumentException("Broken cache notification");
             }
         };
@@ -445,7 +541,7 @@ class EngineTest {
             requests[host - 1] = new Request(host + requests.length);
         }
         final var state = new Engine(model(records.toArray(Record[]::new)));
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 final int resource = request.resource(0);
@@ -471,7 +567,7 @@ class EngineTest {
                 rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
                 resource(1, 1, 1), resource(2, 0, 2)));
         final var request = new Request(2);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 context.place(request, plan(2, 1));
@@ -502,7 +598,7 @@ class EngineTest {
             records.add(resource(resource, 0, 3));
         }
         final var state = new Engine(model(records.toArray(Record[]::new)));
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 final var plans = new Assignment[request.size()];
@@ -542,7 +638,7 @@ class EngineTest {
             final var first = new Request(3);
             final var second = new Request(4);
             final var consumer = new Request(5);
-            final var algorithm = new SchedulingAlgorithm(state, 1) {
+            final var algorithm = new SchedulingAlgorithm(state) {
                 @Override
                 public void schedule(Request request) {
                     final int host = request == second && level == 3 ? 2 : 1;
@@ -581,7 +677,7 @@ class EngineTest {
         final var pending = new Request(4, 5);
         final var notifications = new ArrayList<Integer>();
         final var sourcePlanner = new GreedyPlanner(source);
-        final var sourcePolicy = new SchedulingAlgorithm(source, 42) {
+        final var sourcePolicy = new SchedulingAlgorithm(source) {
             @Override
             public void schedule(Request request) {
                 final var plans = sourcePlanner.plan(request, 1, 0);
@@ -590,8 +686,8 @@ class EngineTest {
             }
 
             @Override
-            public void placed(Assignment plan) {
-                notifications.add(plan.resource());
+            public void capacityChanged(int host) {
+                notifications.add(host);
             }
         };
         source.schedule(sourcePolicy, base);
@@ -604,7 +700,7 @@ class EngineTest {
         for (int pass = 0; pass < 20; pass++) {
             if (pass == 0) {
                 final var planner = new GreedyPlanner(state);
-                final var failing = new SchedulingAlgorithm(state, 1) {
+                final var failing = new SchedulingAlgorithm(state) {
                     @Override
                     public void schedule(Request request) {
                         final var plans = planner.plan(request, 1, 0);
@@ -613,7 +709,7 @@ class EngineTest {
                     }
 
                     @Override
-                    public void placed(Assignment plan) {
+                    public void capacityChanged(int host) {
                         throw new IllegalStateException("Private trial callback");
                     }
                 };
@@ -646,7 +742,7 @@ class EngineTest {
             assertEquals(source.capacityRevision(1), state.capacityRevision(1));
             assertNull(state.placement(4));
             assertNull(state.placement(5));
-            assertEquals(List.of(3), notifications);
+            assertEquals(List.of(1), notifications);
             assertEquals(cpuBits, Double.doubleToLongBits(source.available(1, 1)));
             assertEquals(16, source.gpuAvailable(gpu));
         }
@@ -759,7 +855,7 @@ class EngineTest {
         final var detached = source.trial(source.model()).state();
         assertThrows(IllegalStateException.class, () -> detached.trial(detached.model()));
         final var escaped = new Engine.Trial[1];
-        final var failing = new SchedulingAlgorithm(source, 1) {
+        final var failing = new SchedulingAlgorithm(source) {
             @Override
             public void schedule(Request request) {
                 escaped[0] = context.trial(context.model());
@@ -782,7 +878,7 @@ class EngineTest {
 
     private static SchedulingAlgorithm greedy(Engine state) {
         final var planner = new GreedyPlanner(state);
-        return new SchedulingAlgorithm(state, 1) {
+        return new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 final var assignment = planner.plan(request, 1, 0);

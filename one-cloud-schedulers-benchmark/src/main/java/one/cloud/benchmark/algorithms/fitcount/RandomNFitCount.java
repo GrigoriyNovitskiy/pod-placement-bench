@@ -8,7 +8,6 @@ import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.algorithms.AlgorithmRegistry.Parameter;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
-import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class RandomNFitCount extends SchedulingAlgorithm {
@@ -49,7 +48,7 @@ public final class RandomNFitCount extends SchedulingAlgorithm {
 
     private RandomNFitCount(SchedulingContext context, long seed, Catalogue catalogue,
             int n, int maxFitCount, int maxCachedShapes, double maxTotalFit, boolean weighted) {
-        super(context, seed);
+        super(context);
         if (n <= 0) {
             throw new IllegalArgumentException("Shortlist size must be positive");
         }
@@ -70,13 +69,8 @@ public final class RandomNFitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        delegate.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        delegate.removed(placement);
+    public void capacityChanged(int host) {
+        delegate.capacityChanged(host);
     }
 
     @Override

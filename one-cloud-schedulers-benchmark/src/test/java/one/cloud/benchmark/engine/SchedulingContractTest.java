@@ -3,8 +3,9 @@ package one.cloud.benchmark.engine;
 import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
-import java.util.SplittableRandom;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -118,33 +119,33 @@ class SchedulingContractTest {
     }
 
     @Test
-    void baseClassUsesARepeatableRandomSource() throws Exception {
+    void baseClassKeepsContextAndDispatchesRequestsInOrder() throws Exception {
         final var context = (SchedulingContext) Proxy.newProxyInstance(SchedulingContext.class.getClassLoader(),
                 new Class<?>[]{SchedulingContext.class}, (proxy, method, arguments) -> {
                     throw new AssertionError(method.getName());
                 });
-        assertArrayEquals(new SplittableRandom(42).ints(16).toArray(), draw(context, 42));
-        assertThrows(NullPointerException.class, () -> draw(null, 42));
+        final var first = new Request(1);
+        final var second = new Request(2);
+        assertEquals(List.of(first, second), dispatch(context, first, second));
+        assertThrows(NullPointerException.class, () -> dispatch(null, first, second));
     }
 
-    private static int[] draw(SchedulingContext expectedContext, long seed) throws Exception {
-        final int[] values = new int[16];
-        try (final var algorithm = new SchedulingAlgorithm(expectedContext, seed) {
+    private static List<Request> dispatch(SchedulingContext expectedContext, Request... requests) throws Exception {
+        final var scheduled = new ArrayList<Request>();
+        try (final var algorithm = new SchedulingAlgorithm(expectedContext) {
             @Override
             public void schedule(Request request) {
                 assertSame(expectedContext, context);
-                final int start = (request.resource(0) - 1) * 8;
-                for (int index = start; index < start + 8; index++) {
-                    values[index] = random.nextInt();
-                }
+                scheduled.add(request);
             }
         }) {
-            algorithm.schedule(new Request[]{new Request(1), new Request(2)});
-            final var plan = new Assignment(2, 1, 0, new int[]{0}, new int[0]);
-            algorithm.placed(plan);
-            algorithm.removed(plan);
+            algorithm.schedule(requests);
+            algorithm.capacityChanged(1);
+            assertEquals(-1, algorithm.plannerCalls());
+            assertEquals(Map.of(), algorithm.parameters());
+            assertEquals(Map.of(), algorithm.counters());
         }
-        return values;
+        return scheduled;
     }
 
     private Dataset dataset() throws Exception {

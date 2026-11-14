@@ -96,7 +96,7 @@ final class WorkloadInflation {
         int afterDecline = 0;
         Integer firstDecline = null;
         final var admittedLogical = new double[model.dimensionCount + 1];
-        try (final var policy = new SchedulingAlgorithm(trial, seed) {
+        try (final var policy = new SchedulingAlgorithm(trial) {
             private final GreedyPlanner planner = new GreedyPlanner(context);
 
             @Override

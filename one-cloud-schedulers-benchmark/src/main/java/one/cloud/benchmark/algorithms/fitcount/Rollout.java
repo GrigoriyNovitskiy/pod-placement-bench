@@ -9,7 +9,6 @@ import one.cloud.benchmark.algorithms.AlgorithmParameters;
 import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
-import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class Rollout extends SchedulingAlgorithm {
@@ -56,7 +55,7 @@ public final class Rollout extends SchedulingAlgorithm {
 
     public Rollout(SchedulingContext context, long seed, Request[] catalogue, RolloutPrior prior,
             int maxFitCount, int maxCachedShapes, int candidates, int scenarios, int horizon) {
-        super(context, seed);
+        super(context);
         if (candidates <= 0 || scenarios <= 0 || horizon <= 0
                 || (long) scenarios * (horizon + 16L) > Runtime.getRuntime().maxMemory() / 128) {
             throw new IllegalArgumentException("Rollout limits must be positive and fit the configured heap budget");
@@ -114,7 +113,7 @@ public final class Rollout extends SchedulingAlgorithm {
             for (int scenario = 0; scenario < scenarioCount; scenario++) {
                 final var state = trial.state();
                 final var continuation = new FitCount(state, policySeeds[scenario], catalogue, cap, cacheRows);
-                try (final var policy = new SchedulingAlgorithm(state, policySeeds[scenario]) {
+                try (final var policy = new SchedulingAlgorithm(state) {
                     @Override
                     public void schedule(Request pending) {
                         if (pending == request) {
@@ -125,13 +124,8 @@ public final class Rollout extends SchedulingAlgorithm {
                     }
 
                     @Override
-                    public void placed(Assignment placement) {
-                        continuation.placed(placement);
-                    }
-
-                    @Override
-                    public void removed(Assignment placement) {
-                        continuation.removed(placement);
+                    public void capacityChanged(int host) {
+                        continuation.capacityChanged(host);
                     }
                 }) {
                     state.schedule(policy, request);
@@ -161,13 +155,8 @@ public final class Rollout extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        fallback.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        fallback.removed(placement);
+    public void capacityChanged(int host) {
+        fallback.capacityChanged(host);
     }
 
     @Override

@@ -11,7 +11,6 @@ import one.cloud.benchmark.algorithms.AlgorithmRegistry.Parameter;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
-import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 abstract class RlAlgorithm extends SchedulingAlgorithm {
@@ -24,7 +23,7 @@ abstract class RlAlgorithm extends SchedulingAlgorithm {
 
     protected RlAlgorithm(SchedulingContext context, long seed, Request[] catalogue,
             int topN, int fitCap, int cacheRows, Path model) throws IOException {
-        super(context, seed);
+        super(context);
         if (topN < 1) {
             throw new IllegalArgumentException("RL shortlist size must be positive");
         }
@@ -52,13 +51,8 @@ abstract class RlAlgorithm extends SchedulingAlgorithm {
     }
 
     @Override
-    public final void placed(Assignment placement) {
-        delegate.placed(placement);
-    }
-
-    @Override
-    public final void removed(Assignment placement) {
-        delegate.removed(placement);
+    public final void capacityChanged(int host) {
+        delegate.capacityChanged(host);
     }
 
     @Override

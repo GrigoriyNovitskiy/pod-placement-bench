@@ -291,7 +291,7 @@ persistent Random20, следующим неизвестным запросам 
 ### Seed и обычные пути
 
 Adapter содержит отдельный persistent canonical RandomN20 для singleton и
-fallback. Он получает все реальные placed/removed callbacks ровно один раз;
+fallback. Он получает все реальные `capacityChanged(host)` callbacks ровно один раз;
 trial callbacks до него не доходят. Его seed — обычный run seed.
 
 `w` — zero-based номер каждого **непустого** вызова с объявленными create

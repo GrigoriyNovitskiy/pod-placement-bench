@@ -152,7 +152,7 @@ convenience settings and the historical training seed42 are not CLI defaults.
    equal scores prefer lower original candidate index. There is no epsilon or
    softmax calibration here. Return the chosen original indices sorted ascending
    to the unchanged FitCount lexicographic refiner and its final seeded tie-break.
-5. Forward real placed/removed notifications to the one delegate. Native model
+5. Forward real `capacityChanged(host)` notifications to the one delegate. Native model
    handle is owned by the adapter lifetime and released on close; loading,
    unsupported model/features and non-finite per-member inference errors fail
    the run. They are not ordinary decline or fallback to RandomN.

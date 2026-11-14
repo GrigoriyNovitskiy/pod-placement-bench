@@ -1,5 +1,6 @@
 package one.cloud.benchmark.algorithms.fgd;
 
+import java.util.SplittableRandom;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
@@ -12,6 +13,7 @@ import one.cloud.benchmark.model.GpuTopology;
 import one.cloud.benchmark.model.Request;
 
 public final class Fgd extends SchedulingAlgorithm {
+    private final SplittableRandom random;
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
     private final boolean refineGpus;
@@ -47,7 +49,8 @@ public final class Fgd extends SchedulingAlgorithm {
     }
 
     private Fgd(SchedulingContext context, long seed, Request[] catalogue, boolean refineGpus) {
-        super(context, seed);
+        super(context);
+        random = new SplittableRandom(seed);
         planner = new GreedyPlanner(context);
         this.refineGpus = refineGpus;
         scorer = refineGpus ? planner.gpuFragmentationScorer(catalogue) : planner.cpuRamFragmentationScorer(catalogue);

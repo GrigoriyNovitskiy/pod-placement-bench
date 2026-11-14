@@ -147,7 +147,7 @@ class GpuFragmentationTest {
     }
 
     private static void place(Engine engine, Request request, Assignment... plans) throws Exception {
-        engine.schedule(new SchedulingAlgorithm(engine, 42) {
+        engine.schedule(new SchedulingAlgorithm(engine) {
             @Override
             public void schedule(Request ignored) {
                 context.place(request, plans);

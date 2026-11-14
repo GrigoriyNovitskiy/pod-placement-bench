@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.SplittableRandom;
 import java.util.TreeMap;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
@@ -25,6 +26,7 @@ public final class SmtFitCount extends SchedulingAlgorithm {
     private static final int MAX_PLANS = 128;
     private static final int MAX_MEMBERS = 128;
     private static final long MAX_INTEGER = 1L << 48;
+    private final SplittableRandom random;
     private final FitCount fallback;
     private final Request[] catalogue;
     private final int cap, cacheRows, nodeLimit, solutionLimit, resourceLimit;
@@ -55,7 +57,8 @@ public final class SmtFitCount extends SchedulingAlgorithm {
 
     SmtFitCount(SchedulingContext context, long seed, Request[] catalogue, int cap, int cacheRows,
             int nodeLimit, int solutionLimit, int resourceLimit) {
-        super(context, seed);
+        super(context);
+        random = new SplittableRandom(seed);
         if (nodeLimit < 1 || solutionLimit < 1 || resourceLimit < 1) {
             throw new IllegalArgumentException("SMT budgets must be positive");
         }
@@ -286,7 +289,7 @@ public final class SmtFitCount extends SchedulingAlgorithm {
 
     private static boolean replay(Engine state, Request[] requests, Assignment[][] plans) throws Exception {
         final boolean[] valid = {true};
-        state.schedule(new SchedulingAlgorithm(state, 0) {
+        state.schedule(new SchedulingAlgorithm(state) {
             private int index;
 
             @Override
@@ -427,13 +430,8 @@ public final class SmtFitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        fallback.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        fallback.removed(placement);
+    public void capacityChanged(int host) {
+        fallback.capacityChanged(host);
     }
 
     @Override

@@ -1,5 +1,6 @@
 package one.cloud.benchmark.algorithms.geometric;
 
+import java.util.SplittableRandom;
 import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
@@ -11,6 +12,7 @@ import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class GeometricBestFit extends SchedulingAlgorithm {
+    private final SplittableRandom random;
     private final GreedyPlanner planner;
     private final ToDoubleFunction<Assignment[]> scorer;
 
@@ -25,7 +27,8 @@ public final class GeometricBestFit extends SchedulingAlgorithm {
     }
 
     public GeometricBestFit(SchedulingContext context, long seed) {
-        super(context, seed);
+        super(context);
+        random = new SplittableRandom(seed);
         planner = new GreedyPlanner(context);
         scorer = planner.normalizedResidualL2Scorer();
     }

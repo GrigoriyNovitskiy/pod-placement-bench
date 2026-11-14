@@ -2,18 +2,14 @@ package one.cloud.benchmark.engine;
 
 import java.util.Objects;
 import java.util.Map;
-import java.util.SplittableRandom;
 
-import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public abstract class SchedulingAlgorithm implements AutoCloseable {
     protected final SchedulingContext context;
-    protected final SplittableRandom random;
 
-    protected SchedulingAlgorithm(SchedulingContext context, long seed) {
+    protected SchedulingAlgorithm(SchedulingContext context) {
         this.context = Objects.requireNonNull(context);
-        random = new SplittableRandom(seed);
     }
 
     public void schedule(Request[] requests) throws Exception {
@@ -37,10 +33,8 @@ public abstract class SchedulingAlgorithm implements AutoCloseable {
         return Map.of();
     }
 
-    public void placed(Assignment placement) {
-    }
-
-    public void removed(Assignment placement) {
+    /** Called after a complete state change for each host whose physical capacity changed. */
+    public void capacityChanged(int host) {
     }
 
     @Override

@@ -55,7 +55,7 @@ are resource counts, including every member of a declined atomic unit.
 `BulkFitCount` implements frozen-order greedy marginals. Its
 `dynamicProgramming(...)` factory selects count/tree DP over the same concrete
 host trajectories. Both compute a proposal in a detached trial and publish it
-without a sequential comparison pass. Canonical placed/removed notifications
+without a sequential comparison pass. Canonical `capacityChanged(host)` notifications
 keep the persistent fallback cache current. Greedy uses a decision-local SplitMix
 seed and caches physical marginals for the first `cacheRows` frozen samples on
 unchanged hosts, with hits/evaluations reported. Runtime profiles are

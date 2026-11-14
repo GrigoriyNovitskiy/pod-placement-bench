@@ -59,7 +59,7 @@ class CapacityLedgerTest {
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 2), resource(4, 4, 2)));
         final int gpu = state.model().gpus.first(1, 11);
         final var planner = new GreedyPlanner(state);
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 final var plans = planner.plan(request, 1, 0);
@@ -92,7 +92,7 @@ class CapacityLedgerTest {
         final var planner = new GreedyPlanner(state);
         final var request = new Request(5);
         assertEquals(1, planner.fitCount(request, 1, 10));
-        final var algorithm = new SchedulingAlgorithm(state, 1) {
+        final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request request) {
                 assertNull(planner.plan(request, 1, 2));
@@ -497,7 +497,7 @@ class CapacityLedgerTest {
         final var prefill = new Request(2);
         final var request = new Request(3);
         final var planner = new GreedyPlanner(state);
-        try (final var algorithm = new SchedulingAlgorithm(state, 42) {
+        try (final var algorithm = new SchedulingAlgorithm(state) {
             @Override
             public void schedule(Request pending) {
                 if (pending == prefill) {

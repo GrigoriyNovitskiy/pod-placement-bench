@@ -62,7 +62,7 @@ public final class ProactiveIlp extends SchedulingAlgorithm {
 
     private ProactiveIlp(SchedulingContext context, long seed, int every, int maxMoves, int timeoutMs,
             double probeCpu, double probeRam) {
-        super(context, seed);
+        super(context);
         if (!(context instanceof Engine placementEngine)) {
             throw new IllegalArgumentException("Proactive ILP requires the placement engine");
         }
@@ -132,7 +132,7 @@ public final class ProactiveIlp extends SchedulingAlgorithm {
         final var plans = new ArrayList<List<Assignment[]>>();
         final Set<Integer> modeledHosts = new LinkedHashSet<>();
         modeledHosts.add(source);
-        preview.schedule(new SchedulingAlgorithm(preview, 0) {
+        preview.schedule(new SchedulingAlgorithm(preview) {
             @Override
             public void schedule(Request victim) {
                 if (deadline - System.nanoTime() <= 0) {

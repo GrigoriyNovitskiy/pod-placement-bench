@@ -45,7 +45,7 @@ public final class WindowPortfolioFitCount extends SchedulingAlgorithm {
 
     WindowPortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue,
             int cap, int cacheRows, boolean comparePortfolio, long snapshotBudget) {
-        super(context, seed);
+        super(context);
         if (snapshotBudget < 0) {
             throw new IllegalArgumentException("Snapshot budget must be nonnegative");
         }
@@ -207,7 +207,7 @@ public final class WindowPortfolioFitCount extends SchedulingAlgorithm {
         private int index;
 
         ReplayPolicy(SchedulingContext context, Assignment[][] plans) {
-            super(context, 0);
+            super(context);
             this.plans = plans;
         }
 
@@ -226,13 +226,8 @@ public final class WindowPortfolioFitCount extends SchedulingAlgorithm {
     }
 
     @Override
-    public void placed(Assignment placement) {
-        fallback.placed(placement);
-    }
-
-    @Override
-    public void removed(Assignment placement) {
-        fallback.removed(placement);
+    public void capacityChanged(int host) {
+        fallback.capacityChanged(host);
     }
 
     @Override
