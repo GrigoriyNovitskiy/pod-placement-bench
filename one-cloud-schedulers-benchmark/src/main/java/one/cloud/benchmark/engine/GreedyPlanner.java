@@ -110,11 +110,7 @@ public final class GreedyPlanner {
     /** On success, fills the supplied host capacity prefix by resource dimension, starting at index one. */
     public Assignment[] plan(Request request, int host, int numa, double[] hostRemaining) {
         planCalls++;
-        checkHost(host);
-        if (numa < 0 || numa != 0 && (numa >= model.constraints.length
-                || model.rules.kind[model.constraints[numa]] != 2 || model.rules.parent[model.constraints[numa]] != host)) {
-            throw new IllegalArgumentException("NUMA does not belong to host");
-        }
+        checkAnchor(host, numa);
         for (int index = 0; index < request.size(); index++) {
             final int profile = model.constraints[request.resource(index)];
             if (!model.candidates.allows(model.rules.candidates[profile], host)
@@ -122,6 +118,27 @@ public final class GreedyPlanner {
                 return null;
             }
         }
+        final var plans = geometry(request, host, numa);
+        if (plans == null || !context.canPlace(request, plans)) {
+            return null;
+        }
+        if (hostRemaining != null) {
+            final int end = Math.min(hostRemaining.length, model.dimensionCount + 1);
+            for (int dimension = 1; dimension < end; dimension++) {
+                hostRemaining[dimension] = capacity.available(host, dimension);
+            }
+        }
+        return plans;
+    }
+
+    /** Returns physical geometry only; callers must validate masks, pins, groups and dependencies with canPlace. */
+    public Assignment[] physicalPlan(Request request, int host, int numa) {
+        planCalls++;
+        checkAnchor(host, numa);
+        return geometry(request, host, numa);
+    }
+
+    private Assignment[] geometry(Request request, int host, int numa) {
         configure(request, host);
         capacity.load(context, inventory[host]);
         if (!build(numa)) {
@@ -133,15 +150,6 @@ public final class GreedyPlanner {
             plans[index] = new Assignment(member.resource, host, member.numa,
                     Arrays.copyOf(member.offsets, member.diskCount + 1), Arrays.copyOf(member.devices, member.deviceCount),
                     member.gpus.length == 0 ? NO_GPUS : member.gpus.clone());
-        }
-        if (!context.canPlace(request, plans)) {
-            return null;
-        }
-        if (hostRemaining != null) {
-            final int end = Math.min(hostRemaining.length, model.dimensionCount + 1);
-            for (int dimension = 1; dimension < end; dimension++) {
-                hostRemaining[dimension] = capacity.available(host, dimension);
-            }
         }
         return plans;
     }
@@ -472,6 +480,14 @@ public final class GreedyPlanner {
             index = component[index];
         }
         return index;
+    }
+
+    private void checkAnchor(int host, int numa) {
+        checkHost(host);
+        if (numa < 0 || numa != 0 && (numa >= model.constraints.length
+                || model.rules.kind[model.constraints[numa]] != 2 || model.rules.parent[model.constraints[numa]] != host)) {
+            throw new IllegalArgumentException("NUMA does not belong to host");
+        }
     }
 
     private void checkHost(int host) {

@@ -18,6 +18,7 @@ import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
 public final class PortfolioFitCount extends SchedulingAlgorithm {
+    private static final long BATCH_MEMORY_LIMIT = 64L << 20;
     private static final long FRAGMENTATION_SALT = 0x3C6EF372FE94F82BL;
     private static final long LEAST_SALT = 0xA54FF53A5F1D36F1L;
     private static final long GEOMETRIC_SALT = 0x510E527FADE682D1L;
@@ -27,22 +28,29 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     private final TopK fragmented, spread, packed;
     private final int randomCandidates, cap, cacheRows;
     private final long seed;
+    private final boolean bulk;
     private long attempts, attempt, selectorCalls, candidatePlans, candidateHosts, retainedPlans, retainedHosts;
     private long fragmentationScores, leastScores, geometricScores, overlap, cpuRamDecisions;
 
     public static AlgorithmDefinition definition() {
-        return definition("portfolio-fitcount", "Portfolio + FitCount", false, false);
+        return definition("portfolio-fitcount", "Portfolio + FitCount", false, false, false);
     }
 
     public static AlgorithmDefinition weightedDefinition() {
-        return definition("portfolio-mean-fitcount", "Portfolio + Mean FitCount", true, false);
+        return definition("portfolio-mean-fitcount", "Portfolio + Mean FitCount", true, false, false);
     }
 
     public static AlgorithmDefinition geometricWeightedDefinition() {
-        return definition("geometric-portfolio-mean-fitcount", "Geometric portfolio + Mean FitCount", true, true);
+        return definition("geometric-portfolio-mean-fitcount", "Geometric portfolio + Mean FitCount", true, true, false);
     }
 
-    private static AlgorithmDefinition definition(String id, String name, boolean weighted, boolean geometric) {
+    public static AlgorithmDefinition geometricWeightedBulkDefinition() {
+        return definition("geometric-portfolio-mean-bulk-fitcount",
+                "Geometric portfolio + Mean Bulk FitCount", true, true, true);
+    }
+
+    private static AlgorithmDefinition definition(String id, String name, boolean weighted, boolean geometric,
+            boolean bulk) {
         return AlgorithmDefinition.withCatalogue(id, name,
                 List.of(Parameter.integer("randomCandidates", "Random candidates", "Число случайных планов.",
                                 20, 1, 64),
@@ -61,7 +69,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                         parameters.get("leastCandidates").getAsInt(),
                         geometric ? parameters.get("geometricCandidates").getAsInt() : 0,
                         parameters.get("fitCap").getAsInt(), parameters.get("cacheRows").getAsInt(),
-                        parameters.get("maxTotalFit").getAsDouble(), weighted));
+                        parameters.get("maxTotalFit").getAsDouble(), weighted, bulk));
     }
 
     public PortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue) {
@@ -71,12 +79,12 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     public PortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue,
             int randomCandidates, int fragmentationCandidates, int leastCandidates, int cap, int cacheRows) {
         this(context, seed, Catalogue.sampled(catalogue), randomCandidates, fragmentationCandidates, leastCandidates, 0,
-                cap, cacheRows, 0, false);
+                cap, cacheRows, 0, false, false);
     }
 
     private PortfolioFitCount(SchedulingContext context, long seed, Catalogue catalogue,
             int randomCandidates, int fragmentationCandidates, int leastCandidates, int geometricCandidates,
-            int cap, int cacheRows, double maxTotalFit, boolean weighted) {
+            int cap, int cacheRows, double maxTotalFit, boolean weighted, boolean bulk) {
         super(context);
         if (randomCandidates < 1 || randomCandidates > 64 || fragmentationCandidates < 0
                 || fragmentationCandidates > 16 || leastCandidates < 0 || leastCandidates > 16
@@ -84,6 +92,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
             throw new IllegalArgumentException("Portfolio quotas are outside their supported ranges");
         }
         this.seed = seed;
+        this.bulk = bulk;
         this.randomCandidates = randomCandidates;
         this.cap = cap;
         this.cacheRows = cacheRows;
@@ -105,6 +114,17 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     public void schedule(Request request) {
         attempt = attempts++;
         delegate.schedule(request);
+    }
+
+    @Override
+    public void schedule(Request[] requests) {
+        if (bulk && requests.length > 1) {
+            delegate.scheduleBatch(requests, BATCH_MEMORY_LIMIT, this::schedule);
+        } else {
+            for (final var request : requests) {
+                schedule(request);
+            }
+        }
     }
 
     int[] select(Request request, Assignment[][] plans, int count) {
@@ -256,12 +276,22 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                 "geometric_candidates", Integer.toString(packed.indices.length),
                 "fragmentation_source", context.model().gpus == null ? "cpu_ram" : "gpu_devices",
                 "copy_cap", Integer.toString(cap), "cache_rows", Integer.toString(cacheRows)));
+        if (bulk) {
+            result.put("profile", "geometric-portfolio-mean-bulk-fitcount-v1");
+            result.put("objective", "sequential-geometric-portfolio-frequency-weighted-physical-copy-loss");
+            result.put("cache_scope", "one-schedule-batch");
+            result.put("workspace_limit_bytes", Long.toString(BATCH_MEMORY_LIMIT));
+            result.put("workspace_scope", "batch loss rows, retained geometry, anchor slots and physical shape; excludes shared planner and persistent physical cache");
+        }
         return result;
     }
 
     @Override
     public Map<String, Long> counters() {
         final var result = new LinkedHashMap<>(delegate.counters());
+        if (bulk) {
+            result.putAll(delegate.batchCounters());
+        }
         result.putAll(Map.ofEntries(Map.entry("selector_calls", selectorCalls), Map.entry("candidate_plans", candidatePlans),
                 Map.entry("candidate_hosts", candidateHosts), Map.entry("retained_plans", retainedPlans),
                 Map.entry("retained_hosts", retainedHosts), Map.entry("fragmentation_scores", fragmentationScores),

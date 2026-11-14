@@ -58,6 +58,8 @@ public final class AlgorithmParameters {
     public static final List<Parameter> FIT_COUNT_WITH_TOTAL_LIMIT = List.of(SEED, FIT_CAP, CACHE_ROWS, MAX_TOTAL_FIT);
     public static final List<Parameter> SHORTLIST_WITH_TOTAL_LIMIT = List.of(TOP_N, SEED, FIT_CAP, CACHE_ROWS, MAX_TOTAL_FIT);
     public static final List<Parameter> BULK = List.of(BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS);
+    public static final List<Parameter> BULK_WITH_TOTAL_LIMIT = List.of(
+            BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS, MAX_TOTAL_FIT);
     public static final List<Parameter> ROLLOUT = List.of(
             BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS, CANDIDATES, SCENARIOS, HORIZON);
 

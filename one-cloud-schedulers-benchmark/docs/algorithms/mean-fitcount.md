@@ -127,6 +127,7 @@ Random20 quota on a two-host cluster.
 | `portfolio-mean-fitcount` | Random20 union fragmentation4 union LeastAllocated4 | Mean |
 | `rl-pool-mean-fitcount` | Random20 plus up to 8 policy proposals from an auxiliary pool of up to 44 | Mean |
 | `geometric-portfolio-mean-fitcount` | Random20 union LeastAllocated4 union geometric4 | Mean |
+| `geometric-portfolio-mean-bulk-fitcount` | The same shortlist, refreshed for each request | Mean, with batch-local physical reuse |
 
 Quotas count plans, not distinct hosts. Unions deduplicate source indices and do
 not refill overlaps. All plans are generated before shortlisting. The geometric
@@ -139,6 +140,19 @@ frequencies; LeastAllocated, geometric scoring and PPO features are unchanged.
 
 The new combinations retain sequential `schedule(Request[])` semantics. They
 do not jointly optimize an announced window or relocate existing placements.
+
+`geometric-portfolio-mean-bulk-fitcount` uses the same defaults and parameters
+as `geometric-portfolio-mean-fitcount`: Random20, LeastAllocated4, geometric4,
+seed 44, copy cap 10, cache rows 64 and disabled `maxTotalFit`. With the same
+inputs and settings it preserves complete assignments and the RNG sequence.
+Every request rebuilds its shortlist against current feasible candidates;
+LeastAllocated and geometric scores, source tie keys and mean weights retain
+the ordinary rule. The adaptive total-fit threshold is refreshed after commits.
+Physical geometry and signed copy losses are shared only between adjacent
+requests with the same physical shape in one announced `schedule(Request[])` call. The shared batch
+workspace is bounded to 64 MiB and released on return. It excludes the existing
+planner and persistent physical cache. Use `--bulk-size 100` for CLI service
+bursts; singleton calls follow the ordinary portfolio path.
 
 ## What portfolio fragmentation measures
 

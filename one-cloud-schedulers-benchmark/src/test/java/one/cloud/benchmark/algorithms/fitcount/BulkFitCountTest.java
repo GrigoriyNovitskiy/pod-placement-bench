@@ -15,12 +15,16 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Limit;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
 import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.engine.SchedulingAlgorithm;
+import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
+import static one.cloud.benchmark.testsupport.TestModel.candidates;
 import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
@@ -164,7 +168,7 @@ class BulkFitCountTest {
                 assertNotNull(state.placement(4));
                 assertNotNull(state.placement(5));
                 assertTrue(state.placement(4).numa() != state.placement(5).numa());
-                assertEquals(1, algorithm.counters().get("certified_bulks"));
+                assertEquals(dp ? 1L : 0L, algorithm.counters().get("certified_bulks"));
                 assertEquals(2, state.revision());
                 state.remove(requests[1]);
                 state.remove(requests[0]);
@@ -200,11 +204,18 @@ class BulkFitCountTest {
                 resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2), resource(4, 3, 3),
                 resource(5, 4, 4), resource(6, 5, 5), resource(7, 4, 6), resource(8, 5, 7));
         final var requests = new Request[]{new Request(5, 6), new Request(7, 8)};
+        final var sequential = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, requests, 128, 256)) {
+            sequential.schedule(fit, requests);
+        }
         for (final boolean dp : new boolean[]{false, true}) {
             final var state = new Engine(model);
             try (final var algorithm = algorithm(state, requests, dp)) {
                 state.schedule(algorithm, requests);
-                assertEquals(1, algorithm.counters().get("certified_bulks"));
+                if (!dp) {
+                    assertPlacements(sequential, state, requests);
+                }
+                assertEquals(dp ? 1L : 0L, algorithm.counters().get("certified_bulks"));
                 assertEquals(2, state.revision());
                 assertEquals(6, state.available(1, 1));
                 assertEquals(4, state.available(2, 18));
@@ -272,6 +283,34 @@ class BulkFitCountTest {
     }
 
     @Test
+    void bulkMatchesSequentialFitCountAcrossEveryNumaAnchor() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 13, 13), alloc(2, new int[]{1, 2}, 8, 5),
+                alloc(3, new int[]{1, 2}, 5, 8), alloc(4, new int[]{1, 2}, 4, 1),
+                alloc(5, new int[]{1, 2}, 1, 4), alloc(6, new int[]{1, 2}, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setGroup(1)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
+                resource(4, 4, 4), resource(5, 5, 4), resource(6, 6, 4), resource(7, 6, 4));
+        final var pending = new Request[]{new Request(6), new Request(7)};
+        final var catalogue = new Request[]{new Request(4), new Request(5)};
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, catalogue, 10, 1);
+                final var batched = new BulkFitCount(bulk, 42, catalogue, 10, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertEquals(3, sequential.placement(6).numa());
+            for (final var request : pending) {
+                assertEquals(sequential.placement(request.resource(0)).numa(),
+                        bulk.placement(request.resource(0)).numa());
+            }
+        }
+    }
+
+    @Test
     void singleRequestDelegationPreservesFitcountSeedAndEvictionChangesNoDecision() throws Exception {
         final var model = scalar(3, 3, null);
         final var pending = requests(4, 3);
@@ -310,39 +349,420 @@ class BulkFitCountTest {
         final var model = scalar(16, 32, null);
         final var pending = requests(17, 32);
         final var catalogue = new Request[]{pending[0], new Request(17, 18)};
-        final var sequential = new Engine(model);
-        final long sequentialCalls;
-        try (final var fit = new FitCount(sequential, 42, catalogue, 128, 256)) {
-            sequential.schedule(fit, pending);
-            sequentialCalls = fit.plannerCalls();
-        }
-        int[] expected = null;
         for (final int rows : new int[]{1, 256}) {
-            final var state = new Engine(model);
-            final var actual = new int[2 * pending.length];
-            try (final var fit = new BulkFitCount(state, 42, catalogue, 128, rows)) {
+            final var sequential = new Engine(model);
+            final var bulk = new Engine(model);
+            try (final var fit = new FitCount(sequential, 42, catalogue, 128, rows);
+                    final var batched = new BulkFitCount(bulk, 42, catalogue, 128, rows)) {
                 for (int cycle = 0; cycle < 2; cycle++) {
-                    state.schedule(fit, pending);
-                    for (int index = 0; index < pending.length; index++) {
-                        actual[cycle * pending.length + index] = state.placement(pending[index].resource(0)).host();
-                    }
-                    for (int index = 0; index < pending.length; index += 2) {
-                        assertEquals(actual[cycle * pending.length + index], actual[cycle * pending.length + index + 1]);
-                    }
+                    sequential.schedule(fit, pending);
+                    bulk.schedule(batched, pending);
+                    assertPlacements(sequential, bulk, pending);
                     for (int index = pending.length - 1; index >= 0; index--) {
-                        state.remove(pending[index]);
+                        sequential.remove(pending[index]);
+                        bulk.remove(pending[index]);
                     }
-                    assertEquals(16 * 2.5, totalCpu(state));
+                    assertEquals(16 * 2.5, totalCpu(bulk));
                 }
-                assertEquals(2, fit.counters().get("optimized_bulks"));
-                assertTrue(fit.counters().get("marginal_evaluations") > 0);
-                assertTrue(fit.counters().get("marginal_cache_hits") > 0);
-                assertTrue(fit.plannerCalls() < sequentialCalls);
+                assertEquals(2, batched.counters().get("optimized_bulks"));
+                assertTrue(batched.plannerCalls() < fit.plannerCalls());
+                assertEquals(fit.plannerCalls(), batched.plannerCalls() + batched.counters().get("geometry_cache_hits"));
+                assertTrue(batched.counters().get("marginal_evaluations") > 0);
+                assertEquals(fit.counters().get("fitcount_after_probes"),
+                        batched.counters().get("fitcount_after_probes") + batched.counters().get("marginal_cache_hits"));
+                if (rows == 256) {
+                    assertTrue(batched.counters().get("marginal_cache_hits") > 0);
+                    assertTrue(batched.counters().get("marginal_evaluations") < fit.counters().get("fitcount_after_probes"));
+                }
+                assertTrue(batched.counters().get("optimizer_workspace_peak_bytes") <= 64L << 20);
             }
-            if (expected == null) {
-                expected = actual;
-            } else {
-                assertArrayEquals(expected, actual);
+        }
+    }
+
+    @Test
+    void stableAnchorSlotsSurviveInfeasibleCandidateCompaction() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 2, 5), alloc(2, new int[]{1, 2}, 12, 6),
+                alloc(3, new int[]{1, 2}, 6, 7), alloc(4, new int[]{1, 2}, 9, 6),
+                alloc(5, new int[]{1, 2}, 2, 5), alloc(6, new int[]{1, 2}, 3, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 1), resource(4, 4, 1),
+                resource(5, 5, 2), resource(6, 5, 2), resource(7, 6, 3));
+        final var pending = requests(5, 2);
+        final var catalogue = new Request[]{new Request(7)};
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, catalogue, 128, 1);
+                final var batched = new BulkFitCount(bulk, 42, catalogue, 128, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertEquals(1, bulk.placement(5).host());
+            assertEquals(3, bulk.placement(6).host());
+            assertPlacements(sequential, bulk, pending);
+        }
+    }
+
+    @Test
+    void negativeGreedyLossesAreSharedWithoutChangingNumaChoices() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 7, 2), alloc(2, new int[]{1, 2}, 4, 1),
+                alloc(3, new int[]{1, 2}, 3, 1), alloc(4, new int[]{1, 2}, 2, 1),
+                alloc(5, new int[]{1}, 4), alloc(6, new int[]{2}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.NUMA).setParent(2).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.NUMA).setParent(2).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(6).setKind(Kind.POD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(7).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 3, 3),
+                resource(5, 2, 4), resource(6, 3, 5), resource(7, 6, 6), resource(8, 6, 6),
+                resource(9, 4, 7), resource(10, 5, 7));
+        final var pending = requests(7, 2);
+        final var sample = new Request(9, 10);
+        final var catalogue = new Request[]{sample};
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        assertEquals(0, new GreedyPlanner(bulk).fitCount(sample, 1, 128));
+        try (final var fit = new FitCount(sequential, 0, catalogue, 128, 1);
+                final var batched = new BulkFitCount(bulk, 0, catalogue, 128, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertPlacements(sequential, bulk, pending);
+            assertEquals(1, new GreedyPlanner(bulk).fitCount(sample, 1, 128));
+            assertEquals(1, new GreedyPlanner(bulk).fitCount(sample, 2, 128));
+            assertTrue(batched.counters().get("marginal_cache_hits") > 0);
+        }
+    }
+
+    @Test
+    void tinyBatchWorkspaceDisablesSharingWithoutChangingDecisions() throws Exception {
+        final var model = scalar(6, 2, null);
+        final var pending = requests(7, 2);
+        for (final long memoryLimit : new long[]{0, 256, 512, 1024, 64L << 20}) {
+            final var sequential = new Engine(model);
+            final var bulk = new Engine(model);
+            try (final var fit = new FitCount(sequential, 42, pending, 128, 1);
+                    final var batched = new FitCount(bulk, 42, pending, 128, 1)) {
+                final var wrapper = new SchedulingAlgorithm(bulk) {
+                    @Override
+                    public void schedule(Request request) {
+                        batched.schedule(request);
+                    }
+
+                    @Override
+                    public void schedule(Request[] requests) {
+                        batched.scheduleBatch(requests, memoryLimit);
+                    }
+
+                    @Override
+                    public void capacityChanged(int host) {
+                        batched.capacityChanged(host);
+                    }
+                };
+                sequential.schedule(fit, pending);
+                bulk.schedule(wrapper, pending);
+                assertPlacements(sequential, bulk, pending);
+                assertTrue(batched.batchCounters().get("optimizer_workspace_peak_bytes") <= memoryLimit);
+                assertEquals(fit.plannerCalls(), batched.plannerCalls() + batched.batchCounters().get("geometry_cache_hits"));
+                if (memoryLimit <= 512) {
+                    assertEquals(0, batched.batchCounters().get("geometry_cache_hits"));
+                } else {
+                    assertTrue(batched.batchCounters().get("geometry_cache_hits") > 0);
+                }
+                if (memoryLimit == 512) {
+                    assertEquals(5, batched.batchCounters().get("marginal_cache_hits"));
+                }
+            }
+        }
+    }
+
+    @Test
+    void catalogueOrderIsRefreshedAfterEveryReplica() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 10, 5), alloc(2, new int[]{1, 2}, 14, 15),
+                alloc(3, new int[]{1, 2}, 2, 5), alloc(4, new int[]{1, 2}, 1, 2),
+                alloc(5, new int[]{1, 2}, 3, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 3, 2),
+                resource(5, 4, 3), resource(6, 5, 3));
+        final var pending = new Request[]{new Request(3), new Request(4)};
+        final var catalogue = new Request[]{new Request(5), new Request(6)};
+        for (final int rows : new int[]{1, 256}) {
+            final var sequential = new Engine(model);
+            final var bulk = new Engine(model);
+            try (final var fit = new FitCount(sequential, 42, catalogue, 128, rows);
+                    final var batched = new BulkFitCount(bulk, 42, catalogue, 128, rows)) {
+                sequential.schedule(fit, pending);
+                bulk.schedule(batched, pending);
+                assertEquals(2, bulk.placement(3).host());
+                assertEquals(1, bulk.placement(4).host());
+                assertPlacements(sequential, bulk, pending);
+            }
+        }
+    }
+
+    @Test
+    void batchLossRowsAreReleasedBetweenInvocationsAndSingleCalls() throws Exception {
+        final var model = scalar(6, 2, null);
+        final var pending = requests(7, 2);
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, pending, 128, 1);
+                final var batched = new BulkFitCount(bulk, 42, pending, 128, 1)) {
+            long evaluations = 0;
+            long hits = 0;
+            long geometryHits = 0;
+            for (int cycle = 0; cycle < 2; cycle++) {
+                sequential.schedule(fit, pending);
+                bulk.schedule(batched, pending);
+                assertPlacements(sequential, bulk, pending);
+                assertEquals(7, batched.counters().get("marginal_evaluations") - evaluations);
+                assertEquals(5, batched.counters().get("marginal_cache_hits") - hits);
+                assertEquals(5, batched.counters().get("geometry_cache_hits") - geometryHits);
+                geometryHits = batched.counters().get("geometry_cache_hits");
+                evaluations = batched.counters().get("marginal_evaluations");
+                hits = batched.counters().get("marginal_cache_hits");
+                for (int index = pending.length - 1; index >= 0; index--) {
+                    sequential.remove(pending[index]);
+                    bulk.remove(pending[index]);
+                }
+                sequential.schedule(fit, pending[0]);
+                bulk.schedule(batched, pending[0]);
+                assertPlacements(sequential, bulk, new Request[]{pending[0]});
+                assertEquals(evaluations, batched.counters().get("marginal_evaluations"));
+                assertEquals(hits, batched.counters().get("marginal_cache_hits"));
+                assertEquals(geometryHits, batched.counters().get("geometry_cache_hits"));
+                sequential.remove(pending[0]);
+                bulk.remove(pending[0]);
+            }
+        }
+    }
+
+    @Test
+    void positiveGeometryChecksCurrentPinsMasksAndDependencyReadiness() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 10), alloc(2, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1).setPinnedHost(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2).setPinnedHost(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setGroup(3).setCandidates(2)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.POD).setGroup(4)
+                        .addLinks(Link.newBuilder().setRelation(Relation.READY_GROUP).setTarget(5).setDomain(1))),
+                rules(Constraints.newBuilder().setId(6).setKind(Kind.POD).setGroup(5)),
+                candidates(2, 1),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3),
+                resource(5, 2, 4), resource(6, 2, 5), resource(7, 2, 6), resource(8, 2, 5));
+        final var pending = requests(3, 6);
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, new Request[0], 128, 1);
+                final var batched = new BulkFitCount(bulk, 42, new Request[0], 128, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertPlacements(sequential, bulk, pending);
+            assertEquals(1, bulk.placement(3).host());
+            assertEquals(2, bulk.placement(4).host());
+            assertEquals(1, bulk.placement(5).host());
+            assertNull(bulk.placement(6));
+            assertNotNull(bulk.placement(7));
+            assertNotNull(bulk.placement(8));
+            assertEquals(0, bulk.capacityRevision(1));
+            assertEquals(0, bulk.capacityRevision(2));
+            assertEquals(2, batched.plannerCalls());
+            assertEquals(7, batched.counters().get("geometry_cache_hits"));
+        }
+    }
+
+    @Test
+    void initiallyBlockedPlansAreRecomputedWhenDependenciesBecomeReady() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 10), alloc(2, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)
+                        .addLinks(Link.newBuilder().setRelation(Relation.READY_GROUP).setTarget(2).setDomain(1))),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 3), resource(5, 2, 2));
+        final var pending = requests(3, 3);
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, new Request[0], 128, 1);
+                final var batched = new BulkFitCount(bulk, 42, new Request[0], 128, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertPlacements(sequential, bulk, pending);
+            assertNull(bulk.placement(3));
+            assertNotNull(bulk.placement(4));
+            assertNotNull(bulk.placement(5));
+            assertEquals(2, batched.plannerCalls());
+            assertEquals(4, batched.counters().get("geometry_cache_hits"));
+        }
+    }
+
+    @Test
+    void physicalFailuresAreSharedAndEveryChangedHostAnchorIsInvalidated() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 4), alloc(2, new int[]{1}, 0),
+                alloc(3, new int[]{1}, 2), alloc(4, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setGroup(1)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 3, 3),
+                resource(5, 4, 4), resource(6, 4, 4), resource(7, 4, 4));
+        final var pending = requests(5, 3);
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, pending, 128, 1);
+                final var batched = new BulkFitCount(bulk, 42, pending, 128, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertPlacements(sequential, bulk, pending);
+            assertEquals(3, bulk.capacityRevision(1));
+            assertEquals(0, bulk.capacityRevision(2));
+            assertEquals(10, batched.plannerCalls());
+            assertEquals(2, batched.counters().get("geometry_cache_hits"));
+            assertEquals(12, fit.plannerCalls());
+        }
+    }
+
+    @Test
+    void physicalPlanSeparatesEligibilityAndPreservesOrdinaryPlannerContracts() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 4), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(2).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.POD).setGroup(1).setPinnedHost(2)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.POD).setGroup(2)
+                        .addLinks(Link.newBuilder().setRelation(Relation.READY_GROUP).setTarget(3).setDomain(1))),
+                rules(Constraints.newBuilder().setId(6).setKind(Kind.POD).setGroup(3)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 1, 2), resource(4, 1, 3),
+                resource(5, 2, 4), resource(6, 2, 5), resource(7, 2, 6));
+        final var state = new Engine(model);
+        final var planner = new GreedyPlanner(state);
+        final var pinned = new Request(5);
+        final var blocked = new Request(6);
+        final var dependency = new Request(7);
+        final var physical = planner.physicalPlan(pinned, 1, 3);
+        assertNotNull(physical);
+        assertEquals(1, physical[0].host());
+        for (final int[] invalid : new int[][]{{0, 0}, {1, -1}, {1, 4}}) {
+            assertThrows(IllegalArgumentException.class, () -> planner.plan(pinned, invalid[0], invalid[1]));
+            assertThrows(IllegalArgumentException.class, () -> planner.physicalPlan(pinned, invalid[0], invalid[1]));
+        }
+        assertEquals(7, planner.planCalls());
+        state.schedule(new SchedulingAlgorithm(state) {
+            @Override
+            public void schedule(Request request) {
+            }
+
+            @Override
+            public void schedule(Request[] requests) {
+                final double[] remaining = {-7, -7, -7};
+                assertNull(planner.plan(pinned, 1, 3, remaining));
+                assertArrayEquals(new double[]{-7, -7, -7}, remaining);
+                assertNotNull(planner.physicalPlan(blocked, 1, 3));
+                assertNull(planner.plan(blocked, 1, 3, remaining));
+                assertArrayEquals(new double[]{-7, -7, -7}, remaining);
+                final var plan = planner.plan(pinned, 2, 4, remaining);
+                assertNotNull(plan);
+                assertEquals(-7, remaining[0]);
+                assertEquals(3, remaining[1]);
+                context.place(pinned, plan);
+            }
+        }, pinned, blocked, dependency);
+        assertEquals(11, planner.planCalls());
+    }
+
+    @Test
+    void zeroDemandReplicasRefreshDomainEligibilityWithoutCapacityNotifications() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1}, 10), alloc(2, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)
+                        .addDomains(Domain.newBuilder().setLevel(3).setValue(1))),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.HOST)
+                        .addDomains(Domain.newBuilder().setLevel(3).setValue(2))),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1)
+                        .addLimits(Limit.newBuilder().setDomain(3).setMax(1).setHard(true))),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 1, 2),
+                resource(4, 2, 3), resource(5, 2, 3), resource(6, 2, 3));
+        final var pending = requests(4, 3);
+        final var sequential = new Engine(model);
+        final var bulk = new Engine(model);
+        try (final var fit = new FitCount(sequential, 42, pending, 128, 1);
+                final var batched = new BulkFitCount(bulk, 42, pending, 128, 1)) {
+            sequential.schedule(fit, pending);
+            bulk.schedule(batched, pending);
+            assertPlacements(sequential, bulk, pending);
+            assertEquals(2, bulk.revision());
+            assertEquals(0, bulk.capacityRevision(1));
+            assertEquals(0, bulk.capacityRevision(2));
+            assertEquals(0, bulk.capacityRevision(3));
+            assertNull(bulk.placement(6));
+        }
+    }
+
+    @Test
+    void mixedPhysicalShapesFullFrequenciesAndTotalFitLimitMatchSequential() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 12, 10), alloc(2, new int[]{1, 2}, 10, 12),
+                alloc(3, new int[]{1, 2}, 1, 2), alloc(4, new int[]{1, 2}, 2, 1),
+                alloc(5, new int[]{1, 2}, 4, 1), alloc(6, new int[]{1, 2}, 1, 4),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 3, 2),
+                resource(5, 4, 2), resource(6, 4, 2), resource(7, 3, 2), resource(8, 3, 2),
+                resource(9, 5, 3), resource(10, 6, 3));
+        final var pending = requests(3, 6);
+        final var cpu = new Request(9);
+        final var ram = new Request(10);
+        final var catalogue = Catalogue.full(model, new Request[]{cpu, ram, ram, ram}, new Request[]{cpu, ram});
+        for (final int rows : new int[]{1, 256}) {
+            final var sequential = new Engine(model);
+            final var bulk = new Engine(model);
+            try (final var fit = new FitCount(sequential, 42, catalogue, 128, rows, 2, null);
+                    final var batched = new BulkFitCount(bulk, 42, catalogue, 128, rows, 2)) {
+                sequential.schedule(fit, pending);
+                bulk.schedule(batched, pending);
+                assertPlacements(sequential, bulk, pending);
+                assertEquals("full", batched.parameters().get("catalogue_weight_mode"));
+                assertEquals("2.0", batched.parameters().get("max_total_fit"));
+            }
+        }
+    }
+
+    @Test
+    void deviceGpuGeometryMatchesSequentialThroughRemoval() throws Exception {
+        final var model = model(ClusterSpec.GpuMode.DEVICES_20,
+                alloc(1, new int[]{1, 11}, 8, 2), alloc(2, new int[]{1, 11}, 1, 0.25),
+                alloc(3, new int[]{1, 11}, 2, 0.6), alloc(4, new int[]{1, 11}, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(2)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 2),
+                resource(5, 2, 2), resource(6, 2, 2), resource(7, 3, 3), resource(8, 4, 3));
+        final var pending = requests(3, 4);
+        final var catalogue = new Request[]{new Request(7), new Request(8)};
+        for (final int rows : new int[]{1, 256}) {
+            final var sequential = new Engine(model);
+            final var bulk = new Engine(model);
+            try (final var fit = new FitCount(sequential, 42, catalogue, 128, rows);
+                    final var batched = new BulkFitCount(bulk, 42, catalogue, 128, rows)) {
+                for (int cycle = 0; cycle < 2; cycle++) {
+                    sequential.schedule(fit, pending);
+                    bulk.schedule(batched, pending);
+                    assertPlacements(sequential, bulk, pending);
+                    for (int index = pending.length - 1; index >= 0; index--) {
+                        sequential.remove(pending[index]);
+                        bulk.remove(pending[index]);
+                    }
+                }
             }
         }
     }
@@ -374,8 +794,8 @@ class BulkFitCountTest {
             assertEquals(1, state.placement(3).host());
             assertEquals(2, state.placement(4).host());
             assertEquals(2, state.revision());
-            assertEquals(1, fit.counters().get("fallback_replica_shape"));
-            assertEquals(0, fit.counters().get("optimized_bulks"));
+            assertEquals(0, fit.counters().get("fallback_replica_shape"));
+            assertEquals(1, fit.counters().get("optimized_bulks"));
         }
         final var limitedModel = scalar(2, 2, null);
         final var limitedRequests = requests(3, 2);
@@ -395,6 +815,26 @@ class BulkFitCountTest {
                 for (final var request : limitedRequests) {
                     final int resource = request.resource(0);
                     assertEquals(sequential.placement(resource).host(), limited.placement(resource).host());
+                }
+            }
+        }
+    }
+
+    private static void assertPlacements(Engine expected, Engine actual, Request[] requests) {
+        for (final var request : requests) {
+            for (int member = 0; member < request.size(); member++) {
+                final Assignment left = expected.placement(request.resource(member));
+                final Assignment right = actual.placement(request.resource(member));
+                if (left == null) {
+                    assertNull(right);
+                } else {
+                    assertNotNull(right);
+                    assertEquals(left.resource(), right.resource());
+                    assertEquals(left.host(), right.host());
+                    assertEquals(left.numa(), right.numa());
+                    assertArrayEquals(left.diskOffsets(), right.diskOffsets());
+                    assertArrayEquals(left.devices(), right.devices());
+                    assertArrayEquals(left.gpus(), right.gpus());
                 }
             }
         }

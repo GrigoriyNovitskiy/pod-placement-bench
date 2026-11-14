@@ -1,74 +1,69 @@
 # Bulk fitcount
 
-Status: implemented. Use the [shared contract](README.md). This is a service-burst
-strategy; DP/search are optional ways to optimize the same host options.
+Status: implemented. Use the [shared contract](README.md).
 
 ## Decision and objective
 
-Accept at most 100 already announced, interchangeable pod/regular-shard units.
-The single-request overload delegates to ordinary FitCount. The first supported
-bulk scope has single-host units, ready external dependencies and no positive
-links between units. Unsupported bursts use sequential FitCount, with a reason.
+`bulk-fitcount` runs ordinary FitCount in the announced request order. For the
+same catalogue, seed, copy cap, row limit and `maxTotalFit`, it selects the same
+complete plans as sequential FitCount, including every host/NUMA candidate and
+seeded ties. Catalogue scarcity order and the adaptive total-fit limit are
+refreshed after every placement.
 
-Freeze catalogue scarcity order at bulk entry. Let F_s(S_h) be capped physical
-multiplicity of sample s on host h. A concrete prefix of k replicas defines:
+The batch shares physical loss components and greedy physical planning outcomes
+for consecutive requests with the same physical shape. Shape identity includes
+ordered members, their allocations, disk geometry, GPU demand and internal NUMA
+components. Eligibility is evaluated
+again for every request, so topology limits, pins, masks and dependencies always
+use the current state. Compound pod/shard requests remain atomic.
 
-```text
-L[h,s](k) = F_s(S_h) - F_s(S_h after that concrete k-replica prefix)
-objective = maximize admitted replicas, then minimize sum_h L[h,s](k_h)
-            lexicographically in the frozen sample order
-```
+## Reuse and bounds
 
-This differs from sequential fitcount, whose sample order can change after each
-placement. Curves can be nonconvex or nonmonotonic with greedy geometry.
+A loss component is indexed by catalogue shape and a stable host/NUMA anchor
+slot. It is reused while the request shape and that host's physical capacity are
+unchanged. Physical geometry and confirmed physical failures are retained by
+the same stable anchor slot. `GreedyPlanner.physicalPlan` computes geometry
+without checking eligibility. A positive template keeps its original member IDs
+and read-only device arrays; a reused plan binds the current ordered member IDs
+and passes `canPlace` again. Mask, pin and eligibility failures never become
+physical failures. A positive template remains available after a temporary
+eligibility failure. `capacityChanged(host)` invalidates all of the host's loss
+and physical planning slots after a commit or removal. Global eligibility changes
+do not invalidate physical entries; actual positive plans always pass current
+eligibility validation.
 
-## Steps
+Loss rows use LRU eviction and retain at most `cacheRows` rows. A separate 64 MiB
+batch workspace ceiling can reduce that number or disable sharing. The complete
+loss-row budget is reserved before optional geometry is retained. Geometry uses
+only the remaining space and cannot reduce the loss-cache capacity. Eviction and
+the ceiling affect runtime only. Negative losses from greedy geometry are kept.
+No hosts × replicas × catalogue matrix is retained.
 
-1. Create a detached trial and certify the burst's structure.
-2. Build concrete host-local options with the physical planner. Each next copy
-   uses the first feasible anchor in `numaNodes(host)` order and the planner's
-   deterministic device order. Greedy retains one next plan per host; DP streams
-   complete prefixes. Reuse the physical kernel rather than multiplying a single
-   plan's debit by k.
-3. Greedy chooses the feasible next prefix with the least lexicographic marginal
-   loss. Apply it to the trial; update the affected host and validate changing
-   topology/group limits for every replica. Cache physical marginals on unchanged
-   hosts for the first `cacheRows` frozen samples.
-4. Bind plans to actual request IDs in original order. DP reconstructs and
-   validates the selected count options through the common engine.
-5. Commit the complete validated proposal in input order. Forward actual
-   `capacityChanged(host)` notifications to the persistent FitCount fallback so its cache
-   stays current.
+All loss rows, retained geometry, anchor slots and request shape metadata are
+released when `schedule(batch)` returns or throws. No score sharing crosses invocation
+boundaries. The persistent ordinary FitCount cache still tracks physical
+multiplicity by catalogue shape and host, as it does for sequential FitCount.
+Singleton calls delegate directly to the same FitCount instance and RNG.
 
-Stream host curves or reconstruct them; avoid an H*N*catalogue dense matrix.
-Keep one wrapper and a small internal selector, without a public optimizer hierarchy.
+## Configuration and diagnostics
 
-## Starting configuration
+The existing defaults remain `fitCap=128`, `cacheRows=256`, `seed=42`.
+`maxTotalFit=0` disables the adaptive total-fit limit. Full catalogue frequencies
+are supported. Use identical explicit parameters for a sequential comparison;
+ordinary FitCount has different defaults.
 
-| Parameter | Value |
-| --- | --- |
-| Maximum announced replicas | 100 |
-| Physical copy cap / cache rows / seed | 128 / 256 / 42 |
-| Host cutoff | None |
-| Concrete geometry trajectories per host | 1 |
-| Catalogue order | Frozen full declared catalogue |
-| Equal greedy scores | Seeded choice in stable host/NUMA order |
+The runtime profile is `bulk-fitcount-v3`. `marginal_evaluations` counts computed
+loss components and `marginal_cache_hits` counts reused components.
+`geometry_cache_hits` counts reused physical planning outcomes, including
+physical failures and positive plans rejected by fresh eligibility validation.
+`planner_calls` counts actual greedy planning calls.
+`fitcount_after_probes` counts actual physical kernel probes, excluding cache
+hits. `optimizer_workspace_peak_bytes` reports the retained batch workspace,
+excluding the shared planner and persistent physical cache. `optimized_bulks`
+counts completed batch calls; structural certification and fallback-reason
+counters apply to DP.
 
-Bulk and DP publish a complete validated trial proposal. Unsupported scopes and
-exhausted work or workspace budgets discard the trial and run the persistent
-sequential fallback. Partial trial placements are never published. The
-`certified_bulks` and `optimized_bulks` counters distinguish structural eligibility
-from completed optimization; `marginal_evaluations` and `marginal_cache_hits`
-report greedy score sharing. Neither selector guarantees better future replay
-quality than sequential FitCount. Sweep cap 64/128/512, trajectories 1/4 and
-N 16/100, one axis at a time, with matching sequential controls.
-
-Greedy marginals are a heuristic: A has marginal costs [10,0], B [6,6], N=2;
-greedy costs 12 while selecting both A slots costs 10. [DP](dynamic-programming.md)
-can optimize complete count options without a convexity assumption.
-
-Validate aggregate resource consumption, alternative media, NUMA/domain limits,
-identity rebinding and prefix replay, including fallback cache updates. Benchmark
-quality separately from amortization. Batching's joint-decision and work-sharing
-motivation is described in [Firmament](https://pdos.csail.mit.edu/papers/firmament:osdi16.pdf);
-its flow formulation does not automatically represent our physical geometry.
+[DP](dynamic-programming.md) retains its separate frozen-order count/tree
+objective, structural gate and detached-trial proposal. It can choose placements
+that differ from sequential FitCount; `bulk-fitcount` preserves sequential
+selection and amortizes its scoring work.

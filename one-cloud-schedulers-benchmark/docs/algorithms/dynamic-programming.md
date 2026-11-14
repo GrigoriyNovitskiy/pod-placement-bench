@@ -1,9 +1,22 @@
 # Dynamic programming for bulk host options
 
 Status: implemented for count/tree DP; the optional hybrid below is planned.
-Use the [shared contract](README.md). DP is an alternative selector
-for [bulk fitcount's](bulk-fitcount.md) concrete options and frozen loss vectors,
-not a second physical model or a general fleet-wide resource-discretization DP.
+Use the [shared contract](README.md). DP selects replica counts over concrete
+host trajectories and frozen loss vectors using the common physical model.
+It does not discretize the fleet's resources.
+
+Freeze catalogue scarcity order at batch entry. Let `F_s(S_i)` be the capped
+physical fit-count of catalogue sample `s` in host `i`'s physical state `S_i`.
+A concrete feasible prefix of `k` replicas on that host defines the loss vector:
+
+```text
+L_i(k)[s] = F_s(S_i) - F_s(S_i after that concrete k-replica prefix)
+```
+
+Compare these vectors lexicographically in the frozen entry order. Preserve
+nonconvex and negative losses from greedy geometry. The separate
+[bulk fitcount](bulk-fitcount.md) algorithm refreshes scarcity order after every
+replica to preserve sequential FitCount selection.
 
 ## Supported decomposition
 

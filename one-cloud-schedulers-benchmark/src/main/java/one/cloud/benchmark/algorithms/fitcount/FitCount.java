@@ -4,6 +4,7 @@ import java.util.Arrays;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.SplittableRandom;
+import java.util.function.Consumer;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
 import one.cloud.benchmark.algorithms.AlgorithmParameters;
@@ -17,6 +18,7 @@ import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.ME
 import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
 
 public final class FitCount extends SchedulingAlgorithm {
+    private static final Assignment[] NO_PHYSICAL_PLAN = new Assignment[0];
     @FunctionalInterface
     public interface CandidateSelector {
         /** Read only the first count plans; return nonempty, strictly increasing indices. */
@@ -26,7 +28,7 @@ public final class FitCount extends SchedulingAlgorithm {
     private final SplittableRandom random;
     private final GreedyPlanner planner;
     private final FitCountCache cache;
-    private final int cap;
+    private final int cap, cacheRows;
     private final double maxTotalFit, totalCpu, totalRam;
     private double totalFitLimit = Double.MAX_VALUE;
     private final int[] hosts;
@@ -43,6 +45,12 @@ public final class FitCount extends SchedulingAlgorithm {
     private int planCount;
     private long selectorCalls, candidatePlans, candidateHosts, retainedPlans, retainedHosts;
     private long fitCountSamples, fitCountAfterProbes;
+    private LinkedHashMap<FitCountCache.Sample, int[]> batchLosses;
+    private int[] batchSlots, batchHostOffsets;
+    private Assignment[][] batchGeometry;
+    private int batchRowLimit;
+    private long batchBaseBytes, batchRowBytes, batchGeometryBytes, batchGeometryLimit;
+    private long marginalEvaluations, marginalCacheHits, geometryCacheHits, batchWorkspacePeak;
 
     public static AlgorithmDefinition definition() {
         return AlgorithmDefinition.withCatalogue(
@@ -140,6 +148,7 @@ public final class FitCount extends SchedulingAlgorithm {
         maskedWorkspacePeak = compiler == null ? 0 : compiler.peak();
         this.maxRetainedWidth = maxRetainedWidth;
         cap = maxFitCount;
+        cacheRows = maxCachedShapes;
         this.selector = selector;
         this.maxTotalFit = maxTotalFit;
         int candidates = 0;
@@ -164,6 +173,80 @@ public final class FitCount extends SchedulingAlgorithm {
         if (plan != null) {
             context.place(request, plan);
         }
+    }
+
+    void scheduleBatch(Request[] requests, long memoryLimit) {
+        scheduleBatch(requests, memoryLimit, this::schedule);
+    }
+
+    void scheduleBatch(Request[] requests, long memoryLimit, Consumer<Request> scheduler) {
+        if (batchLosses != null) {
+            throw new IllegalStateException("A FitCount batch is already active");
+        }
+        final long baseBytes = 192L + 4L * hosts.length + 4L * (context.model().hostCount + 2);
+        if (memoryLimit < baseBytes) {
+            for (final var request : requests) {
+                scheduler.accept(request);
+            }
+            return;
+        }
+        batchSlots = new int[hosts.length];
+        batchHostOffsets = new int[context.model().hostCount + 2];
+        int slot = 0;
+        for (int host = 1; host <= context.model().hostCount; host++) {
+            batchHostOffsets[host] = slot;
+            slot += planner.numaNodes(host).length;
+        }
+        batchHostOffsets[context.model().hostCount + 1] = slot;
+        batchLosses = new LinkedHashMap<>(16, .75f, true);
+        batchBaseBytes = baseBytes;
+        batchRowBytes = 96L + 4L * hosts.length;
+        batchWorkspacePeak = Math.max(batchWorkspacePeak, baseBytes);
+        Catalogue.Key batchShape = null;
+        try {
+            for (final var request : requests) {
+                final var shape = Catalogue.key(context.model(), request);
+                if (!shape.equals(batchShape)) {
+                    batchLosses.clear();
+                    batchGeometry = null;
+                    batchGeometryBytes = 0;
+                    batchGeometryLimit = 0;
+                    batchRowLimit = 0;
+                    batchShape = null;
+                    batchBaseBytes = baseBytes;
+                    final long bytes = baseBytes + 64L + 8L * shape.values().length;
+                    if (bytes <= memoryLimit) {
+                        batchShape = shape;
+                        batchBaseBytes = bytes;
+                        batchRowLimit = (int) Math.min(Math.min(cacheRows, cache.samples().length),
+                                (memoryLimit - bytes) / batchRowBytes);
+                        // Reserve all loss rows before admitting optional geometry.
+                        final long remaining = memoryLimit - bytes - batchRowLimit * batchRowBytes;
+                        final long indexBytes = 16L + 8L * hosts.length;
+                        if (indexBytes <= remaining) {
+                            batchGeometry = new Assignment[hosts.length][];
+                            batchBaseBytes += indexBytes;
+                            batchGeometryLimit = remaining - indexBytes;
+                        }
+                    }
+                    recordBatchWorkspace();
+                }
+                scheduler.accept(request);
+            }
+        } finally {
+            batchLosses = null;
+            batchSlots = null;
+            batchHostOffsets = null;
+            batchGeometry = null;
+            batchGeometryBytes = 0;
+            batchGeometryLimit = 0;
+            batchRowLimit = 0;
+        }
+    }
+
+    Map<String, Long> batchCounters() {
+        return Map.of("marginal_evaluations", marginalEvaluations, "marginal_cache_hits", marginalCacheHits,
+                "geometry_cache_hits", geometryCacheHits, "optimizer_workspace_peak_bytes", batchWorkspacePeak);
     }
 
     public Assignment[] select(Request request) {
@@ -228,6 +311,7 @@ public final class FitCount extends SchedulingAlgorithm {
 
     private void collect(Request request) {
         double freeCpu = 0, freeRam = 0;
+        int slot = 0;
         for (int host = 1; host <= context.model().hostCount; host++) {
             if (maxTotalFit > 0) {
                 freeCpu += context.available(host, VCORES_VALUE);
@@ -236,11 +320,16 @@ public final class FitCount extends SchedulingAlgorithm {
                 }
             }
             for (final int numa : planner.numaNodes(host)) {
-                final var plan = planner.plan(request, host, numa);
+                final var plan = candidatePlan(request, host, numa, slot);
                 if (plan != null) {
                     hosts[planCount] = host;
-                    plans[planCount++] = plan;
+                    plans[planCount] = plan;
+                    if (batchSlots != null) {
+                        batchSlots[planCount] = slot;
+                    }
+                    planCount++;
                 }
+                slot++;
             }
         }
         if (maxTotalFit > 0) {
@@ -255,6 +344,57 @@ public final class FitCount extends SchedulingAlgorithm {
             }
             totalFitLimit = Math.max(maxTotalFit, growth);
         }
+    }
+
+    private Assignment[] candidatePlan(Request request, int host, int numa, int slot) {
+        if (batchGeometry == null) {
+            return planner.plan(request, host, numa);
+        }
+        final var model = context.model();
+        for (int member = 0; member < request.size(); member++) {
+            final int profile = model.constraints[request.resource(member)];
+            if (!model.candidates.allows(model.rules.candidates[profile], host)
+                    || model.rules.pinnedHost[profile] != 0 && model.rules.pinnedHost[profile] != host) {
+                return null;
+            }
+        }
+        final var template = batchGeometry[slot];
+        if (template != null) {
+            geometryCacheHits++;
+            if (template == NO_PHYSICAL_PLAN) {
+                return null;
+            }
+            final var rebound = new Assignment[template.length];
+            // Physical geometry is stable; eligibility must use the current member IDs and state.
+            for (int member = 0; member < template.length; member++) {
+                final var plan = template[member];
+                rebound[member] = new Assignment(request.resource(member), host, plan.numa(),
+                        plan.diskOffsets(), plan.devices(), plan.gpus());
+            }
+            return context.canPlace(request, rebound) ? rebound : null;
+        }
+        final var plan = planner.physicalPlan(request, host, numa);
+        final var physical = plan == null ? NO_PHYSICAL_PLAN : plan;
+        final long bytes = geometryBytes(physical);
+        if (bytes <= batchGeometryLimit - batchGeometryBytes) {
+            batchGeometry[slot] = physical;
+            batchGeometryBytes += bytes;
+            recordBatchWorkspace();
+        }
+        return plan != null && context.canPlace(request, plan) ? plan : null;
+    }
+
+    private static long geometryBytes(Assignment[] plans) {
+        long bytes = 16L + 8L * plans.length;
+        for (final var plan : plans) {
+            bytes += 112L + 4L * (plan.diskOffsets().length + plan.devices().length + plan.gpus().length);
+        }
+        return bytes;
+    }
+
+    private void recordBatchWorkspace() {
+        batchWorkspacePeak = Math.max(batchWorkspacePeak,
+                batchBaseBytes + batchGeometryBytes + batchRowBytes * batchLosses.size());
     }
 
     private double supply(int resource, int dimension) {
@@ -333,6 +473,9 @@ public final class FitCount extends SchedulingAlgorithm {
             final int index = selected[retained];
             hosts[retained] = hosts[index];
             plans[retained] = plans[index];
+            if (batchSlots != null) {
+                batchSlots[retained] = batchSlots[index];
+            }
         }
         return selected.length;
     }
@@ -409,20 +552,24 @@ public final class FitCount extends SchedulingAlgorithm {
         cache.beginOrder(totalFitLimit);
         for (var sample = cache.next(); sample != null; sample = cache.next()) {
             fitCountSamples++;
-            fitCountAfterProbes += candidates;
             int best = Integer.MAX_VALUE;
             int retained = 0;
+            final int[] losses = batchRow(sample);
             for (int index = 0; index < candidates; index++) {
                 final int host = hosts[index];
                 final var plan = plans[index];
-                final int loss = cache.count(sample, host) - planner.fitCount(sample.request, host, plan, cap);
+                final int loss = loss(sample, index, losses, null);
                 if (loss < best) {
                     retained = 0;
                     best = loss;
                 }
                 if (loss == best) {
                     hosts[retained] = host;
-                    plans[retained++] = plan;
+                    plans[retained] = plan;
+                    if (batchSlots != null) {
+                        batchSlots[retained] = batchSlots[index];
+                    }
+                    retained++;
                 }
             }
             candidates = retained;
@@ -431,6 +578,47 @@ public final class FitCount extends SchedulingAlgorithm {
             }
         }
         return candidates;
+    }
+
+    private int[] batchRow(FitCountCache.Sample sample) {
+        if (batchLosses == null || batchRowLimit == 0) {
+            return null;
+        }
+        var losses = batchLosses.get(sample);
+        if (losses == null) {
+            if (batchLosses.size() == batchRowLimit) {
+                final var iterator = batchLosses.entrySet().iterator();
+                losses = iterator.next().getValue();
+                iterator.remove();
+            } else {
+                losses = new int[hosts.length];
+            }
+            Arrays.fill(losses, Integer.MIN_VALUE);
+            batchLosses.put(sample, losses);
+            recordBatchWorkspace();
+        }
+        return losses;
+    }
+
+    private int loss(FitCountCache.Sample sample, int index, int[] losses, int[] counts) {
+        if (losses != null) {
+            final int cached = losses[batchSlots[index]];
+            if (cached != Integer.MIN_VALUE) {
+                marginalCacheHits++;
+                return cached;
+            }
+        }
+        final int host = hosts[index];
+        fitCountAfterProbes++;
+        final int before = counts == null ? cache.count(sample, host) : counts[host];
+        final int loss = before - planner.fitCount(sample.request, host, plans[index], cap);
+        if (batchLosses != null) {
+            marginalEvaluations++;
+            if (losses != null) {
+                losses[batchSlots[index]] = loss;
+            }
+        }
+        return loss;
     }
 
     private int retainWeightedBest(int candidates) {
@@ -462,11 +650,13 @@ public final class FitCount extends SchedulingAlgorithm {
 
     private void addWeightedLosses(FitCountCache.Sample sample, int candidates) {
         fitCountSamples++;
-        fitCountAfterProbes += candidates;
-        final int[] counts = cache.counts(sample);
+        final int[] losses = batchRow(sample);
+        int[] counts = null;
         for (int index = 0; index < candidates; index++) {
-            final int host = hosts[index];
-            final int loss = counts[host] - planner.fitCount(sample.request, host, plans[index], cap);
+            if (counts == null && (losses == null || losses[batchSlots[index]] == Integer.MIN_VALUE)) {
+                counts = cache.counts(sample);
+            }
+            final int loss = loss(sample, index, losses, counts);
             weightedLosses[index] += (long) sample.frequency * loss;
         }
     }
@@ -492,5 +682,19 @@ public final class FitCount extends SchedulingAlgorithm {
     @Override
     public void capacityChanged(int host) {
         cache.changed(host);
+        if (batchLosses != null) {
+            final int start = batchHostOffsets[host], end = batchHostOffsets[host + 1];
+            for (final var losses : batchLosses.values()) {
+                Arrays.fill(losses, start, end, Integer.MIN_VALUE);
+            }
+            if (batchGeometry != null) {
+                for (int slot = start; slot < end; slot++) {
+                    if (batchGeometry[slot] != null) {
+                        batchGeometryBytes -= geometryBytes(batchGeometry[slot]);
+                        batchGeometry[slot] = null;
+                    }
+                }
+            }
+        }
     }
 }

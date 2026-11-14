@@ -16,7 +16,9 @@ import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.DiskPlan;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Domain;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
+import one.cloud.benchmark.dataset.PlacementDatasetProtos.Layout;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Limit;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Media;
@@ -1270,6 +1272,167 @@ class FitCountTest {
             assertPortfolioGeometry(original[index][0], plans[index][0]);
         }
         assertEquals(0, oracleState.revision());
+    }
+
+    @Test
+    void geometricPortfolioBulkMatchesSequentialWithFullWeightsAndChangingShortlists() throws Exception {
+        final String ordinary = "geometric-portfolio-mean-fitcount";
+        final String bulk = "geometric-portfolio-mean-bulk-fitcount";
+        assertEquals(AlgorithmRegistry.defaults(ordinary).parameters(), AlgorithmRegistry.defaults(bulk).parameters());
+        final int hosts = 20, replicas = 100;
+        final var model = geometricPortfolioBatchModel(hosts, replicas);
+        final var pending = new Request[replicas];
+        for (int index = 0; index < replicas; index++) {
+            pending[index] = new Request(5 * hosts + 2 * index + 1, 5 * hosts + 2 * index + 2);
+        }
+        final int firstSample = 5 * hosts + 2 * replicas + 1;
+        final var samples = new Request[]{new Request(firstSample, firstSample + 1),
+                new Request(firstSample + 2, firstSample + 3), new Request(firstSample + 4, firstSample + 5)};
+        final var catalogue = Catalogue.full(model,
+                new Request[]{samples[0], samples[0], samples[0], samples[0], samples[0], samples[0],
+                        samples[0], samples[0], samples[1], samples[2], samples[2]}, samples);
+        for (final long seed : new long[]{44, 45}) {
+            for (final int rows : new int[]{1, 64}) {
+                for (final double limit : new double[]{0, 4}) {
+                    final var parameters = Map.of("seed", new JsonPrimitive(seed),
+                            "cacheRows", new JsonPrimitive(rows), "maxTotalFit", new JsonPrimitive(limit));
+                    final var expected = new Engine(model);
+                    final var actual = new Engine(model);
+                    try (final var sequential = AlgorithmRegistry.create(
+                            new AlgorithmRegistry.Settings(ordinary, parameters), expected, catalogue);
+                            final var batched = AlgorithmRegistry.create(
+                                    new AlgorithmRegistry.Settings(bulk, parameters), actual, catalogue)) {
+                        expected.schedule(sequential, pending);
+                        actual.schedule(batched, pending);
+                        assertPortfolioPlacements(expected, actual, pending);
+                        assertNull(actual.placement(pending[0].resource(0)));
+                        assertEquals(1, actual.placement(pending[1].resource(0)).host());
+                        for (final var counter : new String[]{"selector_calls", "candidate_plans", "candidate_hosts",
+                                "retained_plans", "retained_hosts", "geometric_scores", "least_scores", "shortlist_overlap"}) {
+                            assertEquals(sequential.counters().get(counter), batched.counters().get(counter), counter);
+                        }
+                        assertEquals("full", batched.parameters().get("catalogue_weight_mode"));
+                        assertEquals("one-schedule-batch", batched.parameters().get("cache_scope"));
+                        assertTrue(batched.counters().get("geometry_cache_hits") > 0);
+                        assertTrue(batched.counters().get("optimizer_workspace_peak_bytes") <= 64L << 20);
+                        if (rows == 64 && limit == 0) {
+                            assertTrue(batched.counters().get("marginal_cache_hits") > 0);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void geometricPortfolioBulkPreservesAttemptsAndRandomSequenceAcrossWindowsAndRemoval() throws Exception {
+        final int hosts = 20, replicas = 100;
+        final var model = geometricPortfolioBatchModel(hosts, replicas);
+        final var pending = new Request[replicas];
+        for (int index = 0; index < replicas; index++) {
+            pending[index] = new Request(5 * hosts + 2 * index + 1, 5 * hosts + 2 * index + 2);
+        }
+        final var expected = new Engine(model);
+        final var actual = new Engine(model);
+        final var catalogue = new Request[0];
+        try (final var sequential = AlgorithmRegistry.create(AlgorithmRegistry.defaults("geometric-portfolio-mean-fitcount"),
+                expected, catalogue);
+                final var batched = AlgorithmRegistry.create(
+                        AlgorithmRegistry.defaults("geometric-portfolio-mean-bulk-fitcount"), actual, catalogue)) {
+            for (int cycle = 0; cycle < 2; cycle++) {
+                expected.schedule(sequential, pending);
+                final int split = cycle == 0 ? 40 : 1;
+                actual.schedule(batched, Arrays.copyOfRange(pending, 0, split));
+                actual.schedule(batched, pending[split]);
+                actual.schedule(batched, Arrays.copyOfRange(pending, split + 1, pending.length));
+                assertPortfolioPlacements(expected, actual, pending);
+                assertEquals(sequential.counters().get("selector_calls"), batched.counters().get("selector_calls"));
+                assertEquals(sequential.counters().get("shortlist_overlap"), batched.counters().get("shortlist_overlap"));
+                for (int index = pending.length - 1; index >= 0; index--) {
+                    if (expected.placement(pending[index].resource(0)) != null) {
+                        expected.remove(pending[index]);
+                        actual.remove(pending[index]);
+                    }
+                }
+            }
+        }
+        assertEquals(expected.revision(), actual.revision());
+    }
+
+    private static void assertPortfolioPlacements(Engine expected, Engine actual, Request[] requests) {
+        for (final var request : requests) {
+            for (int member = 0; member < request.size(); member++) {
+                final int resource = request.resource(member);
+                if (expected.placement(resource) == null) {
+                    assertNull(actual.placement(resource));
+                } else {
+                    assertPortfolioGeometry(expected.placement(resource), actual.placement(resource));
+                }
+            }
+        }
+    }
+
+    private static ClusterSpec geometricPortfolioBatchModel(int hosts, int replicas) throws Exception {
+        final var records = new ArrayList<Record>();
+        for (int host = 1; host <= hosts; host++) {
+            final double cpu = 12 + host % 4 * 2, ram = 32 + host % 3 * 8;
+            records.add(alloc(host, new int[]{1, 2, 11}, cpu, ram, 2));
+            records.add(rules(Constraints.newBuilder().setId(host).setKind(Kind.HOST)
+                    .addDomains(Domain.newBuilder()
+                            .setLevel(3).setValue((host - 1) / 4 + 1))));
+            records.add(resource(host, host, host));
+            for (int ordinal = 1; ordinal <= 2; ordinal++) {
+                final int numa = hosts + 2 * (host - 1) + ordinal;
+                final double fraction = host == 1 ? ordinal == 1 ? 1 : 0 : .5;
+                records.add(alloc(numa, new int[]{1, 2}, cpu * fraction, ram * fraction));
+                records.add(rules(Constraints.newBuilder().setId(numa).setKind(Kind.NUMA)
+                        .setParent(host).setOrdinal(ordinal)));
+                records.add(resource(numa, numa, numa));
+            }
+            for (int ordinal = 1; ordinal <= 2; ordinal++) {
+                final int disk = 3 * hosts + 2 * (host - 1) + ordinal;
+                records.add(rules(Constraints.newBuilder().setId(disk).setKind(Kind.DISK)
+                        .setParent(host).setMedia(Media.SSD)));
+                records.add(resource(disk, 3 * hosts + 1, disk));
+            }
+        }
+        records.add(alloc(3 * hosts + 1, new int[]{18, 19, 20}, 128, 32, 2000));
+        records.add(alloc(3 * hosts + 2, new int[]{1, 2, 11}, 1, 2, .25));
+        records.add(alloc(3 * hosts + 3, new int[]{1, 2, 11}, 1000, 2, .25));
+        records.add(alloc(3 * hosts + 4, new int[]{1, 2, 11}, 2, 3, .25));
+        records.add(alloc(3 * hosts + 5, new int[]{1, 2, 11}, 1, 4, .25));
+        records.add(alloc(3 * hosts + 6, new int[]{1, 2, 11}, 4, 1, .6));
+        records.add(alloc(3 * hosts + 7, new int[]{1, 2, 11}, 2, 2, 1));
+        final int shardRule = 5 * hosts + replicas + 4;
+        records.add(rules(Constraints.newBuilder().setId(shardRule).setKind(Kind.SHARD).setGroup(2)
+                .addDisks(DiskPlan.newBuilder().setMedia(Media.SSD).setLayout(Layout.RAID1).setExtents(2)
+                        .setSpindles(1).setIops(20).setMinDevices(2).setMaxDevices(2)
+                        .setMinStripes(1).setMaxStripes(1))));
+        for (int index = 0; index < replicas + 3; index++) {
+            final int pod = 5 * hosts + 2 * index + 1, shard = pod + 1;
+            final int profile = 5 * hosts + index + 1;
+            final var rule = Constraints.newBuilder().setId(profile).setKind(Kind.POD)
+                    .setGroup(index < replicas ? 1 : 3)
+                    .addLinks(Link.newBuilder().setTarget(shard).setDomain(1));
+            int allocation = 3 * hosts + 2;
+            if (index < replicas) {
+                rule.addLimits(Limit.newBuilder().setDomain(2).setMax(2).setHard(true))
+                        .addLimits(Limit.newBuilder().setDomain(3).setMax(12).setHard(true));
+                if (index == 0) {
+                    allocation = 3 * hosts + 3;
+                } else if (index == 1) {
+                    rule.setPinnedHost(1);
+                } else if (index == replicas / 2) {
+                    allocation = 3 * hosts + 4;
+                }
+            } else {
+                allocation = 3 * hosts + 5 + index - replicas;
+            }
+            records.add(rules(rule));
+            records.add(resource(pod, allocation, profile));
+            records.add(resource(shard, 0, shardRule));
+        }
+        return model(ClusterSpec.GpuMode.DEVICES_20, records.toArray(Record[]::new));
     }
 
     private static long portfolioMix(long value) {

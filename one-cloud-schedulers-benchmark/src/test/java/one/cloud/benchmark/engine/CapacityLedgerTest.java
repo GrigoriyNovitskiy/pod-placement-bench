@@ -29,6 +29,81 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class CapacityLedgerTest {
     @Test
+    void sparseScratchSupplyRetainsEveryDimensionAndWholeDiskState() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{5, 6, 7, 8, 9, 10}, 100, 100, 100, 100, 100, 100),
+                alloc(2, new int[]{3, 4, 18, 19, 20}, -0.0, Double.MIN_VALUE, 20, 10, 10), alloc(3, new int[0]),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1)
+                        .setMedia(Media.HDD).setAlternativeMedia(Media.SSD).setAlternativeSpindles(8)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.SHARD).addDisks(disk(Media.HDD).setFlags(1))),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3));
+        final var state = new Engine(model);
+        final var scratch = new CapacityLedger(model, false);
+        final var request = new Request(3);
+        final var plan = new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2});
+        final var algorithm = new SchedulingAlgorithm(state) {
+            @Override
+            public void schedule(Request request) {
+                context.place(request, plan);
+            }
+        };
+        for (int phase = 0; phase < 3; phase++) {
+            scratch.load(state, new int[]{1, 2});
+            for (int resource = 1; resource <= 2; resource++) {
+                for (int dimension = 1; dimension <= model.dimensionCount; dimension++) {
+                    assertEquals(Double.doubleToRawLongBits(state.available(resource, dimension)),
+                            Double.doubleToRawLongBits(scratch.available(resource, dimension)));
+                }
+            }
+            assertEquals(state.available(2, 19, Media.SSD_VALUE), scratch.available(2, 19, Media.SSD_VALUE));
+            assertEquals(phase != 1, scratch.wholeAvailable(2));
+            if (phase == 0) {
+                state.schedule(algorithm, request);
+            } else if (phase == 1) {
+                state.remove(request);
+            }
+        }
+    }
+
+    @Test
+    void interleavedHostAndNumaDebitsKeepDuplicateOffsetsCombined() throws Exception {
+        for (final int numaCpu : new int[]{1, 2}) {
+            final var model = model(
+                    alloc(1, new int[]{1, 2, 3}, 4, 4, 4), alloc(2, new int[]{1, 2}, numaCpu, 2),
+                    alloc(3, new int[]{1, 2, 3}, 1, 1, 1),
+                    rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                    rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                    rules(Constraints.newBuilder().setId(3).setKind(Kind.POD)),
+                    resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3), resource(4, 3, 3));
+            final var state = new Engine(model);
+            final var request = new Request(3, 4);
+            final var plans = new Assignment[]{plain(3, 2), plain(4, 2)};
+            final var algorithm = new SchedulingAlgorithm(state) {
+                @Override
+                public void schedule(Request request) {
+                    assertEquals(numaCpu == 2, context.canPlace(request, plans));
+                    if (numaCpu == 2) {
+                        context.place(request, plans);
+                    }
+                }
+            };
+            for (int cycle = 0; cycle < 2; cycle++) {
+                state.schedule(algorithm, request);
+                for (int dimension = 1; dimension <= 3; dimension++) {
+                    assertEquals(numaCpu == 2 ? 2 : 4, state.available(1, dimension));
+                }
+                assertEquals(numaCpu == 2 ? 0 : 1, state.available(2, 1));
+                assertEquals(numaCpu == 2 ? 0 : 2, state.available(2, 2));
+                if (numaCpu == 2) {
+                    state.remove(request);
+                    assertEquals(2, state.available(2, 1));
+                }
+            }
+        }
+    }
+
+    @Test
     void gpuPhysicalCountingUsesDevicesAndTentativeAssignmentsWithoutMutatingState() throws Exception {
         final var state = new Engine(model(ClusterSpec.GpuMode.DEVICES_20,
                 alloc(1, new int[]{11}, 2), alloc(2, new int[]{11}, .5), alloc(3, new int[]{11}, .6),

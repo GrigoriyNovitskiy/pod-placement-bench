@@ -154,6 +154,9 @@ final class CapacityLedger {
             final int resource = resources[index];
             slot[resource] = index;
             final int profile = model.constraints[resource];
+            final int allocation = model.alloc[resource];
+            int supplyIndex = model.allocations.offset[allocation];
+            final int supplyEnd = model.allocations.offset[allocation + 1];
             boolean empty = true;
             if (model.gpus != null && model.rules.kind[profile] == 1) {
                 gpuFirst = model.gpus.first(resource, 11);
@@ -169,7 +172,11 @@ final class CapacityLedger {
             for (int dimension = 1; dimension <= model.dimensionCount; dimension++) {
                 final double value = context.available(resource, dimension);
                 capacity[index * stride + dimension] = value;
-                empty = empty && value == supply(resource, dimension);
+                if (empty) {
+                    final double expected = supplyIndex < supplyEnd && model.allocations.type[supplyIndex] == dimension
+                            ? model.allocations.amount[supplyIndex++] : 0;
+                    empty = value == expected;
+                }
             }
             final double alternative = model.rules.alternativeMedia[profile] == 0 ? 0
                     : context.available(resource, 19, model.rules.alternativeMedia[profile]);
@@ -657,15 +664,18 @@ final class CapacityLedger {
         final int offset = row(resource) * stride;
         final int primary = 19;
         final int alternative = model.dimensionCount + 1;
-        final double remainingPrimary = used[offset + alternative] + debit.get(offset + alternative) > 0 ? 0
-                : capacity[offset + primary] - used[offset + primary] - debit.get(offset + primary);
-        final double remainingAlternative = used[offset + primary] + debit.get(offset + primary) > 0 ? 0
-                : capacity[offset + alternative] - used[offset + alternative] - debit.get(offset + alternative);
+        final double primaryDebit = debit.get(offset + primary);
+        final double alternativeDebit = debit.get(offset + alternative);
+        final double extentDebit = debit.get(offset + 18);
+        final double remainingPrimary = used[offset + alternative] + alternativeDebit > 0 ? 0
+                : capacity[offset + primary] - used[offset + primary] - primaryDebit;
+        final double remainingAlternative = used[offset + primary] + primaryDebit > 0 ? 0
+                : capacity[offset + alternative] - used[offset + alternative] - alternativeDebit;
         final int host = model.rules.parent[profile];
-        project(debit, host, model.rules.media[profile], -debit.get(offset + 18),
+        project(debit, host, model.rules.media[profile], -extentDebit,
                 remainingPrimary - available(resource, 19));
         if (model.rules.alternativeMedia[profile] != 0) {
-            project(debit, host, model.rules.alternativeMedia[profile], -debit.get(offset + 18),
+            project(debit, host, model.rules.alternativeMedia[profile], -extentDebit,
                     remainingAlternative - available(resource, 19, model.rules.alternativeMedia[profile]));
         }
     }
@@ -953,7 +963,7 @@ final class CapacityLedger {
         private int gpuCount;
         private int[] index = new int[16];
         private double[] amount = new double[16];
-        private int size;
+        private int size, maxOffset = -1;
         private int[] devices = new int[4];
         private int deviceCount;
         private int[] projectionIndex = new int[8];
@@ -963,6 +973,7 @@ final class CapacityLedger {
         private void reset() {
             gpuCount = 0;
             size = 0;
+            maxOffset = -1;
             deviceCount = 0;
             projectionSize = 0;
         }
@@ -987,10 +998,12 @@ final class CapacityLedger {
             if (value == 0) {
                 return;
             }
-            for (int next = 0; next < size; next++) {
-                if (index[next] == offset) {
-                    amount[next] += value;
-                    return;
+            if (offset <= maxOffset) {
+                for (int next = 0; next < size; next++) {
+                    if (index[next] == offset) {
+                        amount[next] += value;
+                        return;
+                    }
                 }
             }
             if (size == index.length) {
@@ -999,9 +1012,13 @@ final class CapacityLedger {
             }
             index[size] = offset;
             amount[size++] = value;
+            maxOffset = Math.max(maxOffset, offset);
         }
 
         private double get(int offset) {
+            if (offset > maxOffset) {
+                return 0;
+            }
             for (int next = 0; next < size; next++) {
                 if (index[next] == offset) {
                     return amount[next];

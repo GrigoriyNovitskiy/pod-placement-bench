@@ -28,7 +28,7 @@ selected empirically on the ten clouds. Utilization takes priority over latency.
 
 | Plan | Primary experiment |
 | --- | --- |
-| [Bulk fitcount](bulk-fitcount.md) | Up to 100 announced replicas of one service; frozen-order greedy |
+| [Bulk fitcount](bulk-fitcount.md) | Sequential FitCount with batch-local physical loss sharing |
 | [Rollout](rollout.md) | Strict online B=1; sampled mixed-demand continuation |
 | [CP-SAT/search and SMT](cp-sat-search.md) | Implemented bounded CPU/RAM SMT reference; general CP-SAT/search planned |
 | [Dynamic programming](dynamic-programming.md) | Separable bulk options; optional 32-unit/64-host local hybrid |
@@ -90,15 +90,15 @@ The five hybrids use cap **10**, cache rows **64**, and seed **44**,
 as defined in the [classical](hybrids.md#границы-и-общий-профиль) and
 [ML](ml-hybrids.md) specifications.
 
-For bulk, declare the service burst in the scenario and version its transformation.
+For DP, declare the service burst in the scenario and version its transformation.
 For current exporter v2, the nonzero POD group identifies an anonymized service
 when a unit contains exactly one POD. It does not establish interchangeability:
 check allocation/geometry, masks, pins, relative links, group stencils and external
 dependencies. Never manufacture a burst by reading the hidden replay suffix.
 
-On a structural-gate failure or declared work-budget exhaustion, bulk/DP discard
-the detached trial and run sequential FitCount, reporting the reason and coverage.
-Unsupported constraints must remain enforced. Check proposed replacements by
+On a structural-gate failure or declared work-budget exhaustion, DP discards
+the detached trial and runs sequential FitCount, reporting the reason and coverage.
+Unsupported constraints must remain enforced. Check detached-trial proposals by
 isolated prefix replay before canonical commit.
 Unexpected exceptions, cancellation, invalid models, native failures and watchdog
 expiry fail the run. They are not ordinary declines. A bound for a restricted
@@ -139,7 +139,7 @@ modes):
 | `geometric-best-fit` | [GeometricBestFit](../../src/main/java/one/cloud/benchmark/algorithms/geometric/GeometricBestFit.java); [specification](../geometric-best-fit/README.md) |
 | `fgd` | [Fgd](../../src/main/java/one/cloud/benchmark/algorithms/fgd/Fgd.java), GPU fragmentation |
 | `cpu-ram-fgd` | The same class, `Fgd.cpuRam` |
-| `bulk-fitcount` | `BulkFitCount`, frozen-order greedy selection |
+| `bulk-fitcount` | `BulkFitCount`, exact sequential selection with batch-local score reuse |
 | `dp` | `BulkFitCount.dynamicProgramming`, count/tree selection |
 | `rollout` | `Rollout`, explicit prior and common isolated continuation paths |
 | `smt` | `SmtFitCount`, bounded integer CPU/RAM plans with optional Z3 subprocess |
@@ -147,6 +147,7 @@ modes):
 | `catboost-rollout-top1` / `catboost-rollout-topn-fitcount` | `CatBoostRolloutTop1` / `CatBoostRolloutTopNFitCount`, trained rollout model |
 | `randomn-fitcount` | `RandomNFitCount`, seeded shortlist then FitCount |
 | `portfolio-fitcount` | `PortfolioFitCount`, random + fragmentation + LeastAllocated shortlist |
+| `geometric-portfolio-mean-bulk-fitcount` | `PortfolioFitCount`, exact sequential geometric portfolio mean selection with batch-local reuse |
 | `masked-fitcount` | `MaskedFitCount`, static-mask scarcity over shared physical rows |
 | `window-portfolio-fitcount` | `WindowPortfolioFitCount`, full-window strict admission-set-superset guard |
 | `rl-top1` / `rl-topn-fitcount` | `RlTop1` / `RlTopNFitCount`, packaged/custom PPO actor |
@@ -154,5 +155,5 @@ modes):
 
 The runner defaults to B=1 and accepts explicit versioned service-burst windows. `GreedyPlanner` is a
 geometry helper; the runner and engine are infrastructure. The optional local DP hybrid and the CP-SAT/DCM/min-cost-flow backends remain
-plans. Bulk fitcount, count/tree DP and rollout use the shared engine trials.
+plans. Count/tree DP and rollout use the shared engine trials.
 The CLI additionally exposes the four Kubernetes resource-scoring modes.

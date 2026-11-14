@@ -136,8 +136,10 @@ aggregate-mode digests, and the history checksum includes selected GPU IDs.
 
 
 Bulk fitcount, count/tree DP and strict online rollout are available as
-`bulk-fitcount`, `dp` and `rollout`. Bulk/DP need an explicitly announced service
-burst (`--bulk-size 100`); rollout needs a `--rollout-prior` protobuf manifest.
+`bulk-fitcount`, `dp` and `rollout`. Bulk shares physical loss scores within an
+announced batch while preserving sequential FitCount decisions. DP optimizes an
+explicitly announced service burst (`--bulk-size 100`); rollout needs a
+`--rollout-prior` protobuf manifest.
 Rollout's numerical options use `--param candidates=...`, `--param scenarios=...`
 and `--param horizon=...`; `algorithms rollout` lists the complete schema. The
 prior is a CLI file input and is not accepted as a path through the web API.
@@ -180,6 +182,14 @@ to these weight units. The mode also applies to CLI benchmark JSON via
 `"catalogueWeights": "full"`.
 The [formal comparison and fragmentation definition](docs/algorithms/mean-fitcount.md)
 describe the rule, candidate quotas and performance tradeoffs.
+
+`geometric-portfolio-mean-bulk-fitcount` preserves the ordinary geometric
+portfolio's per-request shortlist and mean decisions while sharing physical
+geometry and copy losses inside one announced batch. Use `--bulk-size 100` to
+announce service bursts. Its defaults match the ordinary portfolio: seed 44,
+copy cap 10, cache rows 64 and Random20/LeastAllocated4/geometric4. Batch caches
+use at most 64 MiB and are released on return; single requests retain ordinary
+portfolio behavior.
 
 Geometric best-fit uses normalized residual L2 squared with fixed family weights.
 It shares planner geometry and hard constraints with fitcount and streams candidates

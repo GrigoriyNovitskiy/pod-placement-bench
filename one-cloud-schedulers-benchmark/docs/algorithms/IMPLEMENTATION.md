@@ -52,22 +52,33 @@ are resource counts, including every member of a declined atomic unit.
 
 ## Bulk and DP
 
-`BulkFitCount` implements frozen-order greedy marginals. Its
-`dynamicProgramming(...)` factory selects count/tree DP over the same concrete
-host trajectories. Both compute a proposal in a detached trial and publish it
-without a sequential comparison pass. Canonical `capacityChanged(host)` notifications
-keep the persistent fallback cache current. Greedy uses a decision-local SplitMix
-seed and caches physical marginals for the first `cacheRows` frozen samples on
-unchanged hosts, with hits/evaluations reported. Runtime profiles are
-`bulk-fitcount-v2` and `dp-fitcount-v2`.
+`BulkFitCount` runs sequential FitCount with batch-local sharing of physical
+loss components for consecutive identical physical shapes. It preserves the
+complete host/NUMA candidate order, current catalogue scarcity order, constraints
+and RNG of ordinary FitCount. LRU rows are bounded by `cacheRows` and a 64 MiB
+workspace ceiling, use stable anchor slots and are invalidated on changes to the
+host's physical capacity. Physical geometry and confirmed physical failures use
+the spare workspace after reserving all loss rows. `physicalPlan` excludes
+eligibility checks; positive templates bind current member IDs and pass fresh
+`canPlace` validation. Mask, pin and eligibility failures are never cached as
+physical failures. Rows, geometry and shape metadata are released on every return
+or exception from the batch call; no sharing crosses calls. Full catalogue
+frequencies and `maxTotalFit` use ordinary FitCount semantics. Computed/reused
+components and retained workspace, including geometry, are reported. Its runtime
+profile is `bulk-fitcount-v3`.
+
+The `dynamicProgramming(...)` factory retains frozen-order count/tree DP over
+concrete host trajectories. It computes a proposal in a detached trial and
+publishes it without a sequential comparison pass. Canonical
+`capacityChanged(host)` notifications keep its persistent fallback cache current.
+Its runtime profile remains `dp-fitcount-v2`.
 
 Use matching explicit `seed`, `fitCap` and `cacheRows` for comparisons: registry
 defaults differ between ordinary and bulk FitCount.
 
-The structural gate certifies allocation/geometry, masks/pins, relative links,
+The DP structural gate certifies allocation/geometry, masks/pins, relative links,
 shared/private group stencils, ready external dependencies and one-host options.
-Unsupported bursts use sequential FitCount with a reason. DP additionally
-certifies actual laminar host sets, constant per-replica group multiplicities and
+Unsupported DP bursts use sequential FitCount with a reason. DP also certifies actual laminar host sets, constant per-replica group multiplicities and
 a maximum depth 5. NUMA and host-local limits remain in concrete geometry; a NUMA
 cap is never collapsed into an artificial host cap.
 
