@@ -11,6 +11,7 @@ import one.cloud.benchmark.algorithms.AlgorithmRegistry.Parameter;
 import one.cloud.benchmark.algorithms.fitcount.Catalogue;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.fitcount.MaskedFitCount;
+import one.cloud.benchmark.algorithms.fitcount.PortfolioFitCount;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Request;
@@ -44,6 +45,7 @@ abstract class RlPoolAlgorithm extends SchedulingAlgorithm {
 
     private final SchedulingAlgorithm delegate;
     private final RlPoolSelector selector;
+    private final boolean geometricPortfolio, bulk;
 
     RlPoolAlgorithm(SchedulingContext context, long seed, Request[] catalogue, int topN, int poolSize,
             int extras, int fitCap, int cacheRows, Path model, boolean uniformExtras, Refinement refinement,
@@ -56,6 +58,8 @@ abstract class RlPoolAlgorithm extends SchedulingAlgorithm {
             int extras, int fitCap, int cacheRows, Path model, boolean uniformExtras, Refinement refinement,
             double maxTotalFit) throws IOException {
         super(context);
+        geometricPortfolio = false;
+        bulk = false;
         selector = new RlPoolSelector(context, seed, topN, poolSize, extras, model, uniformExtras);
         delegate = switch (refinement) {
             case MASKED -> new MaskedFitCount(context, seed, catalogue.requests(), fitCap, cacheRows, selector, topN + extras);
@@ -64,9 +68,29 @@ abstract class RlPoolAlgorithm extends SchedulingAlgorithm {
         };
     }
 
+    RlPoolAlgorithm(SchedulingContext context, long seed, Catalogue catalogue, int topN, int poolSize,
+            int extras, int fitCap, int cacheRows, Path model, boolean uniformExtras, double maxTotalFit,
+            int geometricCandidates, int leastCandidates, boolean bulk) throws IOException {
+        super(context);
+        if (geometricCandidates < 0 || geometricCandidates > 16 || leastCandidates < 0 || leastCandidates > 16
+                || (long) topN + extras + geometricCandidates + leastCandidates > 28) {
+            throw new IllegalArgumentException("RL geometric portfolio must retain at most 28 candidate plans");
+        }
+        geometricPortfolio = true;
+        this.bulk = bulk;
+        selector = new RlPoolSelector(context, seed, topN, poolSize, extras, model, uniformExtras);
+        delegate = PortfolioFitCount.geometricLexicographic(context, seed, catalogue, selector, topN,
+                geometricCandidates, leastCandidates, fitCap, cacheRows, maxTotalFit, bulk);
+    }
+
     @Override
     public final void schedule(Request request) throws Exception {
         delegate.schedule(request);
+    }
+
+    @Override
+    public final void schedule(Request[] requests) throws Exception {
+        delegate.schedule(requests);
     }
 
     @Override
@@ -83,13 +107,24 @@ abstract class RlPoolAlgorithm extends SchedulingAlgorithm {
     public final Map<String, String> parameters() {
         final var result = new LinkedHashMap<>(delegate.parameters());
         result.putAll(selector.parameters());
+        if (geometricPortfolio) {
+            result.put("profile", bulk ? "rl-pool-geo-least-bulk-fitcount-v1" : "rl-pool-geo-least-fitcount-v1");
+            result.put("candidate_budget", "28");
+            if (!bulk) {
+                result.put("objective", "sequential-geometric-portfolio-scarcity-lex-physical-copy-loss");
+            }
+        }
         return result;
     }
 
     @Override
     public final Map<String, Long> counters() {
         final var result = new LinkedHashMap<>(delegate.counters());
-        result.putAll(selector.counters());
+        if (geometricPortfolio) {
+            selector.counters().forEach((key, value) -> result.put("rl_pool_" + key, value));
+        } else {
+            result.putAll(selector.counters());
+        }
         return result;
     }
 

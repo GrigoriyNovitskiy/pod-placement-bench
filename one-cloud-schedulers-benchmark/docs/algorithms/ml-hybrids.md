@@ -151,9 +151,37 @@ fail run даже при mask-disabled режиме или extraCandidates=0.
 static-mask scarcity отдельно бережёт места для узких допустимых множеств.
 Это не новая обученная модель и не доказательство улучшения всех ресурсов.
 
+## RL pool с geometric и LeastAllocated
+
+`rl-pool-geo-least-fitcount` объединяет Random12, до восьми PPO proposals,
+четыре geometric и четыре LeastAllocated плана. `rl-pool-geo-least-bulk-fitcount`
+при тех же параметрах сохраняет полные назначения и RNG-последовательность,
+переиспользуя physical geometry, raw scores и FitCount losses только внутри
+одного объявленного окна. Для CLI окон нужен `--bulk-size 100`.
+
+Оба профиля используют seed44, fitCap10, cacheRows64, poolSize64 и
+maxTotalFit0. Сумма `topN + extraCandidates + geometricCandidates + leastCandidates`
+не может превышать 28; overlaps удаляются без refill. Базовый selector — прежний
+`RlPoolSelector`: один Random12 draw и до восьми PPO proposals из независимого
+auxiliary pool вне Random12, максимум 52 inference-плана при default pool64.
+Features готовятся относительно полного актуального feasible pool. Row gate,
+uniformExtras, модель и её SHA сохраняют прежние правила.
+
+После базового shortlist geometric и LeastAllocated ранжируют полный feasible
+pool, включая случаи row-gated или extraCandidates0. Источники объединяются
+до одного обычного physical **LEX FitCount**. PPO logits не входят в численный
+FitCount score. Каждый запрос обновляет eligibility, shortlist и tie keys;
+совместной оптимизации окна нет. Bulk workspace остаётся ограничен 64 MiB.
+
+Канонические `selector_calls`, `candidate_plans`, `retained_plans` и остальные
+portfolio counters описывают итоговый union. Все counters базового RL selector
+получают префикс `rl_pool_`, включая `rl_pool_retained_plans`,
+`rl_pool_inference_calls` и `rl_pool_inference_row_budget`. Существующие RL
+профили сохраняют параметры, имена counters и defaults Random20/PPO8.
+
 ## Карта реализации
 
-Классы `rl/RlPoolFitCount` и `rl/RlMaskedFitCount`, две definitions в Algorithms.
+Классы `rl/RlPoolFitCount` и `rl/RlMaskedFitCount`, definitions в Algorithms.
 Допустим один небольшой package-private RlPoolSelector для общего sampling,
 sparse extraction и модели. Оба adapters получают один refiner: physical или
 masked. Между пакетами rl и fitcount дать один узкий осознанный constructor/factory

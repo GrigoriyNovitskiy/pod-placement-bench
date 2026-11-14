@@ -8,6 +8,8 @@ import java.util.stream.IntStream;
 import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
+import java.util.TreeSet;
+import java.util.function.ToDoubleFunction;
 
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
@@ -17,6 +19,9 @@ import org.junit.jupiter.api.io.TempDir;
 
 import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
+import one.cloud.benchmark.algorithms.fitcount.Catalogue;
+import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
+import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
 import one.cloud.benchmark.algorithms.fitcount.MaskedFitCount;
 import one.cloud.benchmark.algorithms.fitcount.RandomNFitCount;
 import one.cloud.benchmark.algorithms.fitcount.CandidateSampler;
@@ -25,6 +30,7 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.engine.Engine;
+import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
@@ -278,6 +284,233 @@ class PolicyNetworkTest {
                 }
             }
         }
+    }
+
+    @Test
+    void geometricPoolMatchesIndependentUnionAndBulkAcrossWindows(@TempDir Path directory) throws Exception {
+        final var cluster = geometricPoolModel();
+        final var requests = IntStream.rangeClosed(81, 180).mapToObj(Request::new).toArray(Request[]::new);
+        final var samples = IntStream.rangeClosed(181, 183).mapToObj(Request::new).toArray(Request[]::new);
+        final var catalogue = Catalogue.full(cluster,
+                new Request[]{samples[0], samples[0], samples[1], samples[2], samples[2], samples[2]}, samples);
+        final var path = write(directory, artifact());
+        for (final boolean uniform : new boolean[]{false, true}) {
+            for (final int rows : new int[]{1, 64}) {
+                final long seed = rows == 1 ? 44 : 45;
+                final double limit = rows == 1 ? 0 : 4;
+                final var expected = new Engine(cluster);
+                final var ordinary = new Engine(cluster);
+                final var bulk = new Engine(cluster);
+                final var selector = new RlPoolSelector(expected, seed, 12, 64, 8, path, uniform);
+                final var planner = new GreedyPlanner(expected);
+                final var geometric = planner.normalizedResidualL2Scorer();
+                final var least = KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
+                final long[] attempt = {-1};
+                final var parameters = Map.of("model", new JsonPrimitive(path.toString()),
+                        "uniformExtras", new JsonPrimitive(uniform), "seed", new JsonPrimitive(seed),
+                        "cacheRows", new JsonPrimitive(rows), "maxTotalFit", new JsonPrimitive(limit));
+                try (final var fit = new FitCount(expected, seed, catalogue, 10, rows, limit,
+                        (request, plans, count) -> geometricPoolUnion(selector.select(request, plans, count),
+                                plans, count, seed, attempt[0], geometric, least));
+                        final var normal = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                                "rl-pool-geo-least-fitcount", parameters), ordinary, catalogue);
+                        final var batched = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                                "rl-pool-geo-least-bulk-fitcount", parameters), bulk, catalogue)) {
+                    final var oracle = new SchedulingAlgorithm(expected) {
+                        @Override
+                        public void schedule(Request request) {
+                            attempt[0]++;
+                            fit.schedule(request);
+                        }
+
+                        @Override
+                        public void capacityChanged(int host) {
+                            fit.capacityChanged(host);
+                        }
+                    };
+                    for (int generation = 0; generation < 2; generation++) {
+                        expected.schedule(oracle, requests);
+                        ordinary.schedule(normal, requests);
+                        if (generation == 0) {
+                            bulk.schedule(batched, requests);
+                        } else {
+                            bulk.schedule(batched, new Request[]{requests[0]});
+                            bulk.schedule(batched, requests[1]);
+                            bulk.schedule(batched, Arrays.copyOfRange(requests, 2, requests.length));
+                        }
+                        assertPoolPlacements(expected, ordinary, requests);
+                        assertPoolPlacements(expected, bulk, requests);
+                        for (final var entry : selector.counters().entrySet()) {
+                            assertEquals(entry.getValue(), normal.counters().get("rl_pool_" + entry.getKey()));
+                            assertEquals(entry.getValue(), batched.counters().get("rl_pool_" + entry.getKey()));
+                        }
+                        for (final var key : new String[]{"selector_calls", "candidate_plans", "retained_plans",
+                                "retained_hosts", "geometric_scores", "least_scores", "shortlist_overlap"}) {
+                            assertEquals(normal.counters().get(key), batched.counters().get(key), key);
+                        }
+                        final var counters = batched.counters();
+                        assertTrue(counters.get("retained_plans") <= 28 * counters.get("selector_calls"));
+                        assertTrue(counters.get("rl_pool_retained_plans") <= 20 * counters.get("rl_pool_selector_calls"));
+                        assertEquals(counters.get("least_scores") + counters.get("geometric_scores"),
+                                counters.get("raw_score_evaluations") + counters.get("raw_score_cache_hits"));
+                        assertTrue(counters.get("raw_score_cache_hits") > 0);
+                        assertTrue(counters.get("optimizer_workspace_peak_bytes") <= 64L << 20);
+                        assertEquals("12", batched.parameters().get("random_candidates"));
+                        assertEquals("full", batched.parameters().get("catalogue_weight_mode"));
+                        assertTrue(normal.parameters().get("objective").contains("lex"));
+                        assertTrue(batched.parameters().get("objective").contains("lex"));
+                        for (final var request : requests) {
+                            if (expected.placement(request.resource(0)) != null) {
+                                expected.remove(request);
+                                ordinary.remove(request);
+                                bulk.remove(request);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void geometricPoolWithoutResourceSourcesPreservesExistingRlPoolStreams(@TempDir Path directory) throws Exception {
+        final var cluster = poolModel(80, 24, false);
+        final var requests = IntStream.rangeClosed(81, 104).mapToObj(Request::new).toArray(Request[]::new);
+        final var path = write(directory, artifact());
+        for (final int extras : new int[]{0, 8}) {
+            final var expected = new Engine(cluster);
+            final var ordinary = new Engine(cluster);
+            final var bulk = new Engine(cluster);
+            final var parameters = Map.of("model", new JsonPrimitive(path.toString()),
+                    "extraCandidates", new JsonPrimitive(extras), "geometricCandidates", new JsonPrimitive(0),
+                    "leastCandidates", new JsonPrimitive(0), "cacheRows", new JsonPrimitive(1));
+            try (final var reference = new RlPoolFitCount(expected, 44, requests, 12, 64, extras, 10, 1, path);
+                    final var normal = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                            "rl-pool-geo-least-fitcount", parameters), ordinary, requests);
+                    final var batched = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                            "rl-pool-geo-least-bulk-fitcount", parameters), bulk, requests)) {
+                for (int generation = 0; generation < 2; generation++) {
+                    expected.schedule(reference, requests);
+                    ordinary.schedule(normal, requests);
+                    bulk.schedule(batched, requests);
+                    assertPoolPlacements(expected, ordinary, requests);
+                    assertPoolPlacements(expected, bulk, requests);
+                    for (final var entry : reference.counters().entrySet()) {
+                        if (!entry.getKey().startsWith("fitcount_")) {
+                            assertEquals(entry.getValue(), normal.counters().get("rl_pool_" + entry.getKey()));
+                            assertEquals(entry.getValue(), batched.counters().get("rl_pool_" + entry.getKey()));
+                        }
+                    }
+                    assertEquals(0, batched.counters().get("geometric_scores"));
+                    assertEquals(0, batched.counters().get("least_scores"));
+                    for (final var request : requests) {
+                        expected.remove(request);
+                        ordinary.remove(request);
+                        bulk.remove(request);
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void geometricPoolDefaultsKeepTwentyEightPlanBudgetAndValidateModels(@TempDir Path directory) throws Exception {
+        assertEquals(20, AlgorithmRegistry.defaults("rl-pool-fitcount").parameters().get("topN").getAsInt());
+        final var cluster = poolModel(2, 1, false);
+        final var path = write(directory, artifact());
+        for (final var id : new String[]{"rl-pool-geo-least-fitcount", "rl-pool-geo-least-bulk-fitcount"}) {
+            final var defaults = AlgorithmRegistry.defaults(id).parameters();
+            assertEquals(12, defaults.get("topN").getAsInt());
+            assertEquals(8, defaults.get("extraCandidates").getAsInt());
+            assertEquals(4, defaults.get("geometricCandidates").getAsInt());
+            assertEquals(4, defaults.get("leastCandidates").getAsInt());
+            assertThrows(IllegalArgumentException.class, () -> AlgorithmRegistry.create(new AlgorithmRegistry.Settings(id,
+                    Map.of("model", new JsonPrimitive(path.toString()), "geometricCandidates", new JsonPrimitive(5))),
+                    new Engine(cluster), new Request[0]));
+            assertThrows(java.nio.file.NoSuchFileException.class, () -> AlgorithmRegistry.create(
+                    new AlgorithmRegistry.Settings(id, Map.of("extraCandidates", new JsonPrimitive(0),
+                            "model", new JsonPrimitive(directory.resolve("missing.json").toString()))),
+                    new Engine(cluster), new Request[0]));
+        }
+    }
+
+    private static int[] geometricPoolUnion(int[] base, Assignment[][] plans, int count, long seed, long attempt,
+            ToDoubleFunction<Assignment[]> geometric, ToDoubleFunction<Assignment[]> least) {
+        final var union = new TreeSet<Integer>();
+        for (final int index : base) {
+            union.add(index);
+        }
+        for (int source = 0; source < 2; source++) {
+            final var scorer = source == 0 ? geometric : least;
+            final long salt = source == 0 ? 0x510E527FADE682D1L : 0xA54FF53A5F1D36F1L;
+            final double[] scores = new double[count];
+            for (int index = 0; index < count; index++) {
+                scores[index] = (source == 0 ? 1 : -1) * scorer.applyAsDouble(plans[index]);
+            }
+            final Integer[] ranked = IntStream.range(0, count).boxed().toArray(Integer[]::new);
+            Arrays.sort(ranked, (first, second) -> {
+                final int score = scores[first] < scores[second] ? -1 : scores[first] > scores[second] ? 1 : 0;
+                if (score != 0) {
+                    return score;
+                }
+                final long firstKey = poolMix(seed ^ poolMix(attempt) ^ poolMix(first) ^ salt);
+                final long secondKey = poolMix(seed ^ poolMix(attempt) ^ poolMix(second) ^ salt);
+                final int key = Long.compareUnsigned(firstKey, secondKey);
+                return key == 0 ? Integer.compare(first, second) : key;
+            });
+            for (int index = 0; index < Math.min(4, count); index++) {
+                union.add(ranked[index]);
+            }
+        }
+        return union.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    private static long poolMix(long value) {
+        value = (value ^ value >>> 30) * 0xbf58476d1ce4e5b9L;
+        value = (value ^ value >>> 27) * 0x94d049bb133111ebL;
+        return value ^ value >>> 31;
+    }
+
+    private static void assertPoolPlacements(Engine expected, Engine actual, Request[] requests) {
+        for (final var request : requests) {
+            for (int member = 0; member < request.size(); member++) {
+                final var reference = expected.placement(request.resource(member));
+                final var placement = actual.placement(request.resource(member));
+                if (reference == null) {
+                    assertNull(placement);
+                } else {
+                    assertNotNull(placement);
+                    assertEquals(reference.host(), placement.host());
+                    assertEquals(reference.numa(), placement.numa());
+                    assertArrayEquals(reference.diskOffsets(), placement.diskOffsets());
+                    assertArrayEquals(reference.devices(), placement.devices());
+                    assertArrayEquals(reference.gpus(), placement.gpus());
+                }
+            }
+        }
+    }
+
+    private static ClusterSpec geometricPoolModel() throws Exception {
+        final var records = new ArrayList<Record>();
+        for (int host = 1; host <= 80; host++) {
+            records.add(alloc(host, new int[]{1, 2}, 12 + host % 7 * 2, 20 + host % 5 * 4));
+            records.add(resource(host, host, 1));
+        }
+        records.add(alloc(81, new int[]{1, 2}, 1, 2));
+        records.add(alloc(82, new int[]{1, 2}, 1000, 2));
+        records.add(alloc(83, new int[]{1, 2}, 8, 1));
+        records.add(alloc(84, new int[]{1, 2}, 1, 8));
+        records.add(alloc(85, new int[]{1, 2}, 3, 4));
+        records.add(rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)));
+        records.add(rules(Constraints.newBuilder().setId(2).setKind(Kind.POD).setGroup(1)));
+        records.add(rules(Constraints.newBuilder().setId(3).setKind(Kind.POD).setGroup(1).setPinnedHost(1)));
+        for (int index = 0; index < 100; index++) {
+            records.add(resource(81 + index, index == 0 ? 82 : 81, index == 1 ? 3 : 2));
+        }
+        for (int index = 0; index < 3; index++) {
+            records.add(resource(181 + index, 83 + index, 2));
+        }
+        return model(records.toArray(Record[]::new));
     }
 
     @Test
