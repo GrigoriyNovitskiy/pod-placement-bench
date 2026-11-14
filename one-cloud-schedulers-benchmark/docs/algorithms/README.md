@@ -18,6 +18,10 @@ bounded proposal scoring, with physical or masked refinement. Their starting
 profile is cap 10 / cache rows 64 / seed 44. All five are implemented CLI modes;
 resource tradeoffs are evaluated per scenario.
 
+The [mean FitCount guide](mean-fitcount.md) defines the physical lexicographic
+and mean objectives, the adaptive total-fit limit, bounded mean portfolios and
+the exact workload-based fragmentation potentials.
+
 Numerical settings in the original plans below are
 explicit starting configurations agreed for the first experiments; none has been
 selected empirically on the ten clouds. Utilization takes priority over latency.

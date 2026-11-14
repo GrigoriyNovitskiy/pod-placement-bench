@@ -2,14 +2,12 @@ package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
 import java.util.Comparator;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.PriorityQueue;
 
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.engine.GreedyPlanner;
-import one.cloud.benchmark.model.ClusterSpec;
-import one.cloud.benchmark.model.GpuTopology;
 import one.cloud.benchmark.model.Request;
 
 final class FitCountCache {
@@ -19,12 +17,14 @@ final class FitCountCache {
     private final int maxCachedShapes;
     private final Sample[] samples;
     private final Sample[] pending;
+    private final Map<String, String> parameters;
     private final PriorityQueue<Sample> ready;
     private final LinkedHashMap<Sample, int[]> rows = new LinkedHashMap<>(16, .75f, true);
     private final int[] previous, next;
     private final long[] hostGeneration, hostRevision;
     private int head, pendingCount;
     private long generation;
+    private double maxTotalFit = Double.MAX_VALUE;
     private MaskedFitCountOrder maskedOrder;
 
     FitCountCache(SchedulingContext context, GreedyPlanner planner, Request[] catalogue,
@@ -34,6 +34,11 @@ final class FitCountCache {
 
     FitCountCache(SchedulingContext context, GreedyPlanner planner, Request[] catalogue,
             int cap, int maxCachedShapes, MaskedFitCountOrder.Compiler compiler) {
+        this(context, planner, Catalogue.sampled(catalogue), cap, maxCachedShapes, compiler);
+    }
+
+    FitCountCache(SchedulingContext context, GreedyPlanner planner, Catalogue catalogue,
+            int cap, int maxCachedShapes, MaskedFitCountOrder.Compiler compiler) {
         if (cap <= 0 || maxCachedShapes <= 0) {
             throw new IllegalArgumentException("Fit-count cap and cached shape limit must be positive");
         }
@@ -41,22 +46,30 @@ final class FitCountCache {
         this.planner = planner;
         this.cap = cap;
         this.maxCachedShapes = maxCachedShapes;
-        final var unique = new LinkedHashMap<Key, Sample>();
-        int occurrence = 0;
-        for (final var request : catalogue) {
-            final var key = key(context.model(), request);
+        final var unique = new LinkedHashMap<Catalogue.Key, Sample>();
+        for (int occurrence = 0; occurrence < catalogue.size(); occurrence++) {
+            final var request = catalogue.request(occurrence);
+            final var key = Catalogue.key(context.model(), request);
             var sample = unique.get(key);
             if (sample == null) {
                 sample = new Sample(request, unique.size());
+                sample.frequency = catalogue.frequency(occurrence);
                 unique.put(key, sample);
-            } else {
+            } else if (!catalogue.hasFullFrequencies()) {
                 sample.frequency++;
+            } else if (sample.frequency != catalogue.frequency(occurrence)) {
+                throw new IllegalArgumentException("Physical shape has inconsistent catalogue frequencies");
             }
             if (compiler != null) {
                 compiler.add(request, sample, occurrence);
             }
-            occurrence++;
         }
+        long mass = 0, checksum = Catalogue.HASH_START;
+        for (final var family : unique.entrySet()) {
+            mass += family.getValue().frequency;
+            checksum = Catalogue.checksum(checksum, family.getKey(), family.getValue().frequency);
+        }
+        parameters = catalogue.parameters(unique.size(), mass, checksum);
         samples = unique.values().toArray(Sample[]::new);
         pending = new Sample[samples.length];
         ready = new PriorityQueue<>(Math.max(1, samples.length),
@@ -76,6 +89,10 @@ final class FitCountCache {
 
     void attach(MaskedFitCountOrder order) {
         maskedOrder = order;
+    }
+
+    Map<String, String> parameters() {
+        return parameters;
     }
 
     long generation() {
@@ -103,6 +120,11 @@ final class FitCountCache {
     }
 
     void beginOrder() {
+        beginOrder(Double.MAX_VALUE);
+    }
+
+    void beginOrder(double maxTotalFit) {
+        this.maxTotalFit = maxTotalFit;
         ready.clear();
         pendingCount = samples.length;
         for (int index = 0; index < samples.length; index++) {
@@ -118,7 +140,8 @@ final class FitCountCache {
     }
 
     Sample next() {
-        while (pendingCount != 0 && (ready.isEmpty() || pending[0].bound <= ready.peek().weightedTotal())) {
+        while (pendingCount != 0 && pending[0].bound <= maxTotalFit
+                && (ready.isEmpty() || pending[0].bound <= ready.peek().weightedTotal())) {
             final var sample = pending[0];
             pending[0] = pending[--pendingCount];
             if (pendingCount != 0) {
@@ -127,7 +150,8 @@ final class FitCountCache {
             refresh(sample);
             ready.add(sample);
         }
-        return ready.poll();
+        final var sample = ready.poll();
+        return sample != null && sample.weightedTotal() <= maxTotalFit ? sample : null;
     }
 
     int count(Sample sample, int host) {
@@ -206,81 +230,6 @@ final class FitCountCache {
         return comparison == 0 ? Integer.compare(first.ordinal, second.ordinal) : comparison;
     }
 
-    private static Key key(ClusterSpec model, Request request) {
-        final var rules = model.rules;
-        final var allocations = model.allocations;
-        final var members = new HashMap<Integer, Integer>();
-        final int[] components = new int[request.size()];
-        int length = 1;
-        for (int index = 0; index < request.size(); index++) {
-            final int resource = request.resource(index);
-            if (resource >= model.alloc.length) {
-                throw new IllegalArgumentException("Unknown catalogue resource");
-            }
-            final int profile = model.constraints[resource];
-            if (rules.kind[profile] != 4 && rules.kind[profile] != 5) {
-                throw new IllegalArgumentException("Catalogue members must be pods or shards");
-            }
-            members.put(resource, index);
-            components[index] = index;
-            final int alloc = model.alloc[resource];
-            length = Math.addExact(length, 4 + 2 * (allocations.offset[alloc + 1] - allocations.offset[alloc])
-                    + 12 * (rules.diskOffset[profile + 1] - rules.diskOffset[profile]));
-        }
-        for (int index = 0; index < request.size(); index++) {
-            final int profile = model.constraints[request.resource(index)];
-            for (int link = rules.linkOffset[profile]; link < rules.linkOffset[profile + 1]; link++) {
-                final var target = members.get(rules.linkTarget[link]);
-                if (rules.linkKind[link] == 0 && rules.linkDomain[link] == 2 && target != null) {
-                    final int first = root(components, index);
-                    final int second = root(components, target);
-                    components[Math.max(first, second)] = Math.min(first, second);
-                }
-            }
-        }
-        final long[] values = new long[length];
-        int offset = 0;
-        values[offset++] = request.size();
-        for (int index = 0; index < request.size(); index++) {
-            final int resource = request.resource(index);
-            final int profile = model.constraints[resource];
-            final int alloc = model.alloc[resource];
-            values[offset++] = rules.kind[profile];
-            values[offset++] = root(components, index);
-            values[offset++] = allocations.offset[alloc + 1] - allocations.offset[alloc];
-            for (int value = allocations.offset[alloc]; value < allocations.offset[alloc + 1]; value++) {
-                final int dimension = allocations.type[value];
-                final double amount = model.gpus != null && (dimension == 11 || dimension == 17)
-                        ? model.gpus.demand(resource, dimension) / (double) GpuTopology.SHARES : allocations.amount[value];
-                values[offset++] = dimension;
-                values[offset++] = Double.doubleToLongBits(amount);
-            }
-            values[offset++] = rules.diskOffset[profile + 1] - rules.diskOffset[profile];
-            for (int disk = rules.diskOffset[profile]; disk < rules.diskOffset[profile + 1]; disk++) {
-                values[offset++] = rules.diskMedia[disk];
-                values[offset++] = rules.diskLayout[disk];
-                values[offset++] = rules.diskExtents[disk];
-                values[offset++] = Double.doubleToLongBits(rules.diskSpindles[disk]);
-                values[offset++] = Double.doubleToLongBits(rules.diskIops[disk]);
-                values[offset++] = rules.minDevices[disk];
-                values[offset++] = rules.maxDevices[disk];
-                values[offset++] = rules.minStripes[disk];
-                values[offset++] = rules.maxStripes[disk];
-                values[offset++] = rules.diskFlags[disk];
-                values[offset++] = rules.metadataExtents[disk];
-                values[offset++] = Double.doubleToLongBits(rules.diskIopsCap[disk]);
-            }
-        }
-        return new Key(values);
-    }
-
-    private static int root(int[] components, int index) {
-        while (components[index] != index) {
-            index = components[index];
-        }
-        return index;
-    }
-
     static final class Sample {
         final Request request;
         final int ordinal;
@@ -298,15 +247,5 @@ final class FitCountCache {
         }
     }
 
-    private record Key(long[] values) {
-        @Override
-        public boolean equals(Object other) {
-            return other instanceof Key key && Arrays.equals(values, key.values);
-        }
 
-        @Override
-        public int hashCode() {
-            return Arrays.hashCode(values);
-        }
-    }
 }

@@ -45,6 +45,7 @@ public final class RunnerCli {
               --probe-cap N          Quality-probe copy cap, independent of algorithm parameters (default: 10)
               --max-operations N     Positive normalized-event prefix; omitted runs the full scenario
               --catalogue-limit N    Positive evenly sampled initial-unit limit; omitted uses all units
+              --catalogue-weights M  sampled (default) or full initial-catalogue physical-shape frequencies
               --gpu-model MODEL      devices20 (default, synthetic GPU devices) or aggregate
               --bulk-size N          Announce consecutive same-service creates together (1..100; default: 1)
               --rollout-prior FILE   Checksum-verified prior artifact when required by the algorithm schema
@@ -111,14 +112,14 @@ public final class RunnerCli {
             }
             final String[] loadedModelHash = new String[1];
             final Integer[] modelTopN = new Integer[1];
-            final DatasetRunner.Factory factory = (context, seed, catalogue) -> {
+            final DatasetRunner.Factory factory = DatasetRunner.Factory.withCatalogue((context, seed, catalogue) -> {
                 final var algorithm = AlgorithmRegistry.create(options.settings, context, catalogue, options.prior);
                 if (algorithm instanceof CatBoostAlgorithm model) {
                     loadedModelHash[0] = model.modelSha256();
                     modelTopN[0] = model.topN();
                 }
                 return algorithm;
-            };
+            });
             final long start = System.nanoTime();
             final var snapshot = options.dataset.resolve("snapshot.pb");
             final var operations = options.dataset.resolve("operations.pb");
@@ -134,7 +135,7 @@ public final class RunnerCli {
             }
             final long prepared = System.nanoTime();
             final var replayOptions = new DatasetRunner.Options(44, options.maxOperations,
-                    options.catalogueLimit, options.probeCap);
+                    options.catalogueLimit, options.probeCap, options.fullCatalogueWeights);
             final DatasetRunner.Result result;
             if (profiler == null) {
                 result = DatasetRunner.run(scenario, replayOptions, factory);
@@ -230,6 +231,7 @@ public final class RunnerCli {
         String algorithm = null;
         int maxOperations = 0;
         int catalogueLimit = 0;
+        boolean fullCatalogueWeights = false;
         int probeCap = 10;
         int bulkSize = 1;
         Path prior = null;
@@ -267,6 +269,11 @@ public final class RunnerCli {
                 case "--profile-event" -> profileEvent = AsyncProfiler.Event.parse(value);
                 case "--max-operations" -> maxOperations = positive(flag, value);
                 case "--catalogue-limit" -> catalogueLimit = positive(flag, value);
+                case "--catalogue-weights" -> fullCatalogueWeights = switch (value) {
+                    case "full" -> true;
+                    case "sampled" -> false;
+                    default -> throw new IllegalArgumentException("--catalogue-weights must be sampled or full");
+                };
                 case "--gpu-model" -> gpuMode = switch (value) {
                     case "aggregate" -> ClusterSpec.GpuMode.AGGREGATE;
                     case "devices20" -> ClusterSpec.GpuMode.DEVICES_20;
@@ -299,7 +306,7 @@ public final class RunnerCli {
         if (profileEvent != null && profile == null) {
             throw new IllegalArgumentException("--profile-event requires --profile");
         }
-        return new Arguments(dataset, settings, maxOperations, catalogueLimit, gpuMode, probeCap, bulkSize, prior,
+        return new Arguments(dataset, settings, maxOperations, catalogueLimit, fullCatalogueWeights, gpuMode, probeCap, bulkSize, prior,
                 profile, profile == null ? null : AsyncProfiler.Format.forPath(profile),
                 profileEvent == null ? AsyncProfiler.Event.CPU : profileEvent);
     }
@@ -367,6 +374,7 @@ public final class RunnerCli {
                 .append("\n  \"java\":\"").append(Runtime.version()).append("\",")
                 .append("\n  \"probe_cap\":").append(result.options().probeCap())
                 .append(",\n  \"catalogue_limit\":").append(options.catalogueLimit)
+                .append(",\n  \"catalogue_weights\":\"").append(options.fullCatalogueWeights ? "full" : "sampled").append('"')
                 .append(",\n  \"catalogue_units\":").append(result.catalogueSize())
                 .append(",\n  \"catalogue_checksum\":\"").append(hex(result.catalogueChecksum())).append("\",")
                 .append("\n  \"probe_count\":").append(result.probeCount())
@@ -488,6 +496,7 @@ public final class RunnerCli {
         parameters.put("algorithm_runtime_parameters", new TreeMap<>(result.parameters()));
         parameters.put("bulk_size", options.bulkSize);
         parameters.put("catalogue_limit", options.catalogueLimit);
+        parameters.put("catalogue_weights", options.fullCatalogueWeights ? "full" : "sampled");
         parameters.put("max_operations", options.maxOperations);
         parameters.put("probe_cap", options.probeCap);
         parameters.put("gpu_model", options.gpuMode.name());
@@ -518,7 +527,7 @@ public final class RunnerCli {
     }
 
     private record Arguments(Path dataset, AlgorithmRegistry.Settings settings, int maxOperations,
-            int catalogueLimit, ClusterSpec.GpuMode gpuMode, int probeCap, int bulkSize, Path prior, Path profile,
+            int catalogueLimit, boolean fullCatalogueWeights, ClusterSpec.GpuMode gpuMode, int probeCap, int bulkSize, Path prior, Path profile,
             AsyncProfiler.Format profileFormat, AsyncProfiler.Event profileEvent) {
     }
 }

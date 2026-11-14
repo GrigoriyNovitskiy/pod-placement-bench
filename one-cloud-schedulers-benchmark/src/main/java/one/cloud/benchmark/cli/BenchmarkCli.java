@@ -40,7 +40,7 @@ final class BenchmarkCli {
             """;
     private static final Set<String> CONFIG_KEYS = Set.of("datasets", "algorithms", "seeds", "forks", "warmups",
             "measurements", "timeoutSeconds", "gpuModel", "bulkSize", "maxOperations", "catalogueLimit",
-            "probeCap", "inflationAttempts", "inflationSeed");
+            "probeCap", "inflationAttempts", "inflationSeed", "catalogueWeights");
     private static final Set<String> ALGORITHM_KEYS = Set.of("id", "parameters", "rolloutPrior");
 
     private BenchmarkCli() {
@@ -48,7 +48,7 @@ final class BenchmarkCli {
 
     record Config(List<String> datasets, List<Algorithm> algorithms, List<Long> seeds, Integer forks, Integer warmups,
             Integer measurements, Integer timeoutSeconds, String gpuModel, Integer bulkSize, Integer maxOperations,
-            Integer catalogueLimit, Integer probeCap, Integer inflationAttempts, Long inflationSeed) {
+            Integer catalogueLimit, Integer probeCap, Integer inflationAttempts, Long inflationSeed, String catalogueWeights) {
     }
 
     private record Plan(List<String> datasets, List<Selection> algorithms, int forks, int warmups, int measurements,
@@ -326,7 +326,12 @@ final class BenchmarkCli {
                 new Options(or(config.maxOperations, defaults.maxOperations()),
                         or(config.catalogueLimit, defaults.catalogueLimit()), or(config.probeCap, defaults.probeCap()),
                         or(config.inflationAttempts, defaults.inflationAttempts()),
-                        config.inflationSeed == null ? defaults.inflationSeed() : config.inflationSeed));
+                        config.inflationSeed == null ? defaults.inflationSeed() : config.inflationSeed,
+                        switch (config.catalogueWeights == null ? "sampled" : config.catalogueWeights) {
+                            case "sampled" -> false;
+                            case "full" -> true;
+                            default -> throw new IllegalArgumentException("catalogueWeights must be sampled or full");
+                        }));
     }
 
     private static void keys(JsonObject object, Set<String> allowed) {

@@ -13,6 +13,9 @@ import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
 
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.MEM_MIB_VALUE;
+import static one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType.VCORES_VALUE;
+
 public final class FitCount extends SchedulingAlgorithm {
     @FunctionalInterface
     public interface CandidateSelector {
@@ -23,6 +26,8 @@ public final class FitCount extends SchedulingAlgorithm {
     private final GreedyPlanner planner;
     private final FitCountCache cache;
     private final int cap;
+    private final double maxTotalFit, totalCpu, totalRam;
+    private double totalFitLimit = Double.MAX_VALUE;
     private final int[] hosts;
     private final Assignment[][] plans;
     private final long[] weightedLosses;
@@ -36,31 +41,34 @@ public final class FitCount extends SchedulingAlgorithm {
     private int[] alternativeHosts;
     private int planCount;
     private long selectorCalls, candidatePlans, candidateHosts, retainedPlans, retainedHosts;
+    private long fitCountSamples, fitCountAfterProbes;
 
     public static AlgorithmDefinition definition() {
-        return new AlgorithmDefinition(
+        return AlgorithmDefinition.withCatalogue(
                 "fitcount",
                 "FitCount",
-                AlgorithmParameters.FIT_COUNT,
+                AlgorithmParameters.FIT_COUNT_WITH_TOTAL_LIMIT,
                 (context, catalogue, parameters) -> new FitCount(
                         context,
                         parameters.get("seed").getAsLong(),
                         catalogue,
                         parameters.get("fitCap").getAsInt(),
-                        parameters.get("cacheRows").getAsInt()));
+                        parameters.get("cacheRows").getAsInt(),
+                        parameters.get("maxTotalFit").getAsDouble(), null));
     }
 
     public static AlgorithmDefinition weightedDefinition() {
-        return new AlgorithmDefinition(
+        return AlgorithmDefinition.withCatalogue(
                 "mean-fitcount",
                 "Mean FitCount",
-                AlgorithmParameters.FIT_COUNT,
+                AlgorithmParameters.FIT_COUNT_WITH_TOTAL_LIMIT,
                 (context, catalogue, parameters) -> weighted(
                         context,
                         parameters.get("seed").getAsLong(),
                         catalogue,
                         parameters.get("fitCap").getAsInt(),
-                        parameters.get("cacheRows").getAsInt()));
+                        parameters.get("cacheRows").getAsInt(),
+                        parameters.get("maxTotalFit").getAsDouble(), null));
     }
 
     public FitCount(SchedulingContext context, long seed, Request[] catalogue) {
@@ -77,25 +85,48 @@ public final class FitCount extends SchedulingAlgorithm {
         this(context, seed, catalogue, maxFitCount, maxCachedShapes, false, selector);
     }
 
+    public FitCount(SchedulingContext context, long seed, Request[] catalogue,
+            int maxFitCount, int maxCachedShapes, double maxTotalFit, CandidateSelector selector) {
+        this(context, seed, Catalogue.sampled(catalogue), maxFitCount, maxCachedShapes, maxTotalFit, selector);
+    }
+
+    public FitCount(SchedulingContext context, long seed, Catalogue catalogue,
+            int maxFitCount, int maxCachedShapes, double maxTotalFit, CandidateSelector selector) {
+        this(context, seed, catalogue, maxFitCount, maxCachedShapes, false, selector, 0, maxTotalFit);
+    }
+
     public static FitCount weighted(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes) {
         return new FitCount(context, seed, catalogue, maxFitCount, maxCachedShapes, true, null);
     }
 
+    public static FitCount weighted(SchedulingContext context, long seed, Request[] catalogue,
+            int maxFitCount, int maxCachedShapes, double maxTotalFit, CandidateSelector selector) {
+        return weighted(context, seed, Catalogue.sampled(catalogue), maxFitCount, maxCachedShapes, maxTotalFit, selector);
+    }
+
+    public static FitCount weighted(SchedulingContext context, long seed, Catalogue catalogue,
+            int maxFitCount, int maxCachedShapes, double maxTotalFit, CandidateSelector selector) {
+        return new FitCount(context, seed, catalogue, maxFitCount, maxCachedShapes, true, selector, 0, maxTotalFit);
+    }
+
     private FitCount(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes, boolean weighted, CandidateSelector selector) {
-        this(context, seed, catalogue, maxFitCount, maxCachedShapes, weighted, selector, 0);
+        this(context, seed, Catalogue.sampled(catalogue), maxFitCount, maxCachedShapes, weighted, selector, 0, 0);
     }
 
     FitCount(SchedulingContext context, long seed, Request[] catalogue,
             int maxFitCount, int maxCachedShapes, CandidateSelector selector, int maxRetainedWidth) {
-        this(context, seed, catalogue, maxFitCount, maxCachedShapes, false, selector, maxRetainedWidth);
+        this(context, seed, Catalogue.sampled(catalogue), maxFitCount, maxCachedShapes, false, selector, maxRetainedWidth, 0);
     }
 
-    private FitCount(SchedulingContext context, long seed, Request[] catalogue,
+    private FitCount(SchedulingContext context, long seed, Catalogue catalogue,
             int maxFitCount, int maxCachedShapes, boolean weighted, CandidateSelector selector,
-            int maxRetainedWidth) {
+            int maxRetainedWidth, double maxTotalFit) {
         super(context, seed);
+        if (!Double.isFinite(maxTotalFit) || maxTotalFit < 0) {
+            throw new IllegalArgumentException("Total FitCount limit must be finite and nonnegative");
+        }
         planner = new GreedyPlanner(context);
         final var compiler = maxRetainedWidth == 0 ? null
                 : new MaskedFitCountOrder.Compiler(context.model(), maxRetainedWidth);
@@ -108,10 +139,18 @@ public final class FitCount extends SchedulingAlgorithm {
         this.maxRetainedWidth = maxRetainedWidth;
         cap = maxFitCount;
         this.selector = selector;
+        this.maxTotalFit = maxTotalFit;
         int candidates = 0;
+        double cpu = 0, ram = 0;
         for (int host = 1; host <= context.model().hostCount; host++) {
             candidates = Math.addExact(candidates, planner.numaNodes(host).length);
+            if (maxTotalFit > 0) {
+                cpu += supply(host, VCORES_VALUE);
+                ram += supply(host, MEM_MIB_VALUE);
+            }
         }
+        totalCpu = cpu;
+        totalRam = ram;
         hosts = new int[candidates];
         plans = new Assignment[hosts.length][];
         weightedLosses = weighted ? new long[candidates] : null;
@@ -186,7 +225,14 @@ public final class FitCount extends SchedulingAlgorithm {
     }
 
     private void collect(Request request) {
+        double freeCpu = 0, freeRam = 0;
         for (int host = 1; host <= context.model().hostCount; host++) {
+            if (maxTotalFit > 0) {
+                freeCpu += context.available(host, VCORES_VALUE);
+                if (totalRam > 0) {
+                    freeRam += context.available(host, MEM_MIB_VALUE);
+                }
+            }
             for (final int numa : planner.numaNodes(host)) {
                 final var plan = planner.plan(request, host, numa);
                 if (plan != null) {
@@ -195,6 +241,29 @@ public final class FitCount extends SchedulingAlgorithm {
                 }
             }
         }
+        if (maxTotalFit > 0) {
+            final double usedCpu = Math.max(0, totalCpu - freeCpu);
+            final double usedRam = Math.max(0, totalRam - freeRam);
+            double growth = Double.MAX_VALUE;
+            if (usedCpu > 0) {
+                growth = Math.min(growth, totalCpu / usedCpu);
+            }
+            if (usedRam > 0) {
+                growth = Math.min(growth, totalRam / usedRam);
+            }
+            totalFitLimit = Math.max(maxTotalFit, growth);
+        }
+    }
+
+    private double supply(int resource, int dimension) {
+        final var model = context.model();
+        final int alloc = model.alloc[resource];
+        for (int index = model.allocations.offset[alloc]; index < model.allocations.offset[alloc + 1]; index++) {
+            if (model.allocations.type[index] == dimension) {
+                return model.allocations.amount[index];
+            }
+        }
+        return 0;
     }
 
     private Assignment[] winner(Request request) {
@@ -335,8 +404,10 @@ public final class FitCount extends SchedulingAlgorithm {
     }
 
     private int retainLexicographicBest(int candidates) {
-        cache.beginOrder();
+        cache.beginOrder(totalFitLimit);
         for (var sample = cache.next(); sample != null; sample = cache.next()) {
+            fitCountSamples++;
+            fitCountAfterProbes += candidates;
             int best = Integer.MAX_VALUE;
             int retained = 0;
             for (int index = 0; index < candidates; index++) {
@@ -362,13 +433,14 @@ public final class FitCount extends SchedulingAlgorithm {
 
     private int retainWeightedBest(int candidates) {
         Arrays.fill(weightedLosses, 0, candidates, 0L);
-        // Visit every candidate while the shape's row is resident, even if the catalogue exceeds the cache.
-        for (final var sample : cache.samples()) {
-            final int[] counts = cache.counts(sample);
-            for (int index = 0; index < candidates; index++) {
-                final int host = hosts[index];
-                final int loss = counts[host] - planner.fitCount(sample.request, host, plans[index], cap);
-                weightedLosses[index] += (long) sample.frequency * loss;
+        if (maxTotalFit == 0) {
+            for (final var sample : cache.samples()) {
+                addWeightedLosses(sample, candidates);
+            }
+        } else {
+            cache.beginOrder(totalFitLimit);
+            for (var sample = cache.next(); sample != null; sample = cache.next()) {
+                addWeightedLosses(sample, candidates);
             }
         }
         long best = Long.MAX_VALUE;
@@ -384,6 +456,30 @@ public final class FitCount extends SchedulingAlgorithm {
             }
         }
         return retained;
+    }
+
+    private void addWeightedLosses(FitCountCache.Sample sample, int candidates) {
+        fitCountSamples++;
+        fitCountAfterProbes += candidates;
+        final int[] counts = cache.counts(sample);
+        for (int index = 0; index < candidates; index++) {
+            final int host = hosts[index];
+            final int loss = counts[host] - planner.fitCount(sample.request, host, plans[index], cap);
+            weightedLosses[index] += (long) sample.frequency * loss;
+        }
+    }
+
+    @Override
+    public Map<String, String> parameters() {
+        final var result = new LinkedHashMap<>(cache.parameters());
+        result.put("max_total_fit", Double.toString(maxTotalFit));
+        result.put("total_fit_limit_mode", maxTotalFit == 0 ? "disabled" : "production_growth_floor");
+        return Map.copyOf(result);
+    }
+
+    @Override
+    public Map<String, Long> counters() {
+        return Map.of("fitcount_samples", fitCountSamples, "fitcount_after_probes", fitCountAfterProbes);
     }
 
     @Override

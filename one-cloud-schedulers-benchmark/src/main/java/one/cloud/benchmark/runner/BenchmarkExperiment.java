@@ -26,7 +26,7 @@ public final class BenchmarkExperiment {
     }
 
     public record Options(int maxOperations, int catalogueLimit, int probeCap, int inflationAttempts,
-            long inflationSeed) {
+            long inflationSeed, boolean fullCatalogueWeights) {
         public Options {
             if (maxOperations < 0 || catalogueLimit < 0 || probeCap < 1 || probeCap > 1000
                     || inflationAttempts < 0 || inflationAttempts > 10000) {
@@ -35,12 +35,16 @@ public final class BenchmarkExperiment {
             }
         }
 
+        public Options(int maxOperations, int catalogueLimit, int probeCap, int inflationAttempts, long inflationSeed) {
+            this(maxOperations, catalogueLimit, probeCap, inflationAttempts, inflationSeed, false);
+        }
+
         public static Options defaults() {
             return new Options(0, 0, 10, 1000, 42);
         }
 
         DatasetRunner.Options replayOptions() {
-            return new DatasetRunner.Options(44, maxOperations, catalogueLimit, probeCap);
+            return new DatasetRunner.Options(44, maxOperations, catalogueLimit, probeCap, fullCatalogueWeights);
         }
     }
 
@@ -128,7 +132,8 @@ public final class BenchmarkExperiment {
     }
 
     public static DatasetRunner.Factory factory(AlgorithmRegistry.Settings settings, Path prior) {
-        return (context, seed, catalogue) -> AlgorithmRegistry.create(settings, context, catalogue, prior);
+        return DatasetRunner.Factory.withCatalogue(
+                (context, seed, catalogue) -> AlgorithmRegistry.create(settings, context, catalogue, prior));
     }
 
     public static Measurement measure(Scenario scenario, Options options, DatasetRunner.Factory factory) throws Exception {

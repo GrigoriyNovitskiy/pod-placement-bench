@@ -50,10 +50,14 @@ final class Algorithms {
         register(CatBoostRolloutTop1.definition());
         register(CatBoostRolloutTopNFitCount.definition());
         register(RandomNFitCount.definition());
+        register(RandomNFitCount.weightedDefinition());
         register(PortfolioFitCount.definition());
+        register(PortfolioFitCount.weightedDefinition());
+        register(PortfolioFitCount.geometricWeightedDefinition());
         register(MaskedFitCount.definition());
         register(WindowPortfolioFitCount.definition());
         register(RlPoolFitCount.definition());
+        register(RlPoolFitCount.weightedDefinition());
         register(RlMaskedFitCount.definition());
         register(RlTop1.definition());
         register(RlTopNFitCount.definition());

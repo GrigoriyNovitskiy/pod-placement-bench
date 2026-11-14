@@ -1,6 +1,7 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.ToDoubleFunction;
@@ -19,30 +20,48 @@ import one.cloud.benchmark.model.Request;
 public final class PortfolioFitCount extends SchedulingAlgorithm {
     private static final long FRAGMENTATION_SALT = 0x3C6EF372FE94F82BL;
     private static final long LEAST_SALT = 0xA54FF53A5F1D36F1L;
+    private static final long GEOMETRIC_SALT = 0x510E527FADE682D1L;
     private final FitCount delegate;
     private final CandidateSampler sampler;
-    private final ToDoubleFunction<Assignment[]> fragmentation, least;
-    private final TopK fragmented, spread;
+    private final ToDoubleFunction<Assignment[]> fragmentation, least, geometric;
+    private final TopK fragmented, spread, packed;
     private final int randomCandidates, cap, cacheRows;
     private final long seed;
     private long attempts, attempt, selectorCalls, candidatePlans, candidateHosts, retainedPlans, retainedHosts;
-    private long fragmentationScores, leastScores, overlap, cpuRamDecisions;
+    private long fragmentationScores, leastScores, geometricScores, overlap, cpuRamDecisions;
 
     public static AlgorithmDefinition definition() {
-        return new AlgorithmDefinition("portfolio-fitcount", "Portfolio + FitCount",
+        return definition("portfolio-fitcount", "Portfolio + FitCount", false, false);
+    }
+
+    public static AlgorithmDefinition weightedDefinition() {
+        return definition("portfolio-mean-fitcount", "Portfolio + Mean FitCount", true, false);
+    }
+
+    public static AlgorithmDefinition geometricWeightedDefinition() {
+        return definition("geometric-portfolio-mean-fitcount", "Geometric portfolio + Mean FitCount", true, true);
+    }
+
+    private static AlgorithmDefinition definition(String id, String name, boolean weighted, boolean geometric) {
+        return AlgorithmDefinition.withCatalogue(id, name,
                 List.of(Parameter.integer("randomCandidates", "Random candidates", "Число случайных планов.",
                                 20, 1, 64),
-                        Parameter.integer("fragmentationCandidates", "Fragmentation candidates",
-                                "Число планов с минимальной фрагментацией.", 4, 0, 16),
+                        geometric ? Parameter.integer("geometricCandidates", "Geometric candidates",
+                                "Число планов с минимальным normalized residual L2 score.", 4, 0, 16)
+                                : Parameter.integer("fragmentationCandidates", "Fragmentation candidates",
+                                        "Число планов с минимальной фрагментацией.", 4, 0, 16),
                         Parameter.integer("leastCandidates", "LeastAllocated candidates",
                                 "Число планов с максимальным LeastAllocated score.", 4, 0, 16),
-                        AlgorithmParameters.SEED, AlgorithmParameters.FIT_CAP, AlgorithmParameters.CACHE_ROWS),
+                        AlgorithmParameters.SEED, AlgorithmParameters.FIT_CAP, AlgorithmParameters.CACHE_ROWS,
+                        AlgorithmParameters.MAX_TOTAL_FIT),
                 (context, catalogue, parameters) -> new PortfolioFitCount(context,
                         parameters.get("seed").getAsLong(), catalogue,
                         parameters.get("randomCandidates").getAsInt(),
-                        parameters.get("fragmentationCandidates").getAsInt(),
+                        geometric ? 0 : parameters.get("fragmentationCandidates").getAsInt(),
                         parameters.get("leastCandidates").getAsInt(),
-                        parameters.get("fitCap").getAsInt(), parameters.get("cacheRows").getAsInt()));
+                        geometric ? parameters.get("geometricCandidates").getAsInt() : 0,
+                        parameters.get("fitCap").getAsInt(), parameters.get("cacheRows").getAsInt(),
+                        parameters.get("maxTotalFit").getAsDouble(), weighted));
     }
 
     public PortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue) {
@@ -51,9 +70,17 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
 
     public PortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue,
             int randomCandidates, int fragmentationCandidates, int leastCandidates, int cap, int cacheRows) {
+        this(context, seed, Catalogue.sampled(catalogue), randomCandidates, fragmentationCandidates, leastCandidates, 0,
+                cap, cacheRows, 0, false);
+    }
+
+    private PortfolioFitCount(SchedulingContext context, long seed, Catalogue catalogue,
+            int randomCandidates, int fragmentationCandidates, int leastCandidates, int geometricCandidates,
+            int cap, int cacheRows, double maxTotalFit, boolean weighted) {
         super(context, seed);
         if (randomCandidates < 1 || randomCandidates > 64 || fragmentationCandidates < 0
-                || fragmentationCandidates > 16 || leastCandidates < 0 || leastCandidates > 16) {
+                || fragmentationCandidates > 16 || leastCandidates < 0 || leastCandidates > 16
+                || geometricCandidates < 0 || geometricCandidates > 16) {
             throw new IllegalArgumentException("Portfolio quotas are outside their supported ranges");
         }
         this.seed = seed;
@@ -63,11 +90,15 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
         sampler = new CandidateSampler(seed);
         fragmented = new TopK(fragmentationCandidates);
         spread = new TopK(leastCandidates);
-        final var planner = fragmentationCandidates != 0 || leastCandidates != 0 ? new GreedyPlanner(context) : null;
+        packed = new TopK(geometricCandidates);
+        final var planner = fragmentationCandidates != 0 || leastCandidates != 0 || geometricCandidates != 0
+                ? new GreedyPlanner(context) : null;
         fragmentation = fragmentationCandidates == 0 ? null : context.model().gpus == null
-                ? planner.cpuRamFragmentationScorer(catalogue) : planner.gpuFragmentationScorer(catalogue);
+                ? planner.cpuRamFragmentationScorer(catalogue.requests()) : planner.gpuFragmentationScorer(catalogue.requests());
         least = leastCandidates == 0 ? null : KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
-        delegate = new FitCount(context, seed, catalogue, cap, cacheRows, this::select);
+        geometric = geometricCandidates == 0 ? null : planner.normalizedResidualL2Scorer();
+        delegate = weighted ? FitCount.weighted(context, seed, catalogue, cap, cacheRows, maxTotalFit, this::select)
+                : new FitCount(context, seed, catalogue, cap, cacheRows, maxTotalFit, this::select);
     }
 
     @Override
@@ -88,6 +119,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
         }
         fragmented.clear();
         spread.clear();
+        packed.clear();
         final long decision = seed ^ mix64(attempt);
         for (int index = 0; index < count; index++) {
             if (fragmentation != null) {
@@ -100,13 +132,19 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                         mix64(decision ^ mix64(index) ^ LEAST_SALT));
                 leastScores++;
             }
+            if (geometric != null) {
+                packed.offer(index, geometric.applyAsDouble(plans[index]),
+                        mix64(decision ^ mix64(index) ^ GEOMETRIC_SALT));
+                geometricScores++;
+            }
         }
         if (fragmentation != null && context.model().gpus == null) {
             cpuRamDecisions++;
         }
-        final int[] union = Arrays.copyOf(random, random.length + fragmented.size + spread.size);
+        final int[] union = Arrays.copyOf(random, random.length + fragmented.size + spread.size + packed.size);
         fragmented.append(union, random.length);
         spread.append(union, random.length + fragmented.size);
+        packed.append(union, random.length + fragmented.size + spread.size);
         Arrays.sort(union);
         int retained = 0;
         for (final int index : union) {
@@ -216,19 +254,25 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
 
     @Override
     public Map<String, String> parameters() {
-        return Map.of("random_candidates", Integer.toString(randomCandidates),
+        final var result = new LinkedHashMap<>(delegate.parameters());
+        result.putAll(Map.of("random_candidates", Integer.toString(randomCandidates),
                 "fragmentation_candidates", Integer.toString(fragmented.indices.length),
                 "least_candidates", Integer.toString(spread.indices.length),
+                "geometric_candidates", Integer.toString(packed.indices.length),
                 "fragmentation_source", context.model().gpus == null ? "cpu_ram" : "gpu_devices",
-                "copy_cap", Integer.toString(cap), "cache_rows", Integer.toString(cacheRows));
+                "copy_cap", Integer.toString(cap), "cache_rows", Integer.toString(cacheRows)));
+        return result;
     }
 
     @Override
     public Map<String, Long> counters() {
-        return Map.ofEntries(Map.entry("selector_calls", selectorCalls), Map.entry("candidate_plans", candidatePlans),
+        final var result = new LinkedHashMap<>(delegate.counters());
+        result.putAll(Map.ofEntries(Map.entry("selector_calls", selectorCalls), Map.entry("candidate_plans", candidatePlans),
                 Map.entry("candidate_hosts", candidateHosts), Map.entry("retained_plans", retainedPlans),
                 Map.entry("retained_hosts", retainedHosts), Map.entry("fragmentation_scores", fragmentationScores),
-                Map.entry("least_scores", leastScores), Map.entry("shortlist_overlap", overlap),
-                Map.entry("fragmentation_cpu_ram_decisions", cpuRamDecisions));
+                Map.entry("least_scores", leastScores), Map.entry("geometric_scores", geometricScores),
+                Map.entry("shortlist_overlap", overlap),
+                Map.entry("fragmentation_cpu_ram_decisions", cpuRamDecisions)));
+        return result;
     }
 }

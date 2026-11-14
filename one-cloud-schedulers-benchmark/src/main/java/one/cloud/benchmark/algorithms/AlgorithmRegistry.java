@@ -10,6 +10,7 @@ import java.util.Objects;
 
 import com.google.gson.JsonPrimitive;
 
+import one.cloud.benchmark.algorithms.fitcount.Catalogue;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.engine.SchedulingContext;
 import one.cloud.benchmark.model.Request;
@@ -118,14 +119,20 @@ public final class AlgorithmRegistry {
     public static SchedulingAlgorithm create(Settings settings, SchedulingContext context, Request[] catalogue,
             Path priorFile) throws Exception {
         final var validated = normalize(settings);
-        final var entry = entry(validated.id);
-        if (entry.descriptor().requiresPrior() && priorFile == null) {
-            throw new IllegalArgumentException("Algorithm " + validated.id + " requires a rollout prior file");
-        }
-        if (!entry.descriptor().requiresPrior() && priorFile != null) {
-            throw new IllegalArgumentException("Algorithm " + validated.id + " does not accept a rollout prior file");
-        }
+        final var entry = entry(validated, priorFile);
         return entry.factory().create(context, catalogue.clone(), validated.parameters, priorFile);
+    }
+
+    public static SchedulingAlgorithm create(Settings settings, SchedulingContext context, Catalogue catalogue,
+            Path priorFile) throws Exception {
+        final var validated = normalize(settings);
+        final var entry = entry(validated, priorFile);
+        return entry.factory().create(context, Objects.requireNonNull(catalogue), validated.parameters, priorFile);
+    }
+
+    public static SchedulingAlgorithm create(Settings settings, SchedulingContext context, Catalogue catalogue)
+            throws Exception {
+        return create(settings, context, catalogue, null);
     }
 
     public static synchronized void register(String id, String name, List<Parameter> parameters,
@@ -156,6 +163,17 @@ public final class AlgorithmRegistry {
         if (ENTRIES.putIfAbsent(id, definition) != null) {
             throw new IllegalArgumentException("Algorithm already registered: " + id);
         }
+    }
+
+    private static AlgorithmDefinition entry(Settings validated, Path priorFile) {
+        final var entry = entry(validated.id);
+        if (entry.descriptor().requiresPrior() && priorFile == null) {
+            throw new IllegalArgumentException("Algorithm " + validated.id + " requires a rollout prior file");
+        }
+        if (!entry.descriptor().requiresPrior() && priorFile != null) {
+            throw new IllegalArgumentException("Algorithm " + validated.id + " does not accept a rollout prior file");
+        }
+        return entry;
     }
 
     private static synchronized AlgorithmDefinition entry(String id) {

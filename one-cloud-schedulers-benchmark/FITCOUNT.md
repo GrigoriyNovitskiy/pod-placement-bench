@@ -91,6 +91,19 @@ the catalogue by shape and uses each cached row for all candidates before moving
 on. With a catalogue larger than the row limit, rows may be recomputed at each
 decision. Compare the variants with the same seed, copy cap, catalogue and row limit.
 
+Physical FitCount, RandomN, portfolio and RL-pool definitions also accept
+`maxTotalFit`: zero preserves the unlimited historical rule; a positive value
+enables the production-style adaptive total-fit limit. Both final objectives
+consider samples whose total physical fit-count divided by frequency is at most
+`max(maxTotalFit, CPU/RAM growth factor)`. Empty state has unbounded growth.
+Use `--catalogue-weights full` to retain absolute frequencies from the declared
+population when limiting the catalogue. The default `sampled` mode preserves
+historical frequencies of selected occurrences; the numeric total-fit threshold
+has different units in these two modes. Full frequencies change FitCount
+refinement, while auxiliary shortlist scorers retain their sample frequencies.
+See the [formal rule, mean hybrids and fragmentation definition](docs/algorithms/mean-fitcount.md)
+for exact semantics and the independent role of candidate shortlisting.
+
 ## Cache
 
 Keep the useful part of `FitCountCache`: multiplicity by shape and host, totals,

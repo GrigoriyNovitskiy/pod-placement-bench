@@ -25,6 +25,7 @@ public final class RlMaskedFitCount extends RlPoolAlgorithm {
 
     public RlMaskedFitCount(SchedulingContext context, long seed, Request[] catalogue, int topN, int poolSize,
             int extras, int fitCap, int cacheRows, Path model, boolean uniformExtras) throws IOException {
-        super(context, seed, catalogue, topN, poolSize, extras, fitCap, cacheRows, model, uniformExtras, true);
+        super(context, seed, catalogue, topN, poolSize, extras, fitCap, cacheRows, model, uniformExtras,
+                Refinement.MASKED, 0);
     }
 }

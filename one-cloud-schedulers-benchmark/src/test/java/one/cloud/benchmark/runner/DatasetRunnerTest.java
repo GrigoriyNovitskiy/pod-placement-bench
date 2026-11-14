@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 import org.junit.jupiter.api.Test;
 
+import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.fgd.Fgd;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
@@ -279,6 +280,48 @@ class DatasetRunnerTest {
         assertEquals(20, full.processedOperations());
         assertEquals(1, full.checkpoints().size());
         assertEquals(10, full.checkpoints().getFirst().operation());
+    }
+
+    @Test
+    void fullWeightsReachRegistryRefinersWithoutChangingLegacySampling() throws Exception {
+        final var scenario = Scenario.from(trace(scalar(10, 20, 1), events(10)));
+        final var fullOptions = new DatasetRunner.Options(7, 3, 3, 2, true);
+        final DatasetRunner.Factory legacyFactory = (context, seed, catalogue) -> {
+            assertArrayEquals(new int[]{2, 5, 8}, java.util.Arrays.stream(catalogue)
+                    .mapToInt(request -> request.resource(0)).toArray());
+            final var first = catalogue[0];
+            catalogue[0] = catalogue[catalogue.length - 1];
+            catalogue[catalogue.length - 1] = first;
+            return new FitCount(context, seed, catalogue);
+        };
+        final var failure = assertThrows(IllegalArgumentException.class,
+                () -> DatasetRunner.run(scenario, fullOptions, legacyFactory));
+        assertEquals("Full catalogue weights require a catalogue-aware factory", failure.getMessage());
+        final var legacy = DatasetRunner.run(scenario, new DatasetRunner.Options(7, 3, 3, 2), legacyFactory);
+        assertEquals("sampled", legacy.parameters().get("catalogue_weight_mode"));
+        assertEquals("3", legacy.parameters().get("catalogue_weight_mass"));
+        for (final var id : List.of("fitcount", "mean-fitcount", "randomn-fitcount", "randomn-mean-fitcount",
+                "portfolio-fitcount", "portfolio-mean-fitcount", "geometric-portfolio-mean-fitcount",
+                "rl-pool-fitcount", "rl-pool-mean-fitcount")) {
+            final var factory = BenchmarkExperiment.factory(AlgorithmRegistry.defaults(id), null);
+            final var full = DatasetRunner.run(scenario, fullOptions, factory);
+            assertEquals("full", full.parameters().get("catalogue_weight_mode"), id);
+            assertEquals("10", full.parameters().get("catalogue_population"), id);
+            assertEquals("10", full.parameters().get("catalogue_weight_mass"), id);
+            assertEquals("3", full.parameters().get("catalogue_selected"), id);
+            assertEquals("1", full.parameters().get("catalogue_families"), id);
+            assertEquals(legacy.catalogueChecksum(), full.catalogueChecksum(), id);
+            assertEquals(legacy.probeChecksum(), full.probeChecksum(), id);
+            final var complete = DatasetRunner.run(scenario, new DatasetRunner.Options(7, 0, 3, 2, true), factory);
+            assertEquals(full.parameters().get("catalogue_weight_checksum"),
+                    complete.parameters().get("catalogue_weight_checksum"), id);
+        }
+        final var options = new BenchmarkExperiment.Options(3, 3, 2, 0, 42, true);
+        assertTrue(options.replayOptions().fullCatalogueWeights());
+        final var quality = BenchmarkExperiment.quality(scenario, options,
+                BenchmarkExperiment.factory(AlgorithmRegistry.defaults("fitcount"), null));
+        assertEquals("full", quality.parameters().get("catalogue_weight_mode"));
+        assertEquals("10", quality.parameters().get("catalogue_weight_mass"));
     }
 
     @Test

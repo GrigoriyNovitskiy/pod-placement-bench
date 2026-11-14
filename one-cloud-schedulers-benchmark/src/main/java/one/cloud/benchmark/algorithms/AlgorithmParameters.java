@@ -23,6 +23,11 @@ public final class AlgorithmParameters {
             "cacheRows", "FitCount cache rows", "Число профилей запросов в кэше FitCount.",
             64, 1, 4096).asAdvanced();
 
+    public static final Parameter MAX_TOTAL_FIT = Parameter.number(
+            "maxTotalFit", "Total FitCount limit",
+            "Порог total FitCount / frequency с нижней границей по росту CPU/RAM; 0 отключает порог.",
+            0, 0, MAX_SAFE_INTEGER).asAdvanced();
+
     public static final Parameter BULK_SEED = Parameter.integer(
             "seed", "Seed", "Начальное значение генератора случайных чисел.",
             42, -MAX_SAFE_INTEGER, MAX_SAFE_INTEGER).asAdvanced();
@@ -50,6 +55,8 @@ public final class AlgorithmParameters {
     public static final List<Parameter> SEED_ONLY = List.of(SEED);
     public static final List<Parameter> FIT_COUNT = List.of(SEED, FIT_CAP, CACHE_ROWS);
     public static final List<Parameter> SHORTLIST = List.of(TOP_N, SEED, FIT_CAP, CACHE_ROWS);
+    public static final List<Parameter> FIT_COUNT_WITH_TOTAL_LIMIT = List.of(SEED, FIT_CAP, CACHE_ROWS, MAX_TOTAL_FIT);
+    public static final List<Parameter> SHORTLIST_WITH_TOTAL_LIMIT = List.of(TOP_N, SEED, FIT_CAP, CACHE_ROWS, MAX_TOTAL_FIT);
     public static final List<Parameter> BULK = List.of(BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS);
     public static final List<Parameter> ROLLOUT = List.of(
             BULK_SEED, BULK_FIT_CAP, BULK_CACHE_ROWS, CANDIDATES, SCENARIOS, HORIZON);

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import one.cloud.benchmark.algorithms.fitcount.Catalogue;
 import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.GreedyPlanner;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
@@ -23,13 +24,44 @@ public final class DatasetRunner {
     public interface Factory {
         /** The catalogue array belongs to the algorithm; its requests are immutable. */
         SchedulingAlgorithm create(SchedulingContext context, long seed, Request[] catalogue) throws Exception;
+
+        default SchedulingAlgorithm create(SchedulingContext context, long seed, Catalogue catalogue) throws Exception {
+            if (catalogue.hasFullFrequencies()) {
+                throw new IllegalArgumentException("Full catalogue weights require a catalogue-aware factory");
+            }
+            return create(context, seed, catalogue.requests());
+        }
+
+        static Factory withCatalogue(CatalogueFactory factory) {
+            Objects.requireNonNull(factory);
+            return new Factory() {
+                @Override
+                public SchedulingAlgorithm create(SchedulingContext context, long seed, Request[] catalogue) throws Exception {
+                    return factory.create(context, seed, Catalogue.sampled(catalogue));
+                }
+
+                @Override
+                public SchedulingAlgorithm create(SchedulingContext context, long seed, Catalogue catalogue) throws Exception {
+                    return factory.create(context, seed, catalogue);
+                }
+            };
+        }
     }
 
-    public record Options(long seed, int eventLimit, int catalogueLimit, int probeCap) {
+    @FunctionalInterface
+    public interface CatalogueFactory {
+        SchedulingAlgorithm create(SchedulingContext context, long seed, Catalogue catalogue) throws Exception;
+    }
+
+    public record Options(long seed, int eventLimit, int catalogueLimit, int probeCap, boolean fullCatalogueWeights) {
         public Options {
             if (eventLimit < 0 || catalogueLimit < 0 || probeCap <= 0) {
                 throw new IllegalArgumentException("Operation/catalogue limits must be nonnegative and probe cap positive");
             }
+        }
+
+        public Options(long seed, int eventLimit, int catalogueLimit, int probeCap) {
+            this(seed, eventLimit, catalogueLimit, probeCap, false);
         }
 
         public static Options defaults() {
@@ -115,6 +147,7 @@ public final class DatasetRunner {
         private final Scenario scenario;
         private final Options options;
         private final Request[] catalogue, probes;
+        private final Catalogue algorithmCatalogue;
         private final long catalogueChecksum, probeChecksum;
         private final int limit;
         private final int[] qualityOperations;
@@ -148,6 +181,9 @@ public final class DatasetRunner {
                 throw new IllegalArgumentException("Timing buffers exceed a quarter of the configured heap");
             }
             catalogue = sample(scenario.catalogue, options.catalogueLimit);
+            algorithmCatalogue = options.fullCatalogueWeights
+                    ? Catalogue.full(scenario.model, scenario.catalogue, catalogue)
+                    : Catalogue.sampled(catalogue);
             probes = qualityOperations != null ? sample(catalogue, 16) : new Request[0];
             catalogueChecksum = requestChecksum(catalogue);
             probeChecksum = requestChecksum(probes);
@@ -170,7 +206,6 @@ public final class DatasetRunner {
 
         private Result run(Factory factory) throws Exception {
             engine = new Engine(scenario.model);
-            final var algorithmCatalogue = catalogue.clone();
             final long algorithmStart = System.nanoTime();
             try (final var algorithm = Objects.requireNonNull(factory.create(engine, options.seed, algorithmCatalogue))) {
                 final long replayStart = System.nanoTime();

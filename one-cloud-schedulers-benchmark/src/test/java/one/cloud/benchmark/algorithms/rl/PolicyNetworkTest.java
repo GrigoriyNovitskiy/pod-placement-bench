@@ -233,6 +233,54 @@ class PolicyNetworkTest {
     }
 
     @Test
+    void poolMeanPreservesProposalsAndWeightedRefinementAcrossRemoval(@TempDir Path directory) throws Exception {
+        final var cluster = model(alloc(1, new int[]{1, 2}, 6, 6), alloc(2, new int[]{1, 2}, 5, 7),
+                alloc(3, new int[]{1, 2}, 4, 4), alloc(4, new int[]{1, 2}, 3, 3), alloc(5, new int[]{1, 2}, 5, 7),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 1, 1),
+                resource(4, 3, 2), resource(5, 4, 2), resource(6, 4, 2), resource(7, 5, 2));
+        final var requests = new Request[]{new Request(4), new Request(5), new Request(6), new Request(7)};
+        final var path = write(directory, artifact());
+        for (final boolean uniform : new boolean[]{false, true}) {
+            for (final double maxTotalFit : new double[]{0, 4}) {
+                for (final long seed : new long[]{44, 45}) {
+                    final var expected = new Engine(cluster);
+                    final var actual = new Engine(cluster);
+                    final var selector = new RlPoolSelector(expected, seed, 1, 3, 1, path, uniform);
+                    final var settings = new AlgorithmRegistry.Settings("rl-pool-mean-fitcount", Map.of(
+                            "topN", new JsonPrimitive(1), "poolSize", new JsonPrimitive(3),
+                            "extraCandidates", new JsonPrimitive(1), "cacheRows", new JsonPrimitive(1),
+                            "seed", new JsonPrimitive(seed), "model", new JsonPrimitive(path.toString()),
+                            "uniformExtras", new JsonPrimitive(uniform), "maxTotalFit", new JsonPrimitive(maxTotalFit)));
+                    try (final var reference = FitCount.weighted(expected, seed, requests, 10, 1, maxTotalFit, selector);
+                            final var hybrid = AlgorithmRegistry.create(settings, actual, requests)) {
+                        for (int generation = 0; generation < 2; generation++) {
+                            for (final var request : requests) {
+                                expected.schedule(reference, request);
+                                actual.schedule(hybrid, request);
+                                final int resource = request.resource(0);
+                                assertEquals(expected.placement(resource) == null ? 0 : expected.placement(resource).host(),
+                                        actual.placement(resource) == null ? 0 : actual.placement(resource).host());
+                            }
+                            for (final var request : requests) {
+                                if (expected.placement(request.resource(0)) != null) {
+                                    expected.remove(request);
+                                    actual.remove(request);
+                                }
+                            }
+                        }
+                        assertEquals(reference.parameters().get("max_total_fit"), hybrid.parameters().get("max_total_fit"));
+                        for (final var entry : selector.counters().entrySet()) {
+                            assertEquals(entry.getValue(), hybrid.counters().get(entry.getKey()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
     void sparseFeaturesMatchFullRowsAcrossBatchesAndStateChanges() throws Exception {
         final var state = new Engine(poolModel(20, 1026, false));
         final var extractor = new RlFeatures(state);

@@ -167,6 +167,20 @@ each shape weighted by its frequency. Both variants honor `--param fitCap=10` an
 `--param cacheRows=64`. See [FITCOUNT.md](FITCOUNT.md#mean-fitcount) for the scoring rule
 and its cost.
 
+`portfolio-mean-fitcount` and `rl-pool-mean-fitcount` reuse the corresponding
+shortlists with mean refinement. `randomn-mean-fitcount` defaults to Random28;
+`geometric-portfolio-mean-fitcount` combines Random20, LeastAllocated4 and
+geometric4. These and the ordinary physical FitCount variants accept
+`--param maxTotalFit=...` (default zero, disabled). Positive values enable an
+adaptive production-style total-fit limit, not a fixed cap on copies per host.
+With a limited catalogue, `--catalogue-weights full` preserves the chosen shapes'
+absolute frequencies before sampling; the default `sampled` mode retains the
+historical sample frequencies. Production numeric thresholds require attention
+to these weight units. The mode also applies to CLI benchmark JSON via
+`"catalogueWeights": "full"`.
+The [formal comparison and fragmentation definition](docs/algorithms/mean-fitcount.md)
+describe the rule, candidate quotas and performance tradeoffs.
+
 Geometric best-fit uses normalized residual L2 squared with fixed family weights.
 It shares planner geometry and hard constraints with fitcount and streams candidates
 while retaining only the winner. `--probe-cap` controls common quality probes;

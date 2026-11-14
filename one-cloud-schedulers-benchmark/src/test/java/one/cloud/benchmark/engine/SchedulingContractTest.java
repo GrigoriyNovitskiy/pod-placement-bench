@@ -9,6 +9,7 @@ import java.util.SplittableRandom;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.dataset.Dataset;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Alloc;
@@ -98,6 +99,21 @@ class SchedulingContractTest {
         for (final var field : ClusterSpec.class.getDeclaredFields()) {
             assertFalse(field.getType() == Dataset.class || field.getType() == Dataset.Placements.class
                     || field.getType() == Dataset.Operations.class);
+        }
+    }
+
+    @Test
+    void totalFitLimitSupportsCpuOnlyModels() throws Exception {
+        final var model = ClusterSpec.from(dataset());
+        final var request = new Request(2);
+        final var catalogue = new Request[]{request};
+        for (final boolean weighted : new boolean[]{false, true}) {
+            final var state = new Engine(model);
+            try (final var algorithm = weighted ? FitCount.weighted(state, 42, catalogue, 10, 1, 4, null)
+                    : new FitCount(state, 42, catalogue, 10, 1, 4, null)) {
+                state.schedule(algorithm, request);
+                assertEquals(1, state.placement(2).host());
+            }
         }
     }
 

@@ -27,6 +27,7 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.RolloutPriorProtos;
+import one.cloud.benchmark.runner.BenchmarkExperiment;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
@@ -77,7 +78,8 @@ class RunnerCliTest {
         assertTrue(list.contains("fitcount"));
         assertTrue(list.contains("smt"));
         for (final var id : List.of("portfolio-fitcount", "masked-fitcount", "window-portfolio-fitcount",
-                "rl-pool-fitcount", "rl-masked-fitcount")) {
+                "rl-pool-fitcount", "rl-masked-fitcount", "randomn-mean-fitcount", "portfolio-mean-fitcount",
+                "geometric-portfolio-mean-fitcount", "rl-pool-mean-fitcount")) {
             assertTrue(list.contains(id));
         }
         assertTrue(list.contains("catboost-top1"));
@@ -95,6 +97,20 @@ class RunnerCliTest {
         assertTrue(smt.contains("searchNodes"));
         assertTrue(smt.contains("solutions"));
         assertTrue(smt.contains("rlimit"));
+        assertEquals(20, AlgorithmRegistry.defaults("randomn-fitcount").parameters().get("topN").getAsInt());
+        assertEquals(28, AlgorithmRegistry.defaults("randomn-mean-fitcount").parameters().get("topN").getAsInt());
+        final var geometric = AlgorithmRegistry.defaults("geometric-portfolio-mean-fitcount").parameters();
+        assertEquals(20, geometric.get("randomCandidates").getAsInt());
+        assertEquals(4, geometric.get("leastCandidates").getAsInt());
+        assertEquals(4, geometric.get("geometricCandidates").getAsInt());
+        assertFalse(geometric.containsKey("fragmentationCandidates"));
+        for (final var id : List.of("fitcount", "mean-fitcount", "randomn-fitcount", "randomn-mean-fitcount",
+                "portfolio-fitcount", "portfolio-mean-fitcount", "geometric-portfolio-mean-fitcount",
+                "rl-pool-fitcount", "rl-pool-mean-fitcount")) {
+            assertEquals(0, AlgorithmRegistry.defaults(id).parameters().get("maxTotalFit").getAsDouble());
+            assertEquals(4.5, AlgorithmRegistry.normalize(new AlgorithmRegistry.Settings(id,
+                    Map.of("maxTotalFit", new JsonPrimitive(4.5)))).parameters().get("maxTotalFit").getAsDouble());
+        }
     }
 
     @Test
@@ -461,7 +477,9 @@ class RunnerCliTest {
         writeTrace(temporary, rows, 2, 3, 4, 5, -5, -4, -3, -2);
         for (final var algorithm : new String[]{"fitcount", "mean-fitcount", "geometric-best-fit", "cpu-ram-fgd",
                 "k8s-least-allocated", "k8s-most-allocated", "k8s-requested-to-capacity-ratio", "k8s-balanced-allocation",
-                "portfolio-fitcount", "masked-fitcount", "window-portfolio-fitcount", "rl-pool-fitcount", "rl-masked-fitcount"}) {
+                "portfolio-fitcount", "masked-fitcount", "window-portfolio-fitcount", "rl-pool-fitcount", "rl-masked-fitcount",
+                "randomn-mean-fitcount", "portfolio-mean-fitcount", "geometric-portfolio-mean-fitcount",
+                "rl-pool-mean-fitcount"}) {
             final var output = new ByteArrayOutputStream();
             final var errors = new ByteArrayOutputStream();
             assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(), "--algorithm", algorithm));
@@ -521,6 +539,74 @@ class RunnerCliTest {
     }
 
     @Test
+    void reportsRequestedAndAppliedCatalogueWeightsForSampledShapes() throws Exception {
+        writeTrace(temporary, records(), 2, 3, -3, -2);
+        for (final var algorithm : List.of("fitcount", "rl-pool-mean-fitcount")) {
+            String sampledChecksum = null;
+            String sampledDigest = null;
+            for (final var mode : List.of("sampled", "full")) {
+                final var output = new ByteArrayOutputStream();
+                final var errors = new ByteArrayOutputStream();
+                assertEquals(0, invoke(output, errors, "run", "--dataset", temporary.toString(),
+                        "--algorithm", algorithm, "--catalogue-limit", "1", "--max-operations", "1",
+                        "--catalogue-weights", mode));
+                assertEquals("", errors.toString(StandardCharsets.UTF_8));
+                final var report = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+                assertEquals(mode, report.get("catalogue_weights").getAsString());
+                final var applied = report.getAsJsonObject("algorithm_runtime_parameters");
+                assertEquals(mode, applied.get("catalogue_weight_mode").getAsString());
+                assertEquals(mode.equals("full") ? 2 : 1, applied.get("catalogue_weight_mass").getAsInt());
+                assertEquals(1, applied.get("catalogue_selected").getAsInt());
+                if (mode.equals("sampled")) {
+                    sampledChecksum = report.get("catalogue_checksum").getAsString();
+                    sampledDigest = report.get("parameter_digest").getAsString();
+                } else {
+                    assertEquals(sampledChecksum, report.get("catalogue_checksum").getAsString());
+                    assertFalse(sampledDigest.equals(report.get("parameter_digest").getAsString()));
+                }
+            }
+        }
+    }
+
+    @Test
+    void rejectsFullCatalogueWeightsForLegacyAlgorithmFactories() throws Exception {
+        writeTrace(temporary, records(), 2, 3, -3, -2);
+        for (final var algorithm : List.of("masked-fitcount", "catboost-topn-fitcount")) {
+            final var output = new ByteArrayOutputStream();
+            final var errors = new ByteArrayOutputStream();
+            assertEquals(1, invoke(output, errors, "run", "--dataset", temporary.toString(),
+                    "--algorithm", algorithm, "--catalogue-weights", "full"));
+            assertEquals("", output.toString(StandardCharsets.UTF_8));
+            assertTrue(errors.toString(StandardCharsets.UTF_8)
+                    .contains("Full catalogue weights require a catalogue-aware factory"));
+        }
+    }
+
+    @Test
+    void isolatedWorkerPreservesFullCatalogueWeightsForMeasurementAndQuality() throws Exception {
+        writeTrace(temporary, records(), 2, 3, -3, -2);
+        final var work = temporary.resolve("work.json");
+        final var result = temporary.resolve("result.json");
+        Files.writeString(work, new com.google.gson.Gson().toJson(Map.of(
+                "dataset", temporary.toString(),
+                "selection", Map.of("settings", AlgorithmRegistry.defaults("mean-fitcount")),
+                "gpuMode", "DEVICES_20", "bulkSize", 1,
+                "options", new BenchmarkExperiment.Options(1, 1, 2, 0, 42, true),
+                "warmups", 0, "measurements", 1, "quality", true)));
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "benchmark-worker", work.toString(), result.toString()));
+        assertEquals("", output.toString(StandardCharsets.UTF_8));
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        final var report = JsonParser.parseString(Files.readString(result)).getAsJsonObject();
+        assertEquals(1, report.getAsJsonArray("measurements").size());
+        final var applied = report.getAsJsonObject("quality").getAsJsonObject("parameters");
+        assertEquals("full", applied.get("catalogue_weight_mode").getAsString());
+        assertEquals(2, applied.get("catalogue_weight_mass").getAsInt());
+        assertEquals(1, applied.get("catalogue_selected").getAsInt());
+    }
+
+    @Test
     void helpAndUsageErrorsDoNotReadDatasetsOrWriteSuccessReports() {
         final var output = new ByteArrayOutputStream();
         final var errors = new ByteArrayOutputStream();
@@ -528,6 +614,7 @@ class RunnerCliTest {
         assertTrue(output.toString(StandardCharsets.UTF_8).startsWith("Usage:"));
         assertEquals("", errors.toString(StandardCharsets.UTF_8));
         final String[][] invalid = {
+                {"run", "--dataset", "absent", "--algorithm", "fitcount", "--catalogue-weights", "invalid"},
                 {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile-event", "alloc"},
                 {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile", "profile.txt"},
                 {"run", "--dataset", "absent", "--algorithm", "fitcount", "--profile", "profile.jfr",

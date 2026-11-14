@@ -3,11 +3,15 @@ package one.cloud.benchmark.algorithms.fitcount;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Map;
 import java.util.SplittableRandom;
 import java.util.TreeSet;
 
 import org.junit.jupiter.api.Test;
 
+import com.google.gson.JsonPrimitive;
+
+import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring;
 import one.cloud.benchmark.algorithms.kubernetes.KubernetesResourceScoring.Strategy;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
@@ -447,6 +451,80 @@ class FitCountTest {
                 assertEquals(1, cache.next().frequency);
                 assertNull(cache.next());
             }
+            final var population = new Request[]{new Request(2), new Request(3)};
+            final var full = Catalogue.full(state.model(), population,
+                    new Request[]{population[0], population[1], population[0]});
+            final var weightedCache = new FitCountCache(state, new GreedyPlanner(state), full, 10, 1, null);
+            assertEquals(mode == ClusterSpec.GpuMode.DEVICES_20 ? 1 : 2, weightedCache.samples().length);
+            for (final var family : weightedCache.samples()) {
+                assertEquals(mode == ClusterSpec.GpuMode.DEVICES_20 ? 2 : 1, family.frequency);
+            }
+        }
+    }
+
+    @Test
+    void fullCatalogueWeightsCountPhysicalFamiliesOnceAndPreserveSelectedRequests() throws Exception {
+        final var model = model(alloc(1, new int[]{1, 2}, 4, 5), alloc(2, new int[]{1, 2}, 3, 4),
+                alloc(3, new int[]{1}, 4), alloc(4, new int[]{2}, 2), alloc(5, new int[]{1, 2}, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 2), resource(5, 5, 2));
+        final var cpu = new Request(3);
+        final var ram = new Request(4);
+        final var population = new Request[102];
+        Arrays.fill(population, cpu);
+        population[100] = ram;
+        population[101] = ram;
+        final var selected = new Request[]{cpu, ram, ram};
+        final var full = Catalogue.full(model, population, selected);
+        selected[0] = ram;
+        final var exposed = full.requests();
+        exposed[0] = ram;
+        assertTrue(cpu == full.request(0));
+        assertEquals(100, full.frequency(0));
+        assertEquals(2, full.frequency(1));
+        assertEquals(2, full.frequency(2));
+        assertEquals("102", full.parameters().get("catalogue_weight_mass"));
+        assertEquals("2", full.parameters().get("catalogue_families"));
+        assertEquals("3", full.parameters().get("catalogue_selected"));
+        assertEquals("102", full.parameters().get("catalogue_population"));
+        final var duplicatedCpu = Catalogue.full(model, population, new Request[]{cpu, cpu, ram});
+        assertEquals(full.parameters(), duplicatedCpu.parameters());
+        final var state = new Engine(model);
+        final var cache = new FitCountCache(state, new GreedyPlanner(state), duplicatedCpu, 10, 1, null);
+        assertEquals(100, cache.samples()[0].frequency);
+        assertEquals(2, cache.samples()[1].frequency);
+        assertEquals(full.parameters(), cache.parameters());
+        assertThrows(IllegalArgumentException.class,
+                () -> Catalogue.full(model, new Request[]{cpu}, new Request[]{ram}));
+        final var ramHeavyPopulation = population.clone();
+        Arrays.fill(ramHeavyPopulation, ram);
+        ramHeavyPopulation[100] = cpu;
+        ramHeavyPopulation[101] = cpu;
+        final var ramHeavy = Catalogue.full(model, ramHeavyPopulation, full.requests());
+        for (final boolean weighted : new boolean[]{false, true}) {
+            final var legacy = new Engine(model);
+            final var sampled = new Engine(model);
+            final var complete = new Engine(model);
+            final var entries = full.requests();
+            final var completeCatalogue = weighted ? full : ramHeavy;
+            try (final var old = weighted ? FitCount.weighted(legacy, 44, entries, 10, 1)
+                    : new FitCount(legacy, 44, entries, 10, 1);
+                    final var limited = weighted ? FitCount.weighted(sampled, 44, Catalogue.sampled(entries), 10, 1, 0, null)
+                            : new FitCount(sampled, 44, Catalogue.sampled(entries), 10, 1, 0, null);
+                    final var all = weighted ? FitCount.weighted(complete, 44, completeCatalogue, 10, 1, 0, null)
+                            : new FitCount(complete, 44, completeCatalogue, 10, 1, 0, null)) {
+                final var demand = new Request(5);
+                legacy.schedule(old, demand);
+                sampled.schedule(limited, demand);
+                complete.schedule(all, demand);
+                assertEquals(legacy.placement(5).host(), sampled.placement(5).host());
+                assertEquals(weighted ? 1 : 2, sampled.placement(5).host());
+                assertEquals(weighted ? 2 : 1, complete.placement(5).host());
+                for (final var parameter : completeCatalogue.parameters().entrySet()) {
+                    assertEquals(parameter.getValue(), all.parameters().get(parameter.getKey()));
+                }
+            }
         }
     }
 
@@ -638,6 +716,68 @@ class FitCountTest {
     }
 
     @Test
+    void totalFitLimitUsesFullSupplyAndCurrentOccupancyForLexAndMean() throws Exception {
+        final var model = model(alloc(1, new int[]{1, 2}, 10, 10),
+                alloc(2, new int[]{1, 2}, 5, 6), alloc(3, new int[]{1}, 3),
+                alloc(4, new int[]{1, 2}, 2, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2),
+                resource(4, 3, 2), resource(5, 4, 2));
+        final var background = new Request(3);
+        final var sample = new Request(4);
+        final var demand = new Request(5);
+        for (final boolean weighted : new boolean[]{false, true}) {
+            for (final int[] settings : new int[][]{{1, 1, 2}, {2, 1, 1}, {1, 4, 1}, {1, 0, 1}}) {
+                final var state = new Engine(model);
+                final var catalogue = new Request[settings[0]];
+                Arrays.fill(catalogue, sample);
+                final FitCount[] delegate = {null};
+                final var scheduler = new SchedulingAlgorithm(state, 0) {
+                    @Override
+                    public void schedule(Request request) {
+                        if (request == background) {
+                            context.place(request, new GreedyPlanner(context).plan(request, 1, 0));
+                        } else {
+                            if (delegate[0] == null) {
+                                delegate[0] = weighted ? FitCount.weighted(context, 0, catalogue, 10, 1, settings[1], null)
+                                        : new FitCount(context, 0, catalogue, 10, 1, settings[1], null);
+                            }
+                            delegate[0].schedule(request);
+                        }
+                    }
+
+                    @Override
+                    public void placed(Assignment plan) {
+                        if (delegate[0] != null) {
+                            delegate[0].placed(plan);
+                        }
+                    }
+
+                    @Override
+                    public void removed(Assignment plan) {
+                        if (delegate[0] != null) {
+                            delegate[0].removed(plan);
+                        }
+                    }
+                };
+                state.schedule(scheduler, background);
+                state.schedule(scheduler, demand);
+                assertEquals(settings[2], state.placement(5).host());
+                state.remove(demand);
+                state.remove(background);
+                final var random = new SplittableRandom(0);
+                if (settings[2] == 2) {
+                    random.nextInt(2);
+                }
+                state.schedule(scheduler, demand);
+                assertEquals(1 + random.nextInt(2), state.placement(5).host());
+                delegate[0].close();
+            }
+        }
+    }
+
+    @Test
     void physicalCacheIgnoresReplicaLimitsAndRefreshesAfterPlacementAndRemoval() throws Exception {
         final var model = model(
                 alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 2),
@@ -694,25 +834,50 @@ class FitCountTest {
                         cache.changed(host);
                     }
                 }
-                cache.beginOrder();
-                double last = -1;
-                int seen = 0;
-                for (var sample = cache.next(); sample != null; sample = cache.next()) {
-                    long total = 0;
-                    for (int host = 1; host <= model.hostCount; host++) {
-                        final int count = planner.fitCount(sample.request, host, 7);
-                        assertEquals(count, cache.count(sample, host));
-                        total += count;
+                for (final double limit : new double[]{0, 1.5, 3.5, Double.MAX_VALUE}) {
+                    int expected = 0;
+                    for (final var sample : cache.samples()) {
+                        long total = 0;
+                        for (int host = 1; host <= model.hostCount; host++) {
+                            total += planner.fitCount(sample.request, host, 7);
+                        }
+                        if (total / (double) sample.frequency <= limit) {
+                            expected++;
+                        }
                     }
-                    assertEquals(total, cache.total(sample));
-                    assertTrue(sample.weightedTotal() >= last);
-                    last = sample.weightedTotal();
-                    assertTrue(cache.cachedShapes() <= 1);
-                    seen++;
+                    cache.beginOrder(limit);
+                    double last = -1;
+                    int seen = 0;
+                    for (var sample = cache.next(); sample != null; sample = cache.next()) {
+                        long total = 0;
+                        for (int host = 1; host <= model.hostCount; host++) {
+                            final int count = planner.fitCount(sample.request, host, 7);
+                            assertEquals(count, cache.count(sample, host));
+                            total += count;
+                        }
+                        assertEquals(total, cache.total(sample));
+                        assertTrue(sample.weightedTotal() >= last);
+                        assertTrue(sample.weightedTotal() <= limit);
+                        last = sample.weightedTotal();
+                        assertTrue(cache.cachedShapes() <= 1);
+                        seen++;
+                    }
+                    assertEquals(expected, seen);
                 }
-                assertEquals(units.length, seen);
             }
         }
+    }
+
+    @Test
+    void totalFitCutoffIncludesFractionalFrequencyBoundary() throws Exception {
+        final var state = new Engine(scalarModel(8, 6));
+        final var sample = new Request(5);
+        final var cache = new FitCountCache(state, new GreedyPlanner(state), new Request[]{sample, sample, sample}, 10, 1);
+        cache.beginOrder(4.0 / 3);
+        assertEquals(3, cache.next().frequency);
+        assertNull(cache.next());
+        cache.beginOrder(Math.nextDown(4.0 / 3));
+        assertNull(cache.next());
     }
 
     @Test
@@ -738,8 +903,20 @@ class FitCountTest {
             samples++;
         }
         assertEquals(3, samples);
+        final var full = Catalogue.full(model,
+                new Request[]{zero, new Request(3), new Request(4), new Request(3)},
+                new Request[]{new Request(3), new Request(4)});
+        final var weightedCache = new FitCountCache(state, planner, full, 9, 1, null);
+        assertEquals(2, weightedCache.samples().length);
+        assertEquals(2, weightedCache.samples()[0].frequency);
+        assertEquals(1, weightedCache.samples()[1].frequency);
+        assertEquals("3", full.parameters().get("catalogue_weight_mass"));
         assertThrows(IllegalArgumentException.class, () -> new FitCount(state, 0, new Request[]{zero}, 0, 1));
         assertThrows(IllegalArgumentException.class, () -> new FitCount(state, 0, new Request[]{zero}, 9, 0));
+        for (final double limit : new double[]{-1, Double.NaN, Double.POSITIVE_INFINITY}) {
+            assertThrows(IllegalArgumentException.class,
+                    () -> new FitCount(state, 0, new Request[]{zero}, 9, 1, limit, null));
+        }
         try (final var scheduler = new FitCount(state, 42, new Request[]{zero})) {
             state.schedule(scheduler, zero);
             assertEquals(1, state.placement(2).host());
@@ -978,6 +1155,11 @@ class FitCountTest {
 
     private static int[] portfolioOracle(long seed, long attempt, SplittableRandom random, int[] quotas,
             double[] fragmentation, double[] least) {
+        return portfolioOracle(seed, attempt, random, quotas, fragmentation, least, null);
+    }
+
+    private static int[] portfolioOracle(long seed, long attempt, SplittableRandom random, int[] quotas,
+            double[] fragmentation, double[] least, double[] geometric) {
         final int count = fragmentation.length;
         final int[] pool = java.util.stream.IntStream.range(0, count).toArray();
         final var union = new TreeSet<Integer>();
@@ -989,10 +1171,11 @@ class FitCountTest {
                 pool[chosen] = pool[--remaining];
             }
         }
-        for (int source = 1; source <= 2; source++) {
+        for (int source = 1; source < quotas.length; source++) {
             final boolean descending = source == 2;
-            final double[] scores = descending ? least : fragmentation;
-            final long salt = descending ? 0xA54FF53A5F1D36F1L : 0x3C6EF372FE94F82BL;
+            final double[] scores = source == 1 ? fragmentation : source == 2 ? least : geometric;
+            final long salt = source == 1 ? 0x3C6EF372FE94F82BL
+                    : source == 2 ? 0xA54FF53A5F1D36F1L : 0x510E527FADE682D1L;
             final Integer[] ranked = java.util.stream.IntStream.range(0, count).boxed().toArray(Integer[]::new);
             Arrays.sort(ranked, (first, second) -> {
                 final int score = scores[first] < scores[second] ? -1 : scores[first] > scores[second] ? 1 : 0;
@@ -1009,6 +1192,91 @@ class FitCountTest {
             }
         }
         return union.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    @Test
+    void meanHybridsMatchIndependentShortlistAndWeightedLossOracles() throws Exception {
+        final int hosts = 32;
+        final var records = new ArrayList<Record>();
+        records.add(rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)));
+        records.add(rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)));
+        for (int host = 1; host <= hosts; host++) {
+            records.add(alloc(host, new int[]{1, 2}, 12 + host % 7 * 3, 20 + host % 5 * 5));
+            records.add(resource(host, host, 1));
+        }
+        records.add(alloc(hosts + 1, new int[]{1, 2}, 3, 5));
+        records.add(alloc(hosts + 2, new int[]{1, 2}, 8, 1));
+        records.add(alloc(hosts + 3, new int[]{1, 2}, 1, 8));
+        for (int index = 1; index <= 3; index++) {
+            records.add(resource(hosts + index, hosts + index, 2));
+        }
+        final var model = model(records.toArray(Record[]::new));
+        final var request = new Request(hosts + 1);
+        final var catalogue = new Request[]{new Request(hosts + 2), new Request(hosts + 3), new Request(hosts + 3)};
+        final var oracleState = new Engine(model);
+        final var planner = new GreedyPlanner(oracleState);
+        final var plans = new Assignment[hosts][];
+        final var original = new Assignment[hosts][];
+        oracleState.schedule(new SchedulingAlgorithm(oracleState, 0) {
+            @Override
+            public void schedule(Request pending) {
+                for (int host = 1; host <= hosts; host++) {
+                    plans[host - 1] = planner.plan(pending, host, 0);
+                    original[host - 1] = Arrays.stream(plans[host - 1]).map(Assignment::copy).toArray(Assignment[]::new);
+                }
+            }
+        }, request);
+        final var fragmentation = planner.cpuRamFragmentationScorer(catalogue);
+        final var least = KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
+        final var geometric = planner.normalizedResidualL2Scorer();
+        final double[] fragments = Arrays.stream(plans).mapToDouble(fragmentation::applyAsDouble).toArray();
+        final double[] leastScores = Arrays.stream(plans).mapToDouble(least::applyAsDouble).toArray();
+        final double[] geometry = Arrays.stream(plans).mapToDouble(geometric::applyAsDouble).toArray();
+        final String[] ids = {"randomn-mean-fitcount", "portfolio-mean-fitcount", "geometric-portfolio-mean-fitcount"};
+        final int[][] quotas = {{28, 0, 0}, {20, 4, 4}, {20, 0, 4, 4}};
+        for (int variant = 0; variant < ids.length; variant++) {
+            for (final long seed : new long[]{44, 45}) {
+                final int[] selected = portfolioOracle(seed, 0,
+                        new SplittableRandom(seed ^ 0x6A09E667F3BCC909L), quotas[variant], fragments, leastScores, geometry);
+                final var tied = new ArrayList<Integer>();
+                long best = Long.MAX_VALUE;
+                for (final int index : selected) {
+                    long loss = 0;
+                    for (final var sample : catalogue) {
+                        loss += planner.fitCount(sample, index + 1, 10)
+                                - planner.fitCount(sample, index + 1, plans[index], 10);
+                    }
+                    if (loss < best) {
+                        tied.clear();
+                        best = loss;
+                    }
+                    if (loss == best) {
+                        tied.add(index);
+                    }
+                }
+                final int expected = tied.get(tied.size() == 1 ? 0 : new SplittableRandom(seed).nextInt(tied.size()));
+                for (final int cacheRows : new int[]{1, 64}) {
+                    for (final double limit : new double[]{0, 4}) {
+                        final var state = new Engine(model);
+                        final var settings = new AlgorithmRegistry.Settings(ids[variant], Map.of(
+                                "seed", new JsonPrimitive(seed), "cacheRows", new JsonPrimitive(cacheRows),
+                                "maxTotalFit", new JsonPrimitive(limit)));
+                        try (final var algorithm = AlgorithmRegistry.create(settings, state, catalogue)) {
+                            state.schedule(algorithm, request);
+                            assertPortfolioGeometry(plans[expected][0], state.placement(request.resource(0)));
+                            if (variant != 0) {
+                                assertEquals((long) selected.length, algorithm.counters().get("retained_plans"));
+                                assertEquals(variant == 2 ? (long) hosts : 0L, algorithm.counters().get("geometric_scores"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for (int index = 0; index < plans.length; index++) {
+            assertPortfolioGeometry(original[index][0], plans[index][0]);
+        }
+        assertEquals(0, oracleState.revision());
     }
 
     private static long portfolioMix(long value) {
