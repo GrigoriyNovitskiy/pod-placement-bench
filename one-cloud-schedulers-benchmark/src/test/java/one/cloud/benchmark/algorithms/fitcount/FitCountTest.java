@@ -3,9 +3,11 @@ package one.cloud.benchmark.algorithms.fitcount;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.SplittableRandom;
 import java.util.TreeSet;
+import java.util.function.ToDoubleFunction;
 
 import org.junit.jupiter.api.Test;
 
@@ -1314,6 +1316,8 @@ class FitCountTest {
                         assertEquals("full", batched.parameters().get("catalogue_weight_mode"));
                         assertEquals("one-schedule-batch", batched.parameters().get("cache_scope"));
                         assertTrue(batched.counters().get("geometry_cache_hits") > 0);
+                        assertPortfolioRawScoreCounters(batched);
+                        assertTrue(batched.counters().get("raw_score_cache_hits") > 0);
                         assertTrue(batched.counters().get("optimizer_workspace_peak_bytes") <= 64L << 20);
                         if (rows == 64 && limit == 0) {
                             assertTrue(batched.counters().get("marginal_cache_hits") > 0);
@@ -1341,13 +1345,15 @@ class FitCountTest {
                         AlgorithmRegistry.defaults("geometric-portfolio-mean-bulk-fitcount"), actual, catalogue)) {
             for (int cycle = 0; cycle < 2; cycle++) {
                 expected.schedule(sequential, pending);
-                final int split = cycle == 0 ? 40 : 1;
+                final int split = cycle == 0 ? 2 : 4;
                 actual.schedule(batched, Arrays.copyOfRange(pending, 0, split));
-                actual.schedule(batched, pending[split]);
-                actual.schedule(batched, Arrays.copyOfRange(pending, split + 1, pending.length));
+                actual.schedule(batched, new Request[]{pending[split]});
+                actual.schedule(batched, pending[split + 1]);
+                actual.schedule(batched, Arrays.copyOfRange(pending, split + 2, pending.length));
                 assertPortfolioPlacements(expected, actual, pending);
                 assertEquals(sequential.counters().get("selector_calls"), batched.counters().get("selector_calls"));
                 assertEquals(sequential.counters().get("shortlist_overlap"), batched.counters().get("shortlist_overlap"));
+                assertPortfolioRawScoreCounters(batched);
                 for (int index = pending.length - 1; index >= 0; index--) {
                     if (expected.placement(pending[index].resource(0)) != null) {
                         expected.remove(pending[index]);
@@ -1357,6 +1363,200 @@ class FitCountTest {
             }
         }
         assertEquals(expected.revision(), actual.revision());
+    }
+
+    @Test
+    void geometricPortfolioRawScoresFollowHostsWhenTheFeasiblePoolCompacts() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 6, 5), alloc(2, new int[]{1, 2}, 6, 3),
+                alloc(3, new int[]{1, 2}, 7, 10), alloc(4, new int[]{1, 2}, 12, 4),
+                alloc(5, new int[]{1, 2}, 5, 4), alloc(6, new int[]{1, 2}, 2, 2),
+                alloc(7, new int[]{1, 2}, 3, 5),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 1), resource(4, 4, 1),
+                resource(5, 5, 1), resource(6, 6, 2), resource(7, 6, 2), resource(8, 7, 2));
+        final var pending = new Request[]{new Request(6), new Request(7)};
+        final var catalogue = new Request[]{new Request(8)};
+        final var parameters = Map.of("seed", new JsonPrimitive(44), "randomCandidates", new JsonPrimitive(1),
+                "leastCandidates", new JsonPrimitive(1), "geometricCandidates", new JsonPrimitive(1));
+        final var expected = new Engine(model);
+        final var actual = new Engine(model);
+        try (final var sequential = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                "geometric-portfolio-mean-fitcount", parameters), expected, catalogue);
+                final var batched = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                        "geometric-portfolio-mean-bulk-fitcount", parameters), actual, catalogue)) {
+            expected.schedule(sequential, pending);
+            actual.schedule(batched, pending);
+            assertEquals(2, expected.placement(6).host());
+            assertEquals(5, expected.placement(7).host());
+            assertPortfolioPlacements(expected, actual, pending);
+            assertPortfolioRawScoreCounters(batched);
+            assertEquals(10, batched.counters().get("raw_score_evaluations"));
+            assertEquals(8, batched.counters().get("raw_score_cache_hits"));
+        }
+    }
+
+    @Test
+    void rawScoresDistinguishNumaAnchorsWhenTheFirstMemberIsAnUnboundShard() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 4), alloc(2, new int[]{1}, 1),
+                alloc(3, new int[]{1}, 3), alloc(4, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.NUMA).setParent(1).setOrdinal(1)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.NUMA).setParent(1).setOrdinal(2)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.SHARD)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3),
+                resource(4, 0, 4), resource(5, 4, 5), resource(6, 0, 4), resource(7, 4, 5));
+        final var state = new Engine(model);
+        final var pending = new Request[]{new Request(4, 5), new Request(6, 7)};
+        final var geometric = new GreedyPlanner(state).normalizedResidualL2Scorer();
+        final var delegate = new FitCount[1];
+        try (final var algorithm = new FitCount(state, 44, new Request[0], 10, 64, (request, plans, count) -> {
+            assertEquals(2, count);
+            assertEquals(0, plans[0][0].numa());
+            assertEquals(0, plans[1][0].numa());
+            final double first = delegate[0].scoreAt(0, plans[0], geometric);
+            final double second = delegate[0].scoreAt(1, plans[1], geometric);
+            assertTrue(first < second);
+            for (int index = 0; index < count; index++) {
+                assertEquals(Double.doubleToRawLongBits(geometric.applyAsDouble(plans[index])),
+                        Double.doubleToRawLongBits(delegate[0].scoreAt(index, plans[index], geometric)));
+            }
+            return new int[]{0};
+        })) {
+            delegate[0] = algorithm;
+            state.schedule(batchScorePolicy(state, algorithm, 64L << 20, List.of(geometric)), pending);
+            assertEquals(2, state.placement(5).numa());
+            assertEquals(3, state.placement(7).numa());
+            assertEquals(2, algorithm.batchCounters().get("raw_score_evaluations"));
+            assertEquals(2, algorithm.batchCounters().get("raw_score_cache_hits"));
+        }
+    }
+
+    @Test
+    void rawScoreCachePreservesZerosAndEvaluatesUnrelatedOrOutsidePlansDirectly() throws Exception {
+        final var model = model(alloc(1, new int[]{1}, 10), alloc(2, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2),
+                resource(4, 2, 2), resource(5, 2, 2));
+        final var pending = new Request[]{new Request(3), new Request(4), new Request(5)};
+        final ToDoubleFunction<Assignment[]> zero = plan -> plan[0].host() == 1 ? -0.0 : 0.0;
+        final ToDoubleFunction<Assignment[]> unregistered = plan -> Double.POSITIVE_INFINITY;
+        for (final long memoryLimit : new long[]{0, 64L << 20}) {
+            final var state = new Engine(model);
+            final var delegate = new FitCount[1];
+            try (final var algorithm = new FitCount(state, 44, new Request[0], 10, 64, (request, plans, count) -> {
+                assertEquals(2, count);
+                for (int index = 0; index < count; index++) {
+                    final long expected = Double.doubleToRawLongBits(zero.applyAsDouble(plans[index]));
+                    assertEquals(expected, Double.doubleToRawLongBits(delegate[0].scoreAt(index, plans[index], zero)));
+                    assertEquals(expected, Double.doubleToRawLongBits(delegate[0].scoreAt(index, plans[index], zero)));
+                }
+                if (request == pending[0]) {
+                    assertEquals(Double.doubleToRawLongBits(0.0),
+                            Double.doubleToRawLongBits(delegate[0].scoreAt(0, plans[1], zero)));
+                    assertEquals(Double.doubleToRawLongBits(-0.0),
+                            Double.doubleToRawLongBits(delegate[0].scoreAt(0, plans[0], zero)));
+                    assertEquals(Double.POSITIVE_INFINITY, delegate[0].scoreAt(0, plans[0], unregistered));
+                }
+                return new int[]{0};
+            })) {
+                delegate[0] = algorithm;
+                state.schedule(batchScorePolicy(state, algorithm, memoryLimit, List.of(zero)), pending);
+                final var committed = new Assignment[]{state.placement(5)};
+                assertEquals(Double.doubleToRawLongBits(-0.0),
+                        Double.doubleToRawLongBits(algorithm.scoreAt(0, committed, zero)));
+                final long nanBits = 0x7ff8000000000042L;
+                assertEquals(nanBits, Double.doubleToRawLongBits(algorithm.scoreAt(-1, committed,
+                        plan -> Double.longBitsToDouble(nanBits))));
+                assertEquals(memoryLimit == 0 ? 17 : 8, algorithm.batchCounters().get("raw_score_evaluations"));
+                assertEquals(memoryLimit == 0 ? 0 : 9, algorithm.batchCounters().get("raw_score_cache_hits"));
+                assertTrue(algorithm.batchCounters().get("optimizer_workspace_peak_bytes") <= memoryLimit);
+            }
+        }
+    }
+
+    @Test
+    void rawScoreRowsYieldToGrowingGeometryAndCanBeAdmittedAgain() throws Exception {
+        final var model = model(alloc(1, new int[]{18, 19, 20}, 9, 0, 100),
+                alloc(2, new int[]{18, 19, 20}, 3, 0, 100), alloc(3, new int[]{18, 19, 20}, 20, 0, 100),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1).setMedia(Media.SSD)),
+                rules(Constraints.newBuilder().setId(3).setKind(Kind.DISK).setParent(2).setMedia(Media.SSD)),
+                rules(Constraints.newBuilder().setId(4).setKind(Kind.DISK).setParent(3).setMedia(Media.SSD)),
+                rules(Constraints.newBuilder().setId(5).setKind(Kind.SHARD)
+                        .addDisks(DiskPlan.newBuilder().setMedia(Media.SSD).setLayout(Layout.LINEAR).setExtents(6)
+                                .setSpindles(0).setIops(0).setMinDevices(1).setMaxDevices(2)
+                                .setMinStripes(1).setMaxStripes(2))),
+                resource(1, 0, 1), resource(2, 0, 1), resource(3, 0, 1),
+                resource(4, 1, 2), resource(5, 2, 2), resource(6, 3, 3), resource(7, 3, 3),
+                resource(8, 3, 4), resource(9, 3, 4), resource(10, 0, 5), resource(11, 0, 5),
+                resource(12, 0, 5), resource(13, 0, 5), resource(14, 0, 5), resource(15, 0, 5));
+        final var pending = new Request[6];
+        for (int index = 0; index < pending.length; index++) {
+            pending[index] = new Request(10 + index);
+        }
+        final int[] hosts = {1, 2, 2, 1, 2, 3};
+        final var states = new Engine[2];
+        for (int mode = 0; mode < states.length; mode++) {
+            final var state = new Engine(model);
+            states[mode] = state;
+            final var geometric = new GreedyPlanner(state).normalizedResidualL2Scorer();
+            final var delegate = new FitCount[1];
+            try (final var algorithm = new FitCount(state, 44, new Request[0], 10, 64, (request, plans, count) -> {
+                int selected = -1;
+                for (int index = 0; index < count; index++) {
+                    assertEquals(Double.doubleToRawLongBits(geometric.applyAsDouble(plans[index])),
+                            Double.doubleToRawLongBits(delegate[0].scoreAt(index, plans[index], geometric)));
+                    if (plans[index][0].host() == hosts[request.resource(0) - 10]) {
+                        selected = index;
+                    }
+                }
+                assertTrue(selected >= 0);
+                return new int[]{selected};
+            })) {
+                delegate[0] = algorithm;
+                state.schedule(batchScorePolicy(state, algorithm, 972, mode == 0 ? List.of() : List.of(geometric)), pending);
+                assertEquals(8, algorithm.plannerCalls());
+                assertEquals(10, algorithm.batchCounters().get("geometry_cache_hits"));
+                assertEquals(mode == 0 ? 16 : 15, algorithm.batchCounters().get("raw_score_evaluations"));
+                assertEquals(mode == 0 ? 0 : 1, algorithm.batchCounters().get("raw_score_cache_hits"));
+                assertTrue(algorithm.batchCounters().get("optimizer_workspace_peak_bytes") <= 972);
+                if (mode == 1) {
+                    assertEquals(972, algorithm.batchCounters().get("optimizer_workspace_peak_bytes"));
+                    assertPortfolioPlacements(states[0], state, pending);
+                }
+            }
+        }
+    }
+
+    private static SchedulingAlgorithm batchScorePolicy(Engine state, FitCount delegate, long memoryLimit,
+            List<ToDoubleFunction<Assignment[]>> scorers) {
+        return new SchedulingAlgorithm(state) {
+            @Override
+            public void schedule(Request request) {
+                delegate.schedule(request);
+            }
+
+            @Override
+            public void schedule(Request[] requests) {
+                delegate.scheduleBatch(requests, memoryLimit, delegate::schedule, scorers);
+            }
+
+            @Override
+            public void capacityChanged(int host) {
+                delegate.capacityChanged(host);
+            }
+        };
+    }
+
+    private static void assertPortfolioRawScoreCounters(SchedulingAlgorithm algorithm) {
+        final var counters = algorithm.counters();
+        final long requests = counters.get("least_scores") + counters.get("geometric_scores");
+        assertEquals(requests, counters.get("raw_score_evaluations") + counters.get("raw_score_cache_hits"));
+        assertTrue(counters.get("raw_score_evaluations") < requests);
     }
 
     private static void assertPortfolioPlacements(Engine expected, Engine actual, Request[] requests) {

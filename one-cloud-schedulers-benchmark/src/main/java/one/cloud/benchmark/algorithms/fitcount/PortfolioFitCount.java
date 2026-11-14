@@ -1,5 +1,6 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -25,6 +26,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     private final FitCount delegate;
     private final CandidateSampler sampler;
     private final ToDoubleFunction<Assignment[]> fragmentation, least, geometric;
+    private final List<ToDoubleFunction<Assignment[]>> batchScorers;
     private final TopK fragmented, spread, packed;
     private final int randomCandidates, cap, cacheRows;
     private final long seed;
@@ -106,6 +108,18 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                 ? planner.cpuRamFragmentationScorer(catalogue.requests()) : planner.gpuFragmentationScorer(catalogue.requests());
         least = leastCandidates == 0 ? null : KubernetesResourceScoring.scorer(planner, Strategy.LEAST_ALLOCATED);
         geometric = geometricCandidates == 0 ? null : planner.normalizedResidualL2Scorer();
+        if (bulk) {
+            final var scorers = new ArrayList<ToDoubleFunction<Assignment[]>>(2);
+            if (least != null) {
+                scorers.add(least);
+            }
+            if (geometric != null) {
+                scorers.add(geometric);
+            }
+            batchScorers = List.copyOf(scorers);
+        } else {
+            batchScorers = List.of();
+        }
         delegate = weighted ? FitCount.weighted(context, seed, catalogue, cap, cacheRows, maxTotalFit, this::select)
                 : new FitCount(context, seed, catalogue, cap, cacheRows, maxTotalFit, this::select);
     }
@@ -119,7 +133,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     @Override
     public void schedule(Request[] requests) {
         if (bulk && requests.length > 1) {
-            delegate.scheduleBatch(requests, BATCH_MEMORY_LIMIT, this::schedule);
+            delegate.scheduleBatch(requests, BATCH_MEMORY_LIMIT, this::schedule, batchScorers);
         } else {
             for (final var request : requests) {
                 schedule(request);
@@ -148,12 +162,14 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                 fragmentationScores++;
             }
             if (least != null) {
-                spread.offer(index, -least.applyAsDouble(plans[index]),
+                final double score = bulk ? delegate.scoreAt(index, plans[index], least) : least.applyAsDouble(plans[index]);
+                spread.offer(index, -score,
                         mix64(decision ^ mix64(index) ^ LEAST_SALT));
                 leastScores++;
             }
             if (geometric != null) {
-                packed.offer(index, geometric.applyAsDouble(plans[index]),
+                final double score = bulk ? delegate.scoreAt(index, plans[index], geometric) : geometric.applyAsDouble(plans[index]);
+                packed.offer(index, score,
                         mix64(decision ^ mix64(index) ^ GEOMETRIC_SALT));
                 geometricScores++;
             }
@@ -281,7 +297,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
             result.put("objective", "sequential-geometric-portfolio-frequency-weighted-physical-copy-loss");
             result.put("cache_scope", "one-schedule-batch");
             result.put("workspace_limit_bytes", Long.toString(BATCH_MEMORY_LIMIT));
-            result.put("workspace_scope", "batch loss rows, retained geometry, anchor slots and physical shape; excludes shared planner and persistent physical cache");
+            result.put("workspace_scope", "batch loss rows, retained geometry, raw score rows, anchor slots and physical shape; excludes shared planner and persistent physical cache");
         }
         return result;
     }

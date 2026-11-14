@@ -1,10 +1,12 @@
 package one.cloud.benchmark.algorithms.fitcount;
 
 import java.util.Arrays;
+import java.util.List;
 import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.SplittableRandom;
 import java.util.function.Consumer;
+import java.util.function.ToDoubleFunction;
 
 import one.cloud.benchmark.algorithms.AlgorithmDefinition;
 import one.cloud.benchmark.algorithms.AlgorithmParameters;
@@ -48,9 +50,12 @@ public final class FitCount extends SchedulingAlgorithm {
     private LinkedHashMap<FitCountCache.Sample, int[]> batchLosses;
     private int[] batchSlots, batchHostOffsets;
     private Assignment[][] batchGeometry;
+    private List<ToDoubleFunction<Assignment[]>> batchScorers = List.of();
+    private double[][] batchScores;
     private int batchRowLimit;
-    private long batchBaseBytes, batchRowBytes, batchGeometryBytes, batchGeometryLimit;
+    private long batchBaseBytes, batchRowBytes, batchGeometryBytes, batchGeometryLimit, batchScoreBytes;
     private long marginalEvaluations, marginalCacheHits, geometryCacheHits, batchWorkspacePeak;
+    private long rawScoreEvaluations, rawScoreCacheHits;
 
     public static AlgorithmDefinition definition() {
         return AlgorithmDefinition.withCatalogue(
@@ -180,6 +185,12 @@ public final class FitCount extends SchedulingAlgorithm {
     }
 
     void scheduleBatch(Request[] requests, long memoryLimit, Consumer<Request> scheduler) {
+        scheduleBatch(requests, memoryLimit, scheduler, List.of());
+    }
+
+    /** Registered scorers stay fixed for the batch and depend only on physical geometry and host capacity. */
+    void scheduleBatch(Request[] requests, long memoryLimit, Consumer<Request> scheduler,
+            List<ToDoubleFunction<Assignment[]>> scorers) {
         if (batchLosses != null) {
             throw new IllegalStateException("A FitCount batch is already active");
         }
@@ -199,6 +210,7 @@ public final class FitCount extends SchedulingAlgorithm {
         }
         batchHostOffsets[context.model().hostCount + 1] = slot;
         batchLosses = new LinkedHashMap<>(16, .75f, true);
+        batchScorers = scorers;
         batchBaseBytes = baseBytes;
         batchRowBytes = 96L + 4L * hosts.length;
         batchWorkspacePeak = Math.max(batchWorkspacePeak, baseBytes);
@@ -208,6 +220,7 @@ public final class FitCount extends SchedulingAlgorithm {
                 final var shape = Catalogue.key(context.model(), request);
                 if (!shape.equals(batchShape)) {
                     batchLosses.clear();
+                    clearBatchScores();
                     batchGeometry = null;
                     batchGeometryBytes = 0;
                     batchGeometryLimit = 0;
@@ -237,6 +250,8 @@ public final class FitCount extends SchedulingAlgorithm {
             batchLosses = null;
             batchSlots = null;
             batchHostOffsets = null;
+            clearBatchScores();
+            batchScorers = List.of();
             batchGeometry = null;
             batchGeometryBytes = 0;
             batchGeometryLimit = 0;
@@ -246,7 +261,63 @@ public final class FitCount extends SchedulingAlgorithm {
 
     Map<String, Long> batchCounters() {
         return Map.of("marginal_evaluations", marginalEvaluations, "marginal_cache_hits", marginalCacheHits,
-                "geometry_cache_hits", geometryCacheHits, "optimizer_workspace_peak_bytes", batchWorkspacePeak);
+                "geometry_cache_hits", geometryCacheHits, "raw_score_evaluations", rawScoreEvaluations,
+                "raw_score_cache_hits", rawScoreCacheHits, "optimizer_workspace_peak_bytes", batchWorkspacePeak);
+    }
+
+    double scoreAt(int candidateIndex, Assignment[] plan, ToDoubleFunction<Assignment[]> scorer) {
+        double[] scores = null;
+        int slot = -1;
+        if (batchGeometry != null && candidateIndex >= 0 && candidateIndex < planCount
+                && plans[candidateIndex] == plan) {
+            scores = batchScoreRow(scorer);
+            if (scores != null) {
+                slot = batchSlots[candidateIndex];
+                final double cached = scores[slot];
+                if (!Double.isNaN(cached)) {
+                    rawScoreCacheHits++;
+                    return cached;
+                }
+            }
+        }
+        rawScoreEvaluations++;
+        final double score = scorer.applyAsDouble(plan);
+        if (scores != null) {
+            scores[slot] = score;
+        }
+        return score;
+    }
+
+    private double[] batchScoreRow(ToDoubleFunction<Assignment[]> scorer) {
+        for (int index = 0; index < batchScorers.size(); index++) {
+            if (batchScorers.get(index) != scorer) {
+                continue;
+            }
+            if (batchScores != null && batchScores[index] != null) {
+                return batchScores[index];
+            }
+            final long indexBytes = batchScores == null ? 16L + 8L * batchScorers.size() : 0;
+            final long rowBytes = 16L + 8L * hosts.length;
+            if (indexBytes + rowBytes > batchGeometryLimit - batchGeometryBytes - batchScoreBytes) {
+                return null;
+            }
+            if (batchScores == null) {
+                batchScores = new double[batchScorers.size()][];
+                batchScoreBytes += indexBytes;
+            }
+            final var scores = new double[hosts.length];
+            Arrays.fill(scores, Double.NaN);
+            batchScores[index] = scores;
+            batchScoreBytes += rowBytes;
+            recordBatchWorkspace();
+            return scores;
+        }
+        return null;
+    }
+
+    private void clearBatchScores() {
+        batchScores = null;
+        batchScoreBytes = 0;
     }
 
     public Assignment[] select(Request request) {
@@ -377,6 +448,10 @@ public final class FitCount extends SchedulingAlgorithm {
         final var physical = plan == null ? NO_PHYSICAL_PLAN : plan;
         final long bytes = geometryBytes(physical);
         if (bytes <= batchGeometryLimit - batchGeometryBytes) {
+            // Optional scores must not prevent geometry from using its original budget.
+            if (bytes > batchGeometryLimit - batchGeometryBytes - batchScoreBytes) {
+                clearBatchScores();
+            }
             batchGeometry[slot] = physical;
             batchGeometryBytes += bytes;
             recordBatchWorkspace();
@@ -394,7 +469,7 @@ public final class FitCount extends SchedulingAlgorithm {
 
     private void recordBatchWorkspace() {
         batchWorkspacePeak = Math.max(batchWorkspacePeak,
-                batchBaseBytes + batchGeometryBytes + batchRowBytes * batchLosses.size());
+                batchBaseBytes + batchGeometryBytes + batchScoreBytes + batchRowBytes * batchLosses.size());
     }
 
     private double supply(int resource, int dimension) {
@@ -686,6 +761,13 @@ public final class FitCount extends SchedulingAlgorithm {
             final int start = batchHostOffsets[host], end = batchHostOffsets[host + 1];
             for (final var losses : batchLosses.values()) {
                 Arrays.fill(losses, start, end, Integer.MIN_VALUE);
+            }
+            if (batchScores != null) {
+                for (final var scores : batchScores) {
+                    if (scores != null) {
+                        Arrays.fill(scores, start, end, Double.NaN);
+                    }
+                }
             }
             if (batchGeometry != null) {
                 for (int slot = start; slot < end; slot++) {

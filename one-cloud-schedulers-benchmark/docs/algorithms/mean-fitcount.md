@@ -148,11 +148,19 @@ inputs and settings it preserves complete assignments and the RNG sequence.
 Every request rebuilds its shortlist against current feasible candidates;
 LeastAllocated and geometric scores, source tie keys and mean weights retain
 the ordinary rule. The adaptive total-fit threshold is refreshed after commits.
-Physical geometry and signed copy losses are shared only between adjacent
-requests with the same physical shape in one announced `schedule(Request[])` call. The shared batch
-workspace is bounded to 64 MiB and released on return. It excludes the existing
-planner and persistent physical cache. Use `--bulk-size 100` for CLI service
-bursts; singleton calls follow the ordinary portfolio path.
+Physical geometry, signed copy losses and raw LeastAllocated/geometric scores
+are shared only between adjacent requests with the same physical shape in one
+announced `schedule(Request[])` call. Raw scores use stable host/NUMA anchor slots
+and refresh when the host's physical capacity changes. Feasibility, random
+sampling, source tie keys and TopK selection remain fresh for every request.
+The shared batch workspace is bounded to 64 MiB and released on return. Optional
+raw-score rows use only space left after the loss-row reservation and retained
+geometry; geometry can reclaim that space when needed. The workspace excludes
+the existing planner and persistent physical cache. `least_scores` and
+`geometric_scores` retain their logical visit counts; `raw_score_evaluations`
+and `raw_score_cache_hits` distinguish actual raw-score calls from reuse.
+Use `--bulk-size 100` for CLI service bursts; singleton calls follow the ordinary
+portfolio path.
 
 ## What portfolio fragmentation measures
 
