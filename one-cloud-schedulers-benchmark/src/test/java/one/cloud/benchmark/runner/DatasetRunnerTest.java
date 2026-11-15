@@ -11,17 +11,20 @@ import org.junit.jupiter.api.Test;
 import one.cloud.benchmark.algorithms.AlgorithmRegistry;
 import one.cloud.benchmark.algorithms.fitcount.FitCount;
 import one.cloud.benchmark.algorithms.fgd.Fgd;
+import one.cloud.benchmark.algorithms.yp.YpPlanner;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Constraints;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Link;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Record;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.Relation;
+import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.ClusterSpec;
 import one.cloud.benchmark.model.Request;
 
 import static one.cloud.benchmark.testsupport.TestModel.alloc;
+import static one.cloud.benchmark.testsupport.TestModel.model;
 import static one.cloud.benchmark.testsupport.TestModel.resource;
 import static one.cloud.benchmark.testsupport.TestModel.rules;
 import static one.cloud.benchmark.testsupport.TestModel.trace;
@@ -34,6 +37,33 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DatasetRunnerTest {
+    @Test
+    void yPlannerRetriesAcrossWindowsAndAccountsForLateAdmissionOnce() throws Exception {
+        final var cluster = model(
+                alloc(1, new int[]{1}, 3), alloc(2, new int[]{1}, 2), alloc(3, new int[]{1}, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 2), resource(3, 2, 2),
+                resource(4, 3, 2), resource(5, 3, 2));
+        final var requests = new Request[]{new Request(2), new Request(3), new Request(4), new Request(5)};
+        final var scenario = Scenario.fromAtomicEvents(cluster, requests,
+                new int[]{1, 2, 3, 4, -4, -1, -2, -3}, requests, "yp-retries");
+        final var result = DatasetRunner.run(scenario, DatasetRunner.Options.defaults(),
+                (context, seed, catalogue) -> new YpPlanner((Engine) context, seed, ignored -> {}, 1, 100, 4));
+        assertEquals(4, result.attemptedUnits());
+        assertEquals(3, result.placedUnits());
+        assertEquals(3, result.removedUnits());
+        assertEquals(1, result.skippedRemovals());
+        assertEquals(6, result.requestedLogical()[1]);
+        assertEquals(5, result.admittedLogical()[1]);
+        assertEquals(0, result.refusedResourcesByAllocation()[2]);
+        assertEquals(1, result.refusedResourcesByAllocation()[3]);
+        assertEquals(1L, result.counters().get("yp_late_admissions"));
+        assertEquals(1L, result.counters().get("yp_cancelled"));
+        assertEquals(0L, result.counters().get("yp_pending"));
+        assertEquals(4, result.scheduling().count());
+    }
+
     @Test
     void computesNearestRankP90WithoutReplacingP95OrInventingLegacySamples() {
         final long[] samples = {20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1};

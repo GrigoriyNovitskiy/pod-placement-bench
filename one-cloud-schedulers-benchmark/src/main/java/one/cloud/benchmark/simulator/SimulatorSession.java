@@ -13,6 +13,7 @@ import one.cloud.benchmark.dataset.PlacementDatasetProtos.Kind;
 import one.cloud.benchmark.dataset.PlacementDatasetProtos.ResourceType;
 import one.cloud.benchmark.engine.Engine;
 import one.cloud.benchmark.engine.GreedyPlanner;
+import one.cloud.benchmark.engine.ReplayMaintenance;
 import one.cloud.benchmark.engine.SchedulingAlgorithm;
 import one.cloud.benchmark.model.Assignment;
 import one.cloud.benchmark.model.Request;
@@ -626,6 +627,10 @@ public final class SimulatorSession implements AutoCloseable {
             final long start;
             final long elapsed;
             String status;
+            final var maintenance = algorithm instanceof ReplayMaintenance policy ? policy : null;
+            if (!create && maintenance != null) {
+                maintenance.cancel(request);
+            }
             if (create) {
                 if (desired[unit]) {
                     throw new IllegalArgumentException("Request is already active");
@@ -637,25 +642,10 @@ public final class SimulatorSession implements AutoCloseable {
                 engine.schedule(algorithm, request);
                 elapsed = System.nanoTime() - start;
                 creates.add(elapsed);
-                for (final var assignment : engine.drainRelocations()) {
-                    for (final var members : hostMembers) {
-                        if (members.remove(assignment.resource()) != null) {
-                            break;
-                        }
-                    }
-                    hostMembers.get(assignment.host()).put(assignment.resource(), assignment);
-                }
-                admitted[unit] = engine.placement(request.resource(0)) != null;
-                status = admitted[unit] ? "placed" : "rejected";
-                if (admitted[unit]) {
-                    placed++;
-                    active++;
-                    count(request, 1, 1);
-                    count(request, 2, 1);
-                    for (int member = 0; member < request.size(); member++) {
-                        final var assignment = engine.placement(request.resource(member));
-                        hostMembers.get(assignment.host()).put(assignment.resource(), assignment);
-                    }
+                trackRelocations();
+                status = engine.placement(request.resource(0)) == null ? "rejected" : "placed";
+                if (status.equals("placed")) {
+                    admit(unit, request);
                 }
             } else if (!desired[unit]) {
                 throw new IllegalArgumentException("Request is not logically active");
@@ -684,6 +674,21 @@ public final class SimulatorSession implements AutoCloseable {
                 skipped++;
                 status = "skipped";
             }
+            if (maintenance != null) {
+                final var late = maintenance.advance(1);
+                trackRelocations();
+                for (final var admittedRequest : late) {
+                    final int admittedUnit = resourceUnits[admittedRequest.resource(0)];
+                    if (admittedUnit < 0 || input.requests()[admittedUnit] != admittedRequest
+                            || !desired[admittedUnit] || admitted[admittedUnit]) {
+                        throw new IllegalStateException("Maintenance admitted a request outside its pending lifetime");
+                    }
+                    admit(admittedUnit, admittedRequest);
+                }
+                if (create && admitted[unit]) {
+                    status = "placed";
+                }
+            }
             lastEvent = event(eventIndex);
             lastEvent.addProperty("status", status);
             lastEvent.addProperty("durationMs", elapsed / 1e6);
@@ -692,6 +697,33 @@ public final class SimulatorSession implements AutoCloseable {
                 members.add(member(this, request.resource(index), false));
             }
             lastEvent.add("members", members);
+        }
+
+        private void trackRelocations() {
+            for (final var assignment : engine.drainRelocations()) {
+                final int unit = resourceUnits[assignment.resource()];
+                if (unit < 0 || !admitted[unit]) {
+                    continue;
+                }
+                for (final var members : hostMembers) {
+                    if (members.remove(assignment.resource()) != null) {
+                        break;
+                    }
+                }
+                hostMembers.get(assignment.host()).put(assignment.resource(), assignment);
+            }
+        }
+
+        private void admit(int unit, Request request) {
+            admitted[unit] = true;
+            placed++;
+            active++;
+            count(request, 1, 1);
+            count(request, 2, 1);
+            for (int member = 0; member < request.size(); member++) {
+                final var assignment = engine.placement(request.resource(member));
+                hostMembers.get(assignment.host()).put(assignment.resource(), assignment);
+            }
         }
 
         private void count(Request request, int category, int delta) {
