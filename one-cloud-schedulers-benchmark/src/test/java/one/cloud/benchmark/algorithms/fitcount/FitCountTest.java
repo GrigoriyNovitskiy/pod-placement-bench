@@ -692,6 +692,97 @@ class FitCountTest {
     }
 
     @Test
+    void randomPrefilterLeavesOtherSourcesAndTheCompleteMeanAvailable() throws Exception {
+        final var model = model(
+                alloc(1, new int[]{1, 2}, 4, 5), alloc(2, new int[]{1, 2}, 3, 4),
+                alloc(3, new int[]{1}, 4), alloc(4, new int[]{2}, 2), alloc(5, new int[]{1, 2}, 1, 1),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 2, 1), resource(3, 3, 2), resource(4, 4, 2), resource(5, 5, 2));
+        final var cpu = new Request(3);
+        final var ram = new Request(4);
+        final var demand = new Request(5);
+        final var catalogues = new Request[][]{{cpu, ram, ram}, {cpu, cpu, cpu, ram, ram}};
+        for (int frequency = 0; frequency < catalogues.length; frequency++) {
+            for (final int least : new int[]{0, 1}) {
+                final var state = new Engine(model);
+                final var parameters = Map.of("randomPrefilter", new JsonPrimitive(true),
+                        "randomCandidates", new JsonPrimitive(least == 0 ? 4 : 1),
+                        "geometricCandidates", new JsonPrimitive(0), "leastCandidates", new JsonPrimitive(least));
+                try (final var algorithm = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                        "geometric-portfolio-mean-fitcount", parameters), state, catalogues[frequency])) {
+                    for (int cycle = 0; cycle < 2; cycle++) {
+                        state.schedule(algorithm, demand);
+                        assertEquals(least == 0 || frequency == 1 ? 2 : 1, state.placement(5).host());
+                        state.remove(demand);
+                    }
+                    assertEquals(2, algorithm.counters().get("random_prefilter_calls"));
+                    assertEquals(2, algorithm.counters().get("random_prefilter_surviving_plans"));
+                    assertEquals(0, algorithm.counters().get("random_prefilter_noops"));
+                    assertEquals(least == 0 ? 2 : 4, algorithm.counters().get("retained_plans"));
+                    assertEquals(4L * least, algorithm.counters().get("least_scores"));
+                }
+            }
+        }
+    }
+
+    @Test
+    void randomPrefilterNoopsPreserveTheOriginalRandomSequence() throws Exception {
+        final var records = new ArrayList<Record>();
+        records.add(rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)));
+        records.add(rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)));
+        for (int host = 1; host <= 5; host++) {
+            records.add(alloc(host, new int[]{1, 2}, host + 3, 20));
+            records.add(resource(host, host, 1));
+        }
+        records.add(alloc(6, new int[]{1, 2}, 1, 1));
+        records.add(alloc(7, new int[]{1}, 1000));
+        records.add(alloc(8, new int[]{1}, 4));
+        for (int resource = 6; resource <= 19; resource++) {
+            records.add(resource(resource, resource == 18 ? 7 : resource == 19 ? 8 : 6, 2));
+        }
+        final var model = model(records.toArray(Record[]::new));
+        final var pending = new Request[12];
+        for (int index = 0; index < pending.length; index++) {
+            pending[index] = new Request(index + 6);
+        }
+        final String id = "geometric-portfolio-mean-fitcount";
+        assertEquals(false, AlgorithmRegistry.defaults(id).parameters().get("randomPrefilter").getAsBoolean());
+        for (final var catalogue : new Request[][]{new Request[0],
+                {new Request(18), new Request(19)}, {pending[0]}}) {
+            final var expected = new Engine(model);
+            final var actual = new Engine(model);
+            final var unfiltered = Map.of("randomCandidates", new JsonPrimitive(1),
+                    "geometricCandidates", new JsonPrimitive(0), "leastCandidates", new JsonPrimitive(0),
+                    "fitCap", new JsonPrimitive(1), "cacheRows", new JsonPrimitive(1));
+            final var filtered = Map.of("randomCandidates", new JsonPrimitive(1),
+                    "geometricCandidates", new JsonPrimitive(0), "leastCandidates", new JsonPrimitive(0),
+                    "fitCap", new JsonPrimitive(1), "cacheRows", new JsonPrimitive(1),
+                    "randomPrefilter", new JsonPrimitive(true));
+            try (final var reference = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(id, unfiltered), expected, catalogue);
+                    final var algorithm = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(id, filtered), actual, catalogue)) {
+                boolean firstHostSeen = false;
+                for (int cycle = 0; cycle < 2; cycle++) {
+                    for (final var request : pending) {
+                        expected.schedule(reference, request);
+                        actual.schedule(algorithm, request);
+                        assertPortfolioGeometry(expected.placement(request.resource(0)), actual.placement(request.resource(0)));
+                        firstHostSeen |= expected.placement(request.resource(0)).host() == 1;
+                        expected.remove(request);
+                        actual.remove(request);
+                    }
+                }
+                assertTrue(firstHostSeen);
+                assertEquals(24, algorithm.counters().get("random_prefilter_calls"));
+                assertEquals(24, algorithm.counters().get("random_prefilter_noops"));
+                assertEquals(120, algorithm.counters().get("random_prefilter_surviving_plans"));
+                assertNull(reference.counters().get("random_prefilter_calls"));
+                assertNull(reference.parameters().get("random_prefilter"));
+            }
+        }
+    }
+
+    @Test
     void weightedLossPreservesGainsFromGreedyNumaPacking() throws Exception {
         final var model = model(
                 alloc(1, new int[]{1, 2}, 7, 2), alloc(2, new int[]{1, 2}, 4, 1),
@@ -711,6 +802,16 @@ class FitCountTest {
         try (final var scheduler = FitCount.weighted(state, 0, new Request[]{sample}, 10, 16)) {
             state.schedule(scheduler, demand);
             assertEquals(2, state.placement(6).numa());
+        }
+        final var filtered = new Engine(model);
+        final var parameters = Map.of("randomCandidates", new JsonPrimitive(4),
+                "geometricCandidates", new JsonPrimitive(0), "leastCandidates", new JsonPrimitive(0),
+                "randomPrefilter", new JsonPrimitive(true));
+        try (final var algorithm = AlgorithmRegistry.create(new AlgorithmRegistry.Settings(
+                "geometric-portfolio-mean-fitcount", parameters), filtered, new Request[]{sample})) {
+            filtered.schedule(algorithm, demand);
+            assertEquals(2, filtered.placement(6).numa());
+            assertEquals(1, algorithm.counters().get("random_prefilter_surviving_plans"));
         }
     }
 
@@ -1277,6 +1378,71 @@ class FitCountTest {
     }
 
     @Test
+    void fc1GeometricPortfolioBulkPresetMatchesExplicitConfiguration() throws Exception {
+        final String id = "fc1-geometric-portfolio-mean-bulk-fitcount";
+        final String ordinary = "geometric-portfolio-mean-bulk-fitcount";
+        final var defaults = AlgorithmRegistry.defaults(id);
+        assertEquals(Map.of("randomCandidates", new JsonPrimitive(16), "geometricCandidates", new JsonPrimitive(8),
+                "leastCandidates", new JsonPrimitive(4), "seed", new JsonPrimitive(44),
+                "fitCap", new JsonPrimitive(10), "cacheRows", new JsonPrimitive(64),
+                "maxTotalFit", new JsonPrimitive(0)), defaults.parameters());
+        for (final String existing : new String[]{"portfolio-fitcount", "portfolio-mean-fitcount",
+                "geometric-portfolio-mean-fitcount", ordinary}) {
+            final var parameters = AlgorithmRegistry.defaults(existing).parameters();
+            final boolean geometric = existing.startsWith("geometric-");
+            assertEquals(new JsonPrimitive(20), parameters.get("randomCandidates"));
+            assertEquals(new JsonPrimitive(4), parameters.get(geometric ? "geometricCandidates" : "fragmentationCandidates"));
+            assertEquals(new JsonPrimitive(4), parameters.get("leastCandidates"));
+            assertEquals(geometric ? new JsonPrimitive(false) : null, parameters.get("randomPrefilter"));
+            assertEquals(geometric ? 8 : 7, parameters.size());
+        }
+        assertThrows(IllegalArgumentException.class, () -> AlgorithmRegistry.normalize(
+                new AlgorithmRegistry.Settings(id, Map.of("randomPrefilter", new JsonPrimitive(false)))));
+        assertEquals(new JsonPrimitive(12), AlgorithmRegistry.normalize(new AlgorithmRegistry.Settings(id,
+                Map.of("randomCandidates", new JsonPrimitive(12)))).parameters().get("randomCandidates"));
+        final int hosts = 20, replicas = 100;
+        final var model = geometricPortfolioBatchModel(hosts, replicas);
+        final var pending = new Request[replicas];
+        for (int index = 0; index < replicas; index++) {
+            pending[index] = new Request(5 * hosts + 2 * index + 1, 5 * hosts + 2 * index + 2);
+        }
+        final int firstSample = 5 * hosts + 2 * replicas + 1;
+        final var samples = new Request[]{new Request(firstSample, firstSample + 1),
+                new Request(firstSample + 2, firstSample + 3), new Request(firstSample + 4, firstSample + 5)};
+        final var catalogue = Catalogue.full(model,
+                new Request[]{samples[0], samples[1], samples[1], samples[1], samples[1], samples[1],
+                        samples[1], samples[1], samples[1], samples[2], samples[2]}, samples);
+        final var expected = new Engine(model);
+        final var actual = new Engine(model);
+        final var parameters = Map.of("randomCandidates", new JsonPrimitive(16),
+                "geometricCandidates", new JsonPrimitive(8), "leastCandidates", new JsonPrimitive(4),
+                "randomPrefilter", new JsonPrimitive(true));
+        try (final var reference = AlgorithmRegistry.create(
+                new AlgorithmRegistry.Settings(ordinary, parameters), expected, catalogue);
+                final var algorithm = AlgorithmRegistry.create(defaults, actual, catalogue)) {
+            for (int cycle = 0; cycle < 2; cycle++) {
+                expected.schedule(reference, pending);
+                actual.schedule(algorithm, pending);
+                assertPortfolioPlacements(expected, actual, pending);
+                assertEquals(reference.parameters(), algorithm.parameters());
+                assertEquals(reference.counters(), algorithm.counters());
+                for (int index = pending.length - 1; index >= 0; index--) {
+                    if (expected.placement(pending[index].resource(0)) != null) {
+                        expected.remove(pending[index]);
+                        actual.remove(pending[index]);
+                    }
+                }
+            }
+            assertEquals("full", algorithm.parameters().get("catalogue_weight_mode"));
+            assertEquals("11", algorithm.parameters().get("catalogue_weight_mass"));
+            assertEquals("first-scarce-physical-profile", algorithm.parameters().get("random_prefilter"));
+            assertTrue(algorithm.counters().get("random_prefilter_calls") > 0);
+            assertTrue(algorithm.counters().get("random_prefilter_surviving_plans")
+                    < algorithm.counters().get("candidate_plans"));
+        }
+    }
+
+    @Test
     void geometricPortfolioBulkMatchesSequentialWithFullWeightsAndChangingShortlists() throws Exception {
         final String ordinary = "geometric-portfolio-mean-fitcount";
         final String bulk = "geometric-portfolio-mean-bulk-fitcount";
@@ -1296,31 +1462,51 @@ class FitCountTest {
         for (final long seed : new long[]{44, 45}) {
             for (final int rows : new int[]{1, 64}) {
                 for (final double limit : new double[]{0, 4}) {
-                    final var parameters = Map.of("seed", new JsonPrimitive(seed),
-                            "cacheRows", new JsonPrimitive(rows), "maxTotalFit", new JsonPrimitive(limit));
-                    final var expected = new Engine(model);
-                    final var actual = new Engine(model);
-                    try (final var sequential = AlgorithmRegistry.create(
-                            new AlgorithmRegistry.Settings(ordinary, parameters), expected, catalogue);
-                            final var batched = AlgorithmRegistry.create(
-                                    new AlgorithmRegistry.Settings(bulk, parameters), actual, catalogue)) {
-                        expected.schedule(sequential, pending);
-                        actual.schedule(batched, pending);
-                        assertPortfolioPlacements(expected, actual, pending);
-                        assertNull(actual.placement(pending[0].resource(0)));
-                        assertEquals(1, actual.placement(pending[1].resource(0)).host());
-                        for (final var counter : new String[]{"selector_calls", "candidate_plans", "candidate_hosts",
-                                "retained_plans", "retained_hosts", "geometric_scores", "least_scores", "shortlist_overlap"}) {
-                            assertEquals(sequential.counters().get(counter), batched.counters().get(counter), counter);
-                        }
-                        assertEquals("full", batched.parameters().get("catalogue_weight_mode"));
-                        assertEquals("one-schedule-batch", batched.parameters().get("cache_scope"));
-                        assertTrue(batched.counters().get("geometry_cache_hits") > 0);
-                        assertPortfolioRawScoreCounters(batched);
-                        assertTrue(batched.counters().get("raw_score_cache_hits") > 0);
-                        assertTrue(batched.counters().get("optimizer_workspace_peak_bytes") <= 64L << 20);
-                        if (rows == 64 && limit == 0) {
-                            assertTrue(batched.counters().get("marginal_cache_hits") > 0);
+                    for (final boolean prefilter : new boolean[]{false, true}) {
+                        final var parameters = Map.of("seed", new JsonPrimitive(seed),
+                                "cacheRows", new JsonPrimitive(rows), "maxTotalFit", new JsonPrimitive(limit),
+                                "randomPrefilter", new JsonPrimitive(prefilter));
+                        final var expected = new Engine(model);
+                        final var actual = new Engine(model);
+                        try (final var sequential = AlgorithmRegistry.create(
+                                new AlgorithmRegistry.Settings(ordinary, parameters), expected, catalogue);
+                                final var batched = AlgorithmRegistry.create(
+                                        new AlgorithmRegistry.Settings(bulk, parameters), actual, catalogue)) {
+                            for (int cycle = 0; cycle < 2; cycle++) {
+                                expected.schedule(sequential, pending);
+                                if (cycle == 0) {
+                                    actual.schedule(batched, pending);
+                                } else {
+                                    actual.schedule(batched, Arrays.copyOfRange(pending, 0, 2));
+                                    actual.schedule(batched, pending[2]);
+                                    actual.schedule(batched, new Request[]{pending[3]});
+                                    actual.schedule(batched, Arrays.copyOfRange(pending, 4, pending.length));
+                                }
+                                assertPortfolioPlacements(expected, actual, pending);
+                                assertNull(actual.placement(pending[0].resource(0)));
+                                assertEquals(1, actual.placement(pending[1].resource(0)).host());
+                                for (final var counter : new String[]{"selector_calls", "candidate_plans", "candidate_hosts",
+                                        "retained_plans", "retained_hosts", "geometric_scores", "least_scores", "shortlist_overlap",
+                                        "fitcount_samples", "random_prefilter_calls", "random_prefilter_surviving_plans",
+                                        "random_prefilter_noops"}) {
+                                    assertEquals(sequential.counters().get(counter), batched.counters().get(counter), counter);
+                                }
+                                for (int index = pending.length - 1; index >= 0; index--) {
+                                    if (expected.placement(pending[index].resource(0)) != null) {
+                                        expected.remove(pending[index]);
+                                        actual.remove(pending[index]);
+                                    }
+                                }
+                            }
+                            assertEquals("full", batched.parameters().get("catalogue_weight_mode"));
+                            assertEquals("one-schedule-batch", batched.parameters().get("cache_scope"));
+                            assertTrue(batched.counters().get("geometry_cache_hits") > 0);
+                            assertPortfolioRawScoreCounters(batched);
+                            assertTrue(batched.counters().get("raw_score_cache_hits") > 0);
+                            assertTrue(batched.counters().get("optimizer_workspace_peak_bytes") <= 64L << 20);
+                            if (rows == 64 && limit == 0) {
+                                assertTrue(batched.counters().get("marginal_cache_hits") > 0);
+                            }
                         }
                     }
                 }

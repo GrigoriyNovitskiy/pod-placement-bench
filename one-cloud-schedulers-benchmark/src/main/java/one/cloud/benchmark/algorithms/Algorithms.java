@@ -55,6 +55,7 @@ final class Algorithms {
         register(PortfolioFitCount.weightedDefinition());
         register(PortfolioFitCount.geometricWeightedDefinition());
         register(PortfolioFitCount.geometricWeightedBulkDefinition());
+        register(PortfolioFitCount.fc1GeometricWeightedBulkDefinition());
         register(MaskedFitCount.definition());
         register(WindowPortfolioFitCount.definition());
         register(RlPoolFitCount.definition());

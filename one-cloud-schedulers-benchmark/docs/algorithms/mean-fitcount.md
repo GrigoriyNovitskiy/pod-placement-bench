@@ -128,6 +128,7 @@ Random20 quota on a two-host cluster.
 | `rl-pool-mean-fitcount` | Random20 plus up to 8 policy proposals from an auxiliary pool of up to 44 | Mean |
 | `geometric-portfolio-mean-fitcount` | Random20 union LeastAllocated4 union geometric4 | Mean |
 | `geometric-portfolio-mean-bulk-fitcount` | The same shortlist, refreshed for each request | Mean, with batch-local physical reuse |
+| `fc1-geometric-portfolio-mean-bulk-fitcount` | FC1-filtered Random16 union geometric8 union LeastAllocated4 | Mean, with batch-local physical reuse |
 
 Quotas count plans, not distinct hosts. Unions deduplicate source indices and do
 not refill overlaps. All plans are generated before shortlisting. The geometric
@@ -161,6 +162,30 @@ the existing planner and persistent physical cache. `least_scores` and
 and `raw_score_cache_hits` distinguish actual raw-score calls from reuse.
 Use `--bulk-size 100` for CLI service bursts; singleton calls follow the ordinary
 portfolio path.
+
+Both geometric mean definitions accept `--param randomPrefilter=true` (default
+`false`). Before the random draw, this option evaluates the signed copy loss of
+exactly the first physical catalogue profile in current `T[r] / w[r]` order on
+all feasible plans. Random candidates are sampled uniformly from its minimum-loss
+ties; fewer surviving plans mean fewer random candidates, without refill.
+Geometric and LeastAllocated still rank the full feasible pool, and final Mean
+FitCount still includes every participating profile, including the first one.
+This changes only the random source; it does not guarantee that the final winner
+minimizes the first profile's loss.
+
+The profile is selected anew for every request. An absent profile uses the
+ordinary random pool; a zero-total or all-tied profile is not skipped in search
+of another one. Bulk uses the existing bounded physical-loss rows, which may be
+evicted; it does not cache the selected profile or survivor set across requests.
+Runtime parameters record `random_prefilter=first-scarce-physical-profile` only
+when enabled. The `random_prefilter_calls`, `random_prefilter_surviving_plans`
+and `random_prefilter_noops` counters describe its visits and filtering effect.
+
+`fc1-geometric-portfolio-mean-bulk-fitcount` is the same Mean Bulk FitCount
+with default quotas Random16, geometric8 and LeastAllocated4. Its FC1 prefilter
+is always enabled for the random source only. All three quotas remain adjustable
+through the existing parameters; `randomPrefilter` is not a configurable
+parameter for this definition.
 
 ## What portfolio fragmentation measures
 

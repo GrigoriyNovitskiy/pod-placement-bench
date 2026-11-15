@@ -623,6 +623,36 @@ public final class FitCount extends SchedulingAlgorithm {
         return Map.copyOf(result);
     }
 
+    int firstProfileCandidates(int count, int[] output) {
+        cache.beginOrder(totalFitLimit);
+        final var sample = cache.next();
+        if (sample == null) {
+            for (int index = 0; index < count; index++) {
+                output[index] = index;
+            }
+            return count;
+        }
+        fitCountSamples++;
+        int best = Integer.MAX_VALUE;
+        int retained = 0;
+        final int[] losses = batchRow(sample);
+        int[] counts = null;
+        for (int index = 0; index < count; index++) {
+            if (counts == null && (losses == null || losses[batchSlots[index]] == Integer.MIN_VALUE)) {
+                counts = cache.counts(sample);
+            }
+            final int loss = loss(sample, index, losses, counts);
+            if (loss < best) {
+                retained = 0;
+                best = loss;
+            }
+            if (loss == best) {
+                output[retained++] = index;
+            }
+        }
+        return retained;
+    }
+
     private int retainLexicographicBest(int candidates) {
         cache.beginOrder(totalFitLimit);
         for (var sample = cache.next(); sample != null; sample = cache.next()) {

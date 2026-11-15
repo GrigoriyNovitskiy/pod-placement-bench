@@ -31,47 +31,59 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     private final TopK fragmented, spread, packed;
     private final int randomCandidates, cap, cacheRows;
     private final long seed;
-    private final boolean bulk, weighted;
+    private final boolean bulk, weighted, randomPrefilter;
+    private int[] randomPool;
     private long attempts, attempt, selectorCalls, candidatePlans, candidateHosts, retainedPlans, retainedHosts;
     private long fragmentationScores, leastScores, geometricScores, overlap, cpuRamDecisions;
+    private long randomPrefilterCalls, randomPrefilterSurvivingPlans, randomPrefilterNoops;
 
     public static AlgorithmDefinition definition() {
-        return definition("portfolio-fitcount", "Portfolio + FitCount", false, false, false);
+        return definition("portfolio-fitcount", "Portfolio + FitCount", false, false, false, false);
     }
 
     public static AlgorithmDefinition weightedDefinition() {
-        return definition("portfolio-mean-fitcount", "Portfolio + Mean FitCount", true, false, false);
+        return definition("portfolio-mean-fitcount", "Portfolio + Mean FitCount", true, false, false, false);
     }
 
     public static AlgorithmDefinition geometricWeightedDefinition() {
-        return definition("geometric-portfolio-mean-fitcount", "Geometric portfolio + Mean FitCount", true, true, false);
+        return definition("geometric-portfolio-mean-fitcount", "Geometric portfolio + Mean FitCount", true, true, false, false);
     }
 
     public static AlgorithmDefinition geometricWeightedBulkDefinition() {
         return definition("geometric-portfolio-mean-bulk-fitcount",
-                "Geometric portfolio + Mean Bulk FitCount", true, true, true);
+                "Geometric portfolio + Mean Bulk FitCount", true, true, true, false);
+    }
+
+    public static AlgorithmDefinition fc1GeometricWeightedBulkDefinition() {
+        return definition("fc1-geometric-portfolio-mean-bulk-fitcount",
+                "FC1 geometric portfolio + Mean Bulk FitCount", true, true, true, true);
     }
 
     public static PortfolioFitCount geometricLexicographic(SchedulingContext context, long seed, Catalogue catalogue,
             FitCount.CandidateSelector baseSelector, int randomCandidates, int geometricCandidates,
             int leastCandidates, int cap, int cacheRows, double maxTotalFit, boolean bulk) {
         return new PortfolioFitCount(context, seed, catalogue, randomCandidates, 0, leastCandidates,
-                geometricCandidates, cap, cacheRows, maxTotalFit, false, bulk, baseSelector);
+                geometricCandidates, cap, cacheRows, maxTotalFit, false, bulk, baseSelector, false);
     }
 
     private static AlgorithmDefinition definition(String id, String name, boolean weighted, boolean geometric,
-            boolean bulk) {
-        return AlgorithmDefinition.withCatalogue(id, name,
-                List.of(Parameter.integer("randomCandidates", "Random candidates", "Число случайных планов.",
-                                20, 1, 64),
-                        geometric ? Parameter.integer("geometricCandidates", "Geometric candidates",
-                                "Число планов с минимальным normalized residual L2 score.", 4, 0, 16)
-                                : Parameter.integer("fragmentationCandidates", "Fragmentation candidates",
-                                        "Число планов с минимальной фрагментацией.", 4, 0, 16),
-                        Parameter.integer("leastCandidates", "LeastAllocated candidates",
-                                "Число планов с максимальным LeastAllocated score.", 4, 0, 16),
-                        AlgorithmParameters.SEED, AlgorithmParameters.FIT_CAP, AlgorithmParameters.CACHE_ROWS,
-                        AlgorithmParameters.MAX_TOTAL_FIT),
+            boolean bulk, boolean fc1Preset) {
+        final var options = new ArrayList<>(List.of(
+                Parameter.integer("randomCandidates", "Random candidates", "Число случайных планов.",
+                        fc1Preset ? 16 : 20, 1, 64),
+                geometric ? Parameter.integer("geometricCandidates", "Geometric candidates",
+                        "Число планов с минимальным normalized residual L2 score.", fc1Preset ? 8 : 4, 0, 16)
+                        : Parameter.integer("fragmentationCandidates", "Fragmentation candidates",
+                                "Число планов с минимальной фрагментацией.", 4, 0, 16),
+                Parameter.integer("leastCandidates", "LeastAllocated candidates",
+                        "Число планов с максимальным LeastAllocated score.", 4, 0, 16),
+                AlgorithmParameters.SEED, AlgorithmParameters.FIT_CAP, AlgorithmParameters.CACHE_ROWS,
+                AlgorithmParameters.MAX_TOTAL_FIT));
+        if (geometric && !fc1Preset) {
+            options.add(Parameter.bool("randomPrefilter", "Random prefilter",
+                    "Выбирать случайные планы среди минимальных потерь первого дефицитного профиля.", false).asAdvanced());
+        }
+        return AlgorithmDefinition.withCatalogue(id, name, List.copyOf(options),
                 (context, catalogue, parameters) -> new PortfolioFitCount(context,
                         parameters.get("seed").getAsLong(), catalogue,
                         parameters.get("randomCandidates").getAsInt(),
@@ -79,7 +91,8 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                         parameters.get("leastCandidates").getAsInt(),
                         geometric ? parameters.get("geometricCandidates").getAsInt() : 0,
                         parameters.get("fitCap").getAsInt(), parameters.get("cacheRows").getAsInt(),
-                        parameters.get("maxTotalFit").getAsDouble(), weighted, bulk, null));
+                        parameters.get("maxTotalFit").getAsDouble(), weighted, bulk, null,
+                        fc1Preset || (geometric && parameters.get("randomPrefilter").getAsBoolean())));
     }
 
     public PortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue) {
@@ -89,13 +102,13 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
     public PortfolioFitCount(SchedulingContext context, long seed, Request[] catalogue,
             int randomCandidates, int fragmentationCandidates, int leastCandidates, int cap, int cacheRows) {
         this(context, seed, Catalogue.sampled(catalogue), randomCandidates, fragmentationCandidates, leastCandidates, 0,
-                cap, cacheRows, 0, false, false, null);
+                cap, cacheRows, 0, false, false, null, false);
     }
 
     private PortfolioFitCount(SchedulingContext context, long seed, Catalogue catalogue,
             int randomCandidates, int fragmentationCandidates, int leastCandidates, int geometricCandidates,
             int cap, int cacheRows, double maxTotalFit, boolean weighted, boolean bulk,
-            FitCount.CandidateSelector baseSelector) {
+            FitCount.CandidateSelector baseSelector, boolean randomPrefilter) {
         super(context);
         if (randomCandidates < 1 || randomCandidates > 64 || fragmentationCandidates < 0
                 || fragmentationCandidates > 16 || leastCandidates < 0 || leastCandidates > 16
@@ -106,6 +119,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
         this.bulk = bulk;
         this.weighted = weighted;
         this.baseSelector = baseSelector;
+        this.randomPrefilter = randomPrefilter;
         this.randomCandidates = randomCandidates;
         this.cap = cap;
         this.cacheRows = cacheRows;
@@ -156,8 +170,7 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
         selectorCalls++;
         candidatePlans += count;
         candidateHosts += hosts(plans, null, count);
-        final var base = baseSelector == null ? sampler.sample(count, randomCandidates)
-                : baseSelector.select(request, plans, count);
+        final var base = baseSelector == null ? sampleRandom(count) : baseSelector.select(request, plans, count);
         if (base.length == count) {
             retainedPlans += count;
             retainedHosts += hosts(plans, base, base.length);
@@ -204,6 +217,26 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
         retainedPlans += retained;
         retainedHosts += hosts(plans, union, retained);
         return retained == union.length ? union : Arrays.copyOf(union, retained);
+    }
+
+    private int[] sampleRandom(int count) {
+        if (!randomPrefilter) {
+            return sampler.sample(count, randomCandidates);
+        }
+        if (randomPool == null || randomPool.length < count) {
+            randomPool = new int[count];
+        }
+        final int retained = delegate.firstProfileCandidates(count, randomPool);
+        randomPrefilterCalls++;
+        randomPrefilterSurvivingPlans += retained;
+        if (retained == count) {
+            randomPrefilterNoops++;
+        }
+        final var selected = sampler.sample(retained, randomCandidates);
+        for (int index = 0; index < selected.length; index++) {
+            selected[index] = randomPool[selected[index]];
+        }
+        return selected;
     }
 
     private static int hosts(Assignment[][] plans, int[] indices, int count) {
@@ -304,6 +337,9 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                 "geometric_candidates", Integer.toString(packed.indices.length),
                 "fragmentation_source", context.model().gpus == null ? "cpu_ram" : "gpu_devices",
                 "copy_cap", Integer.toString(cap), "cache_rows", Integer.toString(cacheRows)));
+        if (randomPrefilter) {
+            result.put("random_prefilter", "first-scarce-physical-profile");
+        }
         if (bulk) {
             result.put("profile", weighted ? "geometric-portfolio-mean-bulk-fitcount-v1"
                     : "geometric-portfolio-lex-bulk-fitcount-v1");
@@ -328,6 +364,11 @@ public final class PortfolioFitCount extends SchedulingAlgorithm {
                 Map.entry("least_scores", leastScores), Map.entry("geometric_scores", geometricScores),
                 Map.entry("shortlist_overlap", overlap),
                 Map.entry("fragmentation_cpu_ram_decisions", cpuRamDecisions)));
+        if (randomPrefilter) {
+            result.putAll(Map.of("random_prefilter_calls", randomPrefilterCalls,
+                    "random_prefilter_surviving_plans", randomPrefilterSurvivingPlans,
+                    "random_prefilter_noops", randomPrefilterNoops));
+        }
         return result;
     }
 }
