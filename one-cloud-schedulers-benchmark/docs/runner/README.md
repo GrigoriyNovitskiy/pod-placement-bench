@@ -222,6 +222,9 @@ quality report for the current scenario. Use the CLI for controlled timings.
 
 ## Batch scripts and slide tables
 
+For a step-by-step Russian guide covering setup, a short first run, resuming
+and table exports, see [the batch scripts guide](../../../tools/README.md).
+
 From the repository root, run named algorithm configurations on ordered clouds:
 
 ```sh
