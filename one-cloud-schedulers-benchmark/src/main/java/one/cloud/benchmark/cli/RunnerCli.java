@@ -36,13 +36,14 @@ public final class RunnerCli {
             Usage: placement-bench simulator [--port N] [--no-open]
                    placement-bench algorithms [ID]
                    placement-bench benchmark --config FILE
+                   placement-bench benchmark --validate-config FILE
                    placement-bench run --dataset DIR --algorithm ID [options]
               simulator             Start the interactive UI on localhost (default port: 8765)
               algorithms [ID]       Show parameter types, defaults, ranges and runnable examples
               benchmark             Run an experiment matrix in warmed, isolated JVMs
               DIR contains snapshot.pb and operations.pb.
               --param KEY=VALUE      Algorithm parameter; repeat for different keys
-              --probe-cap N          Quality-probe copy cap, independent of algorithm parameters (default: 10)
+              --probe-cap N          Quality-probe copy cap; 0 disables probes, retaining replay metrics (default: 10)
               --max-operations N     Positive normalized-event prefix; omitted runs the full scenario
               --catalogue-limit N    Positive evenly sampled initial-unit limit; omitted uses all units
               --catalogue-weights M  sampled (default) or full initial-catalogue physical-shape frequencies
@@ -262,7 +263,7 @@ public final class RunnerCli {
                         throw new IllegalArgumentException("Repeated algorithm parameter: " + key);
                     }
                 }
-                case "--probe-cap" -> probeCap = positive(flag, value);
+                case "--probe-cap" -> probeCap = value.equals("0") ? 0 : positive(flag, value);
                 case "--bulk-size" -> bulkSize = positive(flag, value);
                 case "--rollout-prior" -> prior = Path.of(value);
                 case "--profile" -> profile = Path.of(value);

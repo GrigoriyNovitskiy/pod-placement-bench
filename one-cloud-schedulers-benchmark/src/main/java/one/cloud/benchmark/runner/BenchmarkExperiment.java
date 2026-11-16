@@ -28,9 +28,9 @@ public final class BenchmarkExperiment {
     public record Options(int maxOperations, int catalogueLimit, int probeCap, int inflationAttempts,
             long inflationSeed, boolean fullCatalogueWeights) {
         public Options {
-            if (maxOperations < 0 || catalogueLimit < 0 || probeCap < 1 || probeCap > 1000
+            if (maxOperations < 0 || catalogueLimit < 0 || probeCap < 0 || probeCap > 1000
                     || inflationAttempts < 0 || inflationAttempts > 10000) {
-                throw new IllegalArgumentException("Expected nonnegative operation/catalogue limits, probeCap 1..1000 "
+                throw new IllegalArgumentException("Expected nonnegative operation/catalogue limits, probeCap 0..1000 "
                         + "and inflationAttempts 0..10000");
             }
         }

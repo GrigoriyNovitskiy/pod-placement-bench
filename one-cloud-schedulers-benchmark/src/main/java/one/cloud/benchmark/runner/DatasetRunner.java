@@ -57,8 +57,8 @@ public final class DatasetRunner {
 
     public record Options(long seed, int eventLimit, int catalogueLimit, int probeCap, boolean fullCatalogueWeights) {
         public Options {
-            if (eventLimit < 0 || catalogueLimit < 0 || probeCap <= 0) {
-                throw new IllegalArgumentException("Operation/catalogue limits must be nonnegative and probe cap positive");
+            if (eventLimit < 0 || catalogueLimit < 0 || probeCap < 0) {
+                throw new IllegalArgumentException("Operation/catalogue limits and probe cap must be nonnegative");
             }
         }
 
@@ -186,7 +186,7 @@ public final class DatasetRunner {
             algorithmCatalogue = options.fullCatalogueWeights
                     ? Catalogue.full(scenario.model, scenario.catalogue, catalogue)
                     : Catalogue.sampled(catalogue);
-            probes = qualityOperations != null ? sample(catalogue, 16) : new Request[0];
+            probes = qualityOperations != null && options.probeCap > 0 ? sample(catalogue, 16) : new Request[0];
             catalogueChecksum = requestChecksum(catalogue);
             probeChecksum = requestChecksum(probes);
             desired = new boolean[scenario.requests.length];

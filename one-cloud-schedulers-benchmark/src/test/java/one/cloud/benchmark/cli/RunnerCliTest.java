@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
 import com.google.protobuf.ByteString;
@@ -411,6 +412,103 @@ class RunnerCliTest {
     }
 
     @Test
+    void disablingProbesPreservesReplayCountsLogicalPeaksAndCounters() throws Exception {
+        writeTrace(temporary, new Record[]{
+                alloc(1, new int[]{1, 2}, 4, 4096), alloc(2, new int[]{1, 2}, 2, 1024),
+                rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                rules(Constraints.newBuilder().setId(2).setKind(Kind.POD)),
+                resource(1, 1, 1), resource(2, 1, 1), resource(3, 2, 2), resource(4, 2, 2)},
+                3, 4, -4, -3);
+        for (final int limit : new int[]{0, 1}) {
+            final var reports = new java.util.ArrayList<JsonObject>();
+            for (final int probeCap : new int[]{2, 0}) {
+                final var arguments = new java.util.ArrayList<>(List.of("run", "--dataset", temporary.toString(),
+                        "--algorithm", "fitcount", "--probe-cap", Integer.toString(probeCap)));
+                if (limit != 0) {
+                    arguments.addAll(List.of("--max-operations", Integer.toString(limit)));
+                }
+                final var output = new ByteArrayOutputStream();
+                final var errors = new ByteArrayOutputStream();
+                assertEquals(0, invoke(output, errors, arguments.toArray(String[]::new)),
+                        errors.toString(StandardCharsets.UTF_8));
+                assertEquals("", errors.toString(StandardCharsets.UTF_8));
+                reports.add(JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject());
+            }
+            final var probed = reports.getFirst();
+            final var unprobed = reports.getLast();
+            final int admitted = limit == 0 ? 2 : 1;
+            assertEquals(admitted, unprobed.getAsJsonObject("creates").get("admitted_units").getAsInt());
+            assertEquals(admitted, unprobed.get("peak_active_units").getAsInt());
+            assertEquals(limit == 0, unprobed.get("complete").getAsBoolean());
+            assertEquals(2.0 * admitted, unprobed.getAsJsonObject("logical_resources")
+                    .getAsJsonObject("peak_active").get("1").getAsDouble());
+            assertTrue(unprobed.getAsJsonObject("algorithm_counters").get("fitcount_samples").getAsLong() > 0);
+            for (final var field : List.of("result_checksum", "logical_resources", "algorithm_counters",
+                    "algorithm_runtime_parameters", "peak_active_units", "peak_active_resources", "peak_used_hosts")) {
+                assertEquals(probed.get(field), unprobed.get(field), field);
+            }
+            assertTrue(probed.get("probe_count").getAsInt() > 0);
+            assertEquals(0, unprobed.get("probe_cap").getAsInt());
+            assertEquals(0, unprobed.get("probe_count").getAsInt());
+            assertFalse(unprobed.getAsJsonArray("quality_checkpoints").isEmpty());
+            for (final var checkpoint : unprobed.getAsJsonArray("quality_checkpoints")) {
+                final var value = checkpoint.getAsJsonObject();
+                assertTrue(value.getAsJsonArray("probe_fit_counts").isEmpty());
+                assertTrue(value.get("admitted_active_units").getAsInt() > 0);
+            }
+        }
+    }
+
+    @Test
+    void validatesAndNormalizesBenchmarkConfigWithoutReadingDatasetsOrPriorFiles() throws Exception {
+        final var path = temporary.resolve("benchmark.json");
+        Files.writeString(path, """
+                {"datasets":["missing/../dataset"], "seeds":[7,9], "probeCap":0,
+                 "algorithms":[{"id":"fitcount", "parameters":{"seed":99,"fitCap":2}},
+                               {"id":"catboost-top1"},
+                               {"id":"rollout", "rolloutPrior":"missing/../prior.pb"}]}
+                """);
+        final var output = new ByteArrayOutputStream();
+        final var errors = new ByteArrayOutputStream();
+        assertEquals(0, invoke(output, errors, "benchmark", "--validate-config", path.toString()),
+                errors.toString(StandardCharsets.UTF_8));
+        assertEquals("", errors.toString(StandardCharsets.UTF_8));
+        final var plan = JsonParser.parseString(output.toString(StandardCharsets.UTF_8)).getAsJsonObject();
+        assertEquals(temporary.resolve("dataset").toString(), plan.getAsJsonArray("datasets").get(0).getAsString());
+        final var algorithms = plan.getAsJsonArray("algorithms");
+        assertEquals(5, algorithms.size());
+        for (int index = 0; index < 2; index++) {
+            final var selection = algorithms.get(index).getAsJsonObject();
+            final var settings = selection.getAsJsonObject("settings");
+            assertEquals("fitcount", settings.get("id").getAsString());
+            assertEquals(7 + 2 * index, settings.getAsJsonObject("parameters").get("seed").getAsInt());
+            assertEquals(2, settings.getAsJsonObject("parameters").get("fitCap").getAsInt());
+            assertEquals(64, settings.getAsJsonObject("parameters").get("cacheRows").getAsInt());
+            assertTrue(selection.get("prior").isJsonNull());
+        }
+        assertEquals("catboost-top1", algorithms.get(2).getAsJsonObject().getAsJsonObject("settings")
+                .get("id").getAsString());
+        assertEquals(temporary.resolve("prior.pb").toString(), algorithms.get(3).getAsJsonObject().get("prior").getAsString());
+        assertEquals(1, plan.get("bulkSize").getAsInt());
+        assertEquals(0, plan.getAsJsonObject("options").get("probeCap").getAsInt());
+        assertEquals(0, plan.getAsJsonObject("options").get("maxOperations").getAsInt());
+        assertFalse(Files.exists(temporary.resolve("dataset")));
+        assertFalse(Files.exists(temporary.resolve("prior.pb")));
+        for (final var parameters : List.of("{\"fitCap\":0}", "{\"seed\":1.5}", "{\"unknown\":1}")) {
+            Files.writeString(path, """
+                    {"datasets":["missing-dataset"],
+                     "algorithms":[{"id":"fitcount","parameters":%s}]}
+                    """.formatted(parameters));
+            output.reset();
+            errors.reset();
+            assertEquals(2, invoke(output, errors, "benchmark", "--validate-config", path.toString()));
+            assertEquals("", output.toString(StandardCharsets.UTF_8));
+            assertTrue(errors.toString(StandardCharsets.UTF_8).startsWith("Invalid benchmark config:"));
+            assertFalse(Files.exists(temporary.resolve("missing-dataset")));
+        }
+    }
+
+    @Test
     void selectsGeometricBestFitThroughTheSameReplay() throws Exception {
         writeTrace(temporary, records(), 2, 3, -3, -2);
         final var output = new ByteArrayOutputStream();
@@ -740,7 +838,7 @@ class RunnerCliTest {
                 {"--param", "seed=1", "--param", "seed=2"},
                 {"--param", "seed"},
                 {"--param", "=1"},
-                {"--probe-cap", "0"}
+                {"--probe-cap", "-1"}
         };
         for (final var tail : invalid) {
             final var arguments = new java.util.ArrayList<>(List.of(

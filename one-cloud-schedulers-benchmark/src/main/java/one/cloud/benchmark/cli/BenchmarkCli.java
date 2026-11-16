@@ -35,7 +35,10 @@ final class BenchmarkCli {
     private static final Gson JSON = new GsonBuilder().serializeNulls().setStrictness(Strictness.STRICT).create();
     private static final String USAGE = """
             Usage: placement-bench benchmark --config FILE
+                   placement-bench benchmark --validate-config FILE
             Run a JSON experiment matrix. Results go to stdout, progress to stderr.
+            --validate-config prints the normalized plan without loading datasets or starting workers.
+            probeCap 0 disables independent quality probes, retaining replay metrics.
             See one-cloud-schedulers-benchmark/docs/runner/README.md for the manifest and metrics.
             """;
     private static final Set<String> CONFIG_KEYS = Set.of("datasets", "algorithms", "seeds", "forks", "warmups",
@@ -97,7 +100,7 @@ final class BenchmarkCli {
             output.print(USAGE);
             return 0;
         }
-        if (arguments.length != 3 || !arguments[1].equals("--config")) {
+        if (arguments.length != 3 || !arguments[1].equals("--config") && !arguments[1].equals("--validate-config")) {
             errors.print(USAGE);
             return 2;
         }
@@ -107,6 +110,10 @@ final class BenchmarkCli {
         } catch (IOException | RuntimeException failure) {
             errors.println("Invalid benchmark config: " + message(failure));
             return 2;
+        }
+        if (arguments[1].equals("--validate-config")) {
+            output.println(JSON.toJson(plan));
+            return 0;
         }
 
         try {

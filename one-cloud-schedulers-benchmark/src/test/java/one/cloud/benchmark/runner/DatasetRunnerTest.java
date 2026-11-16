@@ -458,7 +458,7 @@ class DatasetRunnerTest {
         assertEquals(0, legacy.requestedLogical().length);
         assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, -1, 0, 1));
         assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, 0, -1, 1));
-        assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, 0, 0, 0));
+        assertThrows(IllegalArgumentException.class, () -> new DatasetRunner.Options(1, 0, 0, -1));
     }
 
     private static DatasetRunner.Factory forcedHost(int host) {

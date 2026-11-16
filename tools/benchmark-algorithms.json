@@ -1,0 +1,119 @@
+{
+  "fitcount": {
+    "id": "fitcount"
+  },
+  "yp-light": {
+    "id": "yp-light"
+  },
+  "yp-planner": {
+    "id": "yp-planner"
+  },
+  "mean-fitcount": {
+    "id": "mean-fitcount"
+  },
+  "portfolio-fitcount": {
+    "id": "portfolio-fitcount"
+  },
+  "rl-pool-fitcount": {
+    "id": "rl-pool-fitcount"
+  },
+  "catboost-topn-fitcount": {
+    "id": "catboost-topn-fitcount"
+  },
+  "randomn-fitcount": {
+    "id": "randomn-fitcount"
+  },
+  "window-portfolio-fitcount": {
+    "id": "window-portfolio-fitcount"
+  },
+  "k8s-least-allocated": {
+    "id": "k8s-least-allocated"
+  },
+  "bulk-fitcount": {
+    "id": "bulk-fitcount",
+    "parameters": {
+      "seed": 44,
+      "fitCap": 10,
+      "cacheRows": 64
+    }
+  },
+  "dp": {
+    "id": "dp",
+    "parameters": {
+      "seed": 44,
+      "fitCap": 10,
+      "cacheRows": 64
+    }
+  },
+  "smt": {
+    "id": "smt",
+    "parameters": {
+      "seed": 44,
+      "fitCap": 10,
+      "cacheRows": 64
+    }
+  },
+  "catboost-rollout-topn-fitcount": {
+    "id": "catboost-rollout-topn-fitcount"
+  },
+  "rl-topn-fitcount": {
+    "id": "rl-topn-fitcount"
+  },
+  "masked-fitcount": {
+    "id": "masked-fitcount"
+  },
+  "rl-masked-fitcount": {
+    "id": "rl-masked-fitcount"
+  },
+  "catboost-top1": {
+    "id": "catboost-top1"
+  },
+  "fgd": {
+    "id": "fgd"
+  },
+  "k8s-balanced-allocation": {
+    "id": "k8s-balanced-allocation"
+  },
+  "cpu-ram-fgd": {
+    "id": "cpu-ram-fgd"
+  },
+  "catboost-rollout-top1": {
+    "id": "catboost-rollout-top1"
+  },
+  "rl-top1": {
+    "id": "rl-top1"
+  },
+  "k8s-requested-to-capacity-ratio": {
+    "id": "k8s-requested-to-capacity-ratio"
+  },
+  "geometric-best-fit": {
+    "id": "geometric-best-fit"
+  },
+  "k8s-most-allocated": {
+    "id": "k8s-most-allocated"
+  },
+  "geometric-portfolio-mean-fitcount": {
+    "id": "geometric-portfolio-mean-fitcount"
+  },
+  "geometric-portfolio-mean-bulk-fitcount": {
+    "id": "geometric-portfolio-mean-bulk-fitcount"
+  },
+  "geometric-portfolio-mean-bulk-fitcount-fc1": {
+    "id": "geometric-portfolio-mean-bulk-fitcount",
+    "parameters": {
+      "randomCandidates": 20,
+      "geometricCandidates": 4,
+      "leastCandidates": 4,
+      "randomPrefilter": true
+    }
+  },
+  "fc1-geometric-portfolio-mean-bulk-fitcount": {
+    "id": "fc1-geometric-portfolio-mean-bulk-fitcount"
+  },
+  "rl-pool-geo-least-fitcount": {
+    "id": "rl-pool-geo-least-fitcount"
+  },
+  "rl-pool-geo-least-bulk-fitcount": {
+    "id": "rl-pool-geo-least-bulk-fitcount"
+  }
+}

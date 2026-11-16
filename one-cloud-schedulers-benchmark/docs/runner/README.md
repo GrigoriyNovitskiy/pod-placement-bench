@@ -219,3 +219,88 @@ original pods may trivially leave more room.
 
 The [simulator benchmark API](../simulator.md#benchmark-api) exposes the same
 quality report for the current scenario. Use the CLI for controlled timings.
+
+## Batch scripts and slide tables
+
+From the repository root, run named algorithm configurations on ordered clouds:
+
+```sh
+python3 tools/run-benchmarks.py \
+  --datasets-root /path/to/datasets-v2 \
+  --clouds dc ec sc zc uc \
+  --dataset-subdir mixed-v2 \
+  --algorithms-file tools/benchmark-algorithms.json \
+  --bulk-sizes 1 100 \
+  --output results/cloud-comparison
+
+python3 tools/render-benchmarks.py results/cloud-comparison \
+  --format markdown csv png \
+  --baseline-bulk-size 1
+```
+
+The preset contains 32 configurations: the 24 algorithms from the original DC
+comparison, the six subsequent portfolio configurations, and `yp-light` and
+`yp-planner`. The ordinary geometric mean bulk and its FC1 variant have distinct
+names but share the same registered algorithm ID. The FC1 variant sets
+`randomPrefilter=true` with Random20, geometric4 and LeastAllocated4. The separate
+registered FC1 preset defaults to Random16, geometric8 and LeastAllocated4.
+`bulk-fitcount`, `dp` and `smt` explicitly use seed 44, copy cap 10 and 64 cache
+rows, matching the other FitCount comparisons. Z3 must be available on `PATH`
+when selecting `smt`.
+
+Use `--algorithms fitcount geometric-best-fit` instead of the preset file for a
+shorter selection. Each dataset directory contains `snapshot.pb` and
+`operations.pb`; the batch script accepts either ROOT/CLOUD/mixed-v2 or a direct
+ROOT/CLOUD dataset directory. Cloud order follows `--clouds`; within a cloud it
+runs the selected bulk sizes and then the algorithm configurations.
+
+The runner builds the application once, selects its Java 25 toolchain and copies
+the installed JARs into the output directory. Every case uses a fresh JVM with
+an empty engine and fresh algorithm caches. It records one cold full replay;
+there is no additional quality replay. `--probe-cap 0` disables physical
+checkpoint probes while retaining counts, logical peaks and algorithm counters.
+The default catalogue limit is 32, the seed is 44, and GPU mode is `devices20`.
+Use `--max-operations N` only for an explicitly labelled prefix or a smoke run.
+
+Each case saves its JSON result and stderr log. Failures remain explicit and do
+not become zero placements. The command returns a nonzero status if cases fail;
+the report script can still render the completed and failed cases. No external
+time limit is imposed by default; `--timeout-seconds N` limits one process,
+including loading. `--resume` verifies configuration, source/runtime and input
+fingerprints before continuing the same output directory. A different build,
+dataset or experiment needs a new output directory.
+
+The report can run while results are arriving. Choose any subset of `markdown`,
+`csv` and `png`; Markdown and CSV need only the Python standard library. PNG
+requires Pillow and a Cyrillic font, selected automatically from common system
+fonts or supplied with `--font /path/to/font.ttf`. For example, install Pillow
+in a virtual environment with `python3 -m venv .venv` followed by
+`.venv/bin/python -m pip install Pillow` and use that interpreter for the scripts.
+
+Tables include the cloud and B1/B100 in the title, sort successful rows by
+admitted atomic requests, and show admitted requests/members, simultaneous active
+peaks and logical resource peaks. A pod and its regular shards can form one
+atomic request; members count individual POD and SHARD resources. Resource
+maxima can occur at different events. CPU distinguishes prod/nonprod, RAM is
+converted from MiB to TiB, and disk sizes from GiB to TiB. CSV keeps the underlying
+numeric columns separate.
+
+`avg` is total scheduling time divided by all attempted atomic requests, including
+declines. B100 window percentiles are not per-request percentiles. The default
+latency baseline is FitCount in the same cloud and bulk mode;
+`--baseline-bulk-size 1` reproduces the original slide's B1 reference, with an
+explicit cross-mode delta header. B1 and B100 reorder creates differently, so
+that cross-mode ratio also includes the workload-order effect. Missing or failed
+baselines produce unavailable deltas.
+
+`yp-planner` performs deferred retries and relocations. It is rendered in a
+separate relocation table with FitCount and `yp-light` references when available.
+There `avg work` includes scheduling and `yp_maintenance_nanos` per original
+attempt; the maintenance component is also shown separately. This is amortized
+work, not request completion latency. Reactive and proactive ILP are also kept
+separate; their solver time is already included in scheduling.
+
+All configurations are checked before the first expensive run. For direct CLI
+manifests, `placement-bench benchmark --validate-config FILE` prints the normalized
+plan without loading datasets or creating workers. It preserves the existing
+matrix's typed defaults and seed resolution.
