@@ -314,6 +314,49 @@ class CapacityLedgerTest {
     }
 
     @Test
+    void alternativeMediaRespectStripeBounds() throws Exception {
+        for (final int stripes : new int[]{1, 3}) {
+            final var model = model(
+                    alloc(1, new int[]{7, 8, 9, 10}, 100, 100, 100, 100),
+                    alloc(2, new int[]{18, 19, 20}, 20, 1, 10), alloc(3, new int[0]),
+                    rules(Constraints.newBuilder().setId(1).setKind(Kind.HOST)),
+                    rules(Constraints.newBuilder().setId(2).setKind(Kind.DISK).setParent(1)
+                            .setMedia(Media.HDD).setAlternativeMedia(Media.SSD).setAlternativeSpindles(4)),
+                    rules(Constraints.newBuilder().setId(3).setKind(Kind.SHARD)
+                            .addDisks(disk(Media.SSD).setSpindles(3).setMinDevices(3).setMaxDevices(3)
+                                    .setMinStripes(stripes).setMaxStripes(stripes))),
+                    resource(1, 1, 1), resource(2, 2, 2), resource(3, 3, 3));
+            final var state = new Engine(model);
+            final var planner = new GreedyPlanner(state);
+            final var request = new Request(3);
+            final var physical = planner.physicalPlan(request, 1, 0);
+            if (stripes == 1) {
+                assertNotNull(physical);
+                assertArrayEquals(new int[]{2}, physical[0].devices());
+            } else {
+                assertNull(physical);
+                assertThrows(IllegalArgumentException.class,
+                        () -> new CapacityLedger(model).prepare(new Assignment(3, 1, 0, new int[]{0, 1}, new int[]{2})));
+            }
+            state.schedule(new SchedulingAlgorithm(state) {
+                @Override
+                public void schedule(Request request) {
+                    final var plan = planner.plan(request, 1, 0);
+                    if (stripes == 1) {
+                        assertNotNull(plan);
+                        assertArrayEquals(new int[]{2}, plan[0].devices());
+                    } else {
+                        assertNull(plan);
+                    }
+                }
+            }, request);
+            assertEquals(stripes == 1 ? 1 : 0, planner.fitCount(request, 1, 100));
+            assertEquals(20, state.available(2, 18));
+            assertEquals(0, state.revision());
+        }
+    }
+
+    @Test
     void combinedPlansCannotOversubscribeAndMalformedPlansAlwaysThrow() throws Exception {
         final var model = disks(1, disk(Media.HDD).setExtents(11));
         final var capacity = new CapacityLedger(model);

@@ -319,7 +319,8 @@ public final class GreedyPlanner {
                 }
             }
             if (!placed && model.rules.diskMedia[disk] == 2 && !CapacityLedger.reserved(model.rules.diskLayout[disk])
-                    && (model.rules.diskFlags[disk] & 1) == 0) {
+                    && (model.rules.diskFlags[disk] & 1) == 0
+                    && model.rules.minStripes[disk] <= 1 && model.rules.maxStripes[disk] >= 1) {
                 eligible(disk, numa, true);
                 for (int next = 0; next < candidateCount; next++) {
                     chosen[0] = candidates[next];
